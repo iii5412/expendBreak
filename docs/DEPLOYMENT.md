@@ -21,6 +21,9 @@ npm run pin:hash -- 123456
 - `APP_PIN_HASH`: 위 명령으로 생성한 값
 - `OWNER_UID`: 단일 소유자 UID. 기본값은 `owner`
 - `GEMINI_API_KEY`: AI 기능을 사용할 경우
+- `OPENAI_API_KEY`: GPT 라이브 음성을 사용할 경우. 브라우저 환경변수로 노출하지 않고 서버 secret으로만 등록
+- `OPENAI_REALTIME_MODEL`: 기본값 `gpt-realtime-2.1-mini`
+- `OPENAI_REALTIME_VOICE`: 기본값 `marin`
 - `NODE_ENV=production`
 - `PORT`: 호스팅 플랫폼이 주입
 
@@ -55,6 +58,10 @@ npm run pin:hash -- 123456
 - 계좌 잔액 수정 시 기준일이 저장된다.
 - 같은 정기 건을 빠르게 두 번 처리해도 거래가 하나만 생성된다.
 - AI 기능을 끄면 AI API 요청이 발생하지 않는다.
+- GPT 라이브에서 마이크 권한, 응답 음성, 사용자 발화 자막, 대화 중 끼어들기가 동작한다.
+- GPT가 만든 거래는 즉시 저장되지 않고 수정 가능한 확인 화면으로 이동한다.
+- GPT에게 월 지출·잔액을 질문했을 때 계좌번호는 전송하거나 음성으로 읽지 않는다.
+- `OPENAI_API_KEY`가 없거나 연결이 실패하면 Gemini 8초 빠른 음성 입력으로 전환할 수 있다.
 - 영수증 촬영 후 OCR 결과를 수정할 수 있고, 저장한 원본은 거래 내역에서만 조회된다.
 - 다른 UID 또는 로그아웃 상태에서 영수증 Storage 경로의 읽기·쓰기·목록 조회가 거부된다.
 - 전체 초기화는 운영 백업을 확인하기 전 사용하지 않는다.

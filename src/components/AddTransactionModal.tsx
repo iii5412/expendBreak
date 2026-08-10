@@ -19,14 +19,18 @@ import {
   VoiceAnalysisResult,
   MerchantRule,
   BankAccount,
+  Budget,
   PaymentCard,
   PaymentMethodType,
+  RecurringOccurrence,
+  RecurringTemplate,
 } from '../types';
 import { formatKRW, getLocalDateString } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
 import { normalizeTags } from '../utils/receipt';
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
+import { LiveVoicePanel } from './LiveVoicePanel';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -35,6 +39,10 @@ interface AddTransactionModalProps {
   merchantRules: MerchantRule[];
   bankAccounts?: BankAccount[];
   paymentCards?: PaymentCard[];
+  transactions?: Transaction[];
+  budget: Budget;
+  recurringOccurrences?: RecurringOccurrence[];
+  recurringTemplates?: RecurringTemplate[];
   aiClassificationEnabled?: boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
@@ -47,11 +55,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   merchantRules,
   bankAccounts = [],
   paymentCards = [],
+  transactions = [],
+  budget,
+  recurringOccurrences = [],
+  recurringTemplates = [],
   aiClassificationEnabled = true,
   onSaveTransaction,
   onSaveMerchantRule,
 }) => {
   const [activeMode, setActiveMode] = useState<'receipt' | 'voice' | 'ai' | 'manual'>('receipt');
+  const [voiceInputKind, setVoiceInputKind] = useState<'live' | 'quick'>('live');
 
   // Manual Form State
   const [type, setType] = useState<'income' | 'expense'>('expense');
@@ -320,6 +333,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setAiResult(null);
     setVoiceResult(null);
     setVoiceDurationMs(0);
+    setVoiceInputKind('live');
     setConfirmTranscript('');
     setAmount('');
     setMerchant('');
@@ -386,7 +400,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               }`}
             >
               <Mic className="w-4 h-4 shrink-0 text-purple-300" />
-              <span>음성 입력</span>
+              <span>GPT 라이브</span>
             </button>
           )}
 
@@ -443,13 +457,38 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         {aiClassificationEnabled && activeMode === 'voice' && (
           <div className="space-y-4">
             {!voiceResult ? (
-              <VoiceInputPanel
-                categories={categories}
-                merchantRules={merchantRules}
-                bankAccounts={bankAccounts}
-                paymentCards={paymentCards}
-                onAnalysisComplete={handleVoiceAnalysisComplete}
-              />
+              voiceInputKind === 'live' ? (
+                <LiveVoicePanel
+                  categories={categories}
+                  merchantRules={merchantRules}
+                  bankAccounts={bankAccounts}
+                  paymentCards={paymentCards}
+                  transactions={transactions}
+                  budget={budget}
+                  recurringOccurrences={recurringOccurrences}
+                  recurringTemplates={recurringTemplates}
+                  onDraftReady={handleVoiceAnalysisComplete}
+                  onUseQuickVoice={() => setVoiceInputKind('quick')}
+                />
+              ) : (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setVoiceInputKind('live')}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-cyan-500/20 bg-cyan-500/5 py-2.5 text-xs font-semibold text-cyan-200"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    GPT 라이브 음성으로 돌아가기
+                  </button>
+                  <VoiceInputPanel
+                    categories={categories}
+                    merchantRules={merchantRules}
+                    bankAccounts={bankAccounts}
+                    paymentCards={paymentCards}
+                    onAnalysisComplete={handleVoiceAnalysisComplete}
+                  />
+                </div>
+              )
             ) : (
               /* Voice Confirmation Drawer / Panel */
               <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3.5 text-xs">

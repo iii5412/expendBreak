@@ -419,6 +419,10 @@ export default function App() {
         merchantRules={merchantRules}
         bankAccounts={bankAccounts}
         paymentCards={paymentCards}
+        transactions={transactions}
+        budget={budget}
+        recurringOccurrences={recurringOccurrences}
+        recurringTemplates={recurringTemplates}
         aiClassificationEnabled={userProfile.aiClassificationEnabled}
         onSaveTransaction={saveTransaction}
         onSaveMerchantRule={saveMerchantRule}

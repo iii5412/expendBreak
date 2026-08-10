@@ -124,6 +124,110 @@ async function requireOwner(req: express.Request, res: express.Response, next: e
 // Gemini endpoints require the Firebase owner session, never the raw PIN.
 app.use('/api/ai/*', requireOwner);
 
+type RealtimeRateWindow = { startedAt: number; count: number };
+const realtimeRateWindows = new Map<string, RealtimeRateWindow>();
+
+function consumeRealtimeQuota(ownerUid: string) {
+  const now = Date.now();
+  const current = realtimeRateWindows.get(ownerUid);
+  if (!current || now - current.startedAt >= 10 * 60_000) {
+    realtimeRateWindows.set(ownerUid, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= 20) return false;
+  current.count += 1;
+  return true;
+}
+
+const REALTIME_ASSISTANT_INSTRUCTIONS = `
+당신은 1인 사용자를 위한 한국어 수입·지출 비서다.
+
+역할:
+- 돈에 관해 말하면 정확히 이해하고 거래 초안을 만든다.
+- 개인 재무 질문에는 반드시 제공된 조회 도구의 계산 결과만 근거로 답한다.
+- 지출 증가 원인, 남은 예산, 계좌 잔액을 짧고 명확하게 설명한다.
+
+안전 규칙:
+- 금액을 추측하지 말고 불명확하면 한 번에 한 가지만 되묻는다.
+- 거래 저장, 잔액 변경, 고정지출 등록을 완료했다고 말하지 않는다.
+- prepare_transaction은 저장이 아니라 화면 검토용 초안이다.
+- 초안을 만들면 "화면에서 내용을 확인하고 등록해 주세요"라고 안내한다.
+- 계좌번호, 카드번호, PIN, 인증정보를 요청하거나 반복해서 말하지 않는다.
+- 개인 데이터 질문은 반드시 get_financial_summary 또는 search_transactions를 먼저 호출한다.
+- 한 번에 여러 거래가 포함되면 각각 따로 말해 달라고 요청한다.
+
+대화 방식:
+- 기본 언어는 자연스러운 한국어다.
+- 답변은 보통 두세 문장 이내로 짧게 한다.
+- 금액은 원 단위로 읽고, 사실과 제안을 구분한다.
+`.trim();
+
+// PIN-authenticated WebRTC session bootstrap. The standard OpenAI key stays server-side.
+app.post(
+  '/api/ai/realtime/session',
+  express.text({ type: ['application/sdp', 'text/plain'], limit: '64kb' }),
+  async (req, res) => {
+    try {
+      if (!consumeRealtimeQuota(res.locals.ownerUid)) {
+        return res.status(429).json({ message: '라이브 음성 연결 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });
+      }
+
+      const apiKey = process.env.OPENAI_API_KEY?.trim();
+      if (!apiKey) {
+        return res.status(503).json({
+          message: 'GPT 라이브 음성이 비활성화되어 있습니다. OPENAI_API_KEY를 설정해주세요.',
+        });
+      }
+
+      const sdp = typeof req.body === 'string' ? req.body.trim() : '';
+      if (!sdp || sdp.length > 64 * 1024) {
+        return res.status(400).json({ message: '올바른 WebRTC 연결 정보가 필요합니다.' });
+      }
+
+      const model = process.env.OPENAI_REALTIME_MODEL?.trim() || 'gpt-realtime-2.1-mini';
+      const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || 'marin';
+      const sessionConfig = JSON.stringify({
+        type: 'realtime',
+        model,
+        instructions: REALTIME_ASSISTANT_INSTRUCTIONS,
+        audio: {
+          output: { voice },
+        },
+      });
+
+      const formData = new FormData();
+      formData.set('sdp', sdp);
+      formData.set('session', sessionConfig);
+
+      const safetyIdentifier = createHmac('sha256', SESSION_SECRET)
+        .update(String(res.locals.ownerUid))
+        .digest('hex');
+
+      const response = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'OpenAI-Safety-Identifier': safetyIdentifier,
+        },
+        body: formData,
+      });
+
+      const responseBody = await response.text();
+      if (!response.ok) {
+        console.error('OpenAI Realtime session error:', response.status, responseBody.slice(0, 500));
+        return res.status(response.status >= 500 ? 502 : response.status).json({
+          message: 'GPT 라이브 음성 연결을 만들지 못했습니다.',
+        });
+      }
+
+      return res.status(201).type('application/sdp').send(responseBody);
+    } catch (error) {
+      console.error('OpenAI Realtime session failure:', error instanceof Error ? error.message : error);
+      return res.status(502).json({ message: 'GPT 라이브 음성 서버 연결에 실패했습니다.' });
+    }
+  },
+);
+
 // Auth endpoint to check status
 app.get('/api/auth/status', (req, res) => {
   const isPinConfigured = Boolean(process.env.APP_PIN_HASH?.trim() || process.env.APP_ACCESS_KEY?.trim());
