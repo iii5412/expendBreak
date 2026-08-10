@@ -1,0 +1,371 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { Navbar } from './components/Navbar';
+import { BottomNav, NavTab } from './components/BottomNav';
+import { DashboardView } from './components/DashboardView';
+import { HistoryView } from './components/HistoryView';
+import { AnalyticsView } from './components/AnalyticsView';
+import { ManagementView } from './components/ManagementView';
+import { AccountsView } from './components/AccountsView';
+import { RecurringPaymentView } from './components/RecurringPaymentView';
+import { AddTransactionModal } from './components/AddTransactionModal';
+import { AppLockModal } from './components/AppLockModal';
+
+import {
+  subscribeToStorage,
+  getTransactions,
+  getCategories,
+  getBudget,
+  getRecurringTemplates,
+  getRecurringOccurrences,
+  getMerchantRules,
+  getUserProfile,
+  getBankAccounts,
+  saveBankAccount,
+  updateBankAccount,
+  deleteBankAccount,
+  getPaymentCards,
+  savePaymentCard,
+  updatePaymentCard,
+  deletePaymentCard,
+  saveTransaction,
+  updateTransaction,
+  deleteTransaction,
+  postOccurrenceToTransaction,
+  updateOccurrenceStatus,
+  updateBudget,
+  saveCategory,
+  toggleCategoryActive,
+  mergeAndRemoveCategory,
+  updateUserProfile,
+  saveMerchantRule,
+  saveRecurringTemplate,
+  updateRecurringTemplate,
+  deleteRecurringTemplate,
+  exportTransactionsCSV,
+  resetAllData,
+  initializeStorageIfEmpty,
+} from './utils/storage';
+import {
+  calculateMonthSummary,
+  getCategoryBreakdown,
+  getYearMonthString,
+  getLocalDateString,
+  formatKRW,
+} from './utils/calculations';
+
+export default function App() {
+  // Navigation State
+  const [activeTab, setActiveTab] = useState<NavTab>('home');
+  const [managementSubTab, setManagementSubTab] = useState<string>('recurring');
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isLocked, setIsLocked] = useState<boolean>(false);
+
+  // App Reactive State
+  const [currentYM, setCurrentYM] = useState<string>(getYearMonthString());
+  const [transactions, setTransactions] = useState(getTransactions());
+  const [categories, setCategories] = useState(getCategories());
+  const [budget, setBudget] = useState(getBudget(currentYM));
+  const [recurringTemplates, setRecurringTemplates] = useState(getRecurringTemplates());
+  const [recurringOccurrences, setRecurringOccurrences] = useState(getRecurringOccurrences(currentYM));
+  const [merchantRules, setMerchantRules] = useState(getMerchantRules());
+  const [userProfile, setUserProfile] = useState(getUserProfile());
+  const [bankAccounts, setBankAccounts] = useState(getBankAccounts());
+  const [paymentCards, setPaymentCards] = useState(getPaymentCards());
+
+  // Reload state from storage
+  const refreshAppData = () => {
+    setTransactions(getTransactions());
+    setCategories(getCategories());
+    setBudget(getBudget(currentYM));
+    setRecurringTemplates(getRecurringTemplates());
+    setRecurringOccurrences(getRecurringOccurrences(currentYM));
+    setMerchantRules(getMerchantRules());
+    setUserProfile(getUserProfile());
+    setBankAccounts(getBankAccounts());
+    setPaymentCards(getPaymentCards());
+  };
+
+  useEffect(() => {
+    initializeStorageIfEmpty();
+    refreshAppData();
+    const unsubscribe = subscribeToStorage(refreshAppData);
+    return () => unsubscribe();
+  }, [currentYM]);
+
+  useEffect(() => {
+    const checkLockStatus = async () => {
+      const unlocked = sessionStorage.getItem('app_unlocked') === 'true';
+      if (unlocked) {
+        setIsLocked(false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/status');
+        const data = await res.json();
+        if (data.isProtectedByServerEnv || userProfile.securityPinEnabled) {
+          setIsLocked(true);
+        } else {
+          setIsLocked(false);
+        }
+      } catch (err) {
+        if (userProfile.securityPinEnabled) {
+          setIsLocked(true);
+        } else {
+          setIsLocked(false);
+        }
+      }
+    };
+
+    checkLockStatus();
+  }, [userProfile.securityPinEnabled]);
+
+  // Calculations
+  const summary = useMemo(() => {
+    return calculateMonthSummary(currentYM, transactions, recurringOccurrences, budget, recurringTemplates);
+  }, [currentYM, transactions, recurringOccurrences, budget, recurringTemplates]);
+
+  const categoryMap = useMemo(() => {
+    return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon }]));
+  }, [categories]);
+
+  const categoryBreakdown = useMemo(() => {
+    return getCategoryBreakdown(currentYM, transactions, categoryMap);
+  }, [currentYM, transactions, categoryMap]);
+
+  // Next Payday badge
+  const nextPaydayText = useMemo(() => {
+    const salaryTmpl = recurringTemplates.find(t => t.type === 'income' && t.active);
+    if (!salaryTmpl) return '';
+    return `다음 월급일: 매월 ${salaryTmpl.dayOfMonth}일`;
+  }, [recurringTemplates]);
+
+  // Handlers
+  const handleNavigateTab = (tab: NavTab, subTab?: string) => {
+    setActiveTab(tab);
+    if (subTab) {
+      setManagementSubTab(subTab);
+    }
+  };
+
+  const handlePostOccurrence = (occId: string) => {
+    postOccurrenceToTransaction(occId);
+  };
+
+  const handleApplyPresetOnboarding = () => {
+    if (confirm('월급 350만, 생활비 120만, 주거/관리비 38만의 기본 예시 정기 항목을 생성하시겠습니까?')) {
+      const yearMonth = getYearMonthString();
+      saveRecurringTemplate({
+        type: 'income',
+        name: '월급',
+        defaultAmount: 3500000,
+        categoryId: 'salary',
+        counterparty: '(주)지출브레이크',
+        frequency: 'monthly',
+        dayOfMonth: 25,
+        holidayPolicy: 'previous_business_day',
+        postingMode: 'confirm',
+        allowAmountChange: true,
+        startDate: `${yearMonth}-01`,
+        nextDueDate: `${yearMonth}-25`,
+        active: true,
+      });
+
+      saveRecurringTemplate({
+        type: 'expense',
+        name: '배우자 생활비',
+        defaultAmount: 1200000,
+        categoryId: 'family_allowance',
+        counterparty: '배우자 계좌',
+        expenseNature: 'fixed',
+        frequency: 'monthly',
+        dayOfMonth: 1,
+        holidayPolicy: 'fixed_date',
+        postingMode: 'confirm',
+        allowAmountChange: false,
+        startDate: `${yearMonth}-01`,
+        nextDueDate: `${yearMonth}-01`,
+        active: true,
+      });
+
+      saveRecurringTemplate({
+        type: 'expense',
+        name: '아파트 관리비 및 주거비',
+        defaultAmount: 380000,
+        categoryId: 'housing_utilities',
+        counterparty: '관리사무소',
+        expenseNature: 'fixed',
+        frequency: 'monthly',
+        dayOfMonth: 15,
+        holidayPolicy: 'next_business_day',
+        postingMode: 'confirm',
+        allowAmountChange: true,
+        startDate: `${yearMonth}-01`,
+        nextDueDate: `${yearMonth}-15`,
+        active: true,
+      });
+
+      alert('월급 생활자 추천 설정이 성공적으로 반영되었습니다!');
+    }
+  };
+
+  const handleExportCSV = () => {
+    const csvContent = exportTransactionsCSV();
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `지출브레이크_거래내역_${currentYM}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-rose-500 selection:text-white">
+      {/* Top Navbar */}
+      <Navbar
+        userProfile={userProfile}
+        nextPaydayText={nextPaydayText}
+        onOpenSettings={() => handleNavigateTab('management', 'settings')}
+      />
+
+      {/* Main View Area */}
+      <main className="max-w-md sm:max-w-xl md:max-w-2xl lg:max-w-4xl mx-auto px-4 py-5">
+        {activeTab === 'home' && (
+          <DashboardView
+            summary={summary}
+            upcomingOccurrences={recurringOccurrences}
+            categories={categories}
+            categoryBreakdown={categoryBreakdown}
+            onOpenAddModal={() => setIsAddModalOpen(true)}
+            onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
+            onConfirmOccurrence={handlePostOccurrence}
+            onApplyPresetOnboarding={handleApplyPresetOnboarding}
+          />
+        )}
+
+        {activeTab === 'recurring_payment' && (
+          <RecurringPaymentView
+            currentYM={currentYM}
+            onChangeYM={setCurrentYM}
+            recurringOccurrences={recurringOccurrences}
+            recurringTemplates={recurringTemplates}
+            categories={categories}
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
+            onPostOccurrence={(occId, amt, pType, accId, cId) => {
+              postOccurrenceToTransaction(occId, amt, pType, accId, cId);
+              refreshAppData();
+            }}
+            onUpdateOccurrenceStatus={(occId, status) => {
+              updateOccurrenceStatus(occId, status);
+              refreshAppData();
+            }}
+          />
+        )}
+
+        {activeTab === 'accounts' && (
+          <AccountsView
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
+            onSaveBankAccount={(acc) => {
+              saveBankAccount(acc);
+              refreshAppData();
+            }}
+            onUpdateBankAccount={(id, updates) => {
+              updateBankAccount(id, updates);
+              refreshAppData();
+            }}
+            onDeleteBankAccount={(id) => {
+              deleteBankAccount(id);
+              refreshAppData();
+            }}
+            onSavePaymentCard={(card) => {
+              savePaymentCard(card);
+              refreshAppData();
+            }}
+            onUpdatePaymentCard={(id, updates) => {
+              updatePaymentCard(id, updates);
+              refreshAppData();
+            }}
+            onDeletePaymentCard={(id) => {
+              deletePaymentCard(id);
+              refreshAppData();
+            }}
+          />
+        )}
+
+        {activeTab === 'history' && (
+          <HistoryView
+            transactions={transactions}
+            categories={categories}
+            onDeleteTransaction={deleteTransaction}
+            onUpdateTransaction={updateTransaction}
+          />
+        )}
+
+        {activeTab === 'analytics' && (
+          <AnalyticsView
+            summary={summary}
+            transactions={transactions}
+            categories={categories}
+            budget={budget}
+          />
+        )}
+
+        {activeTab === 'management' && (
+          <ManagementView
+            initialSubTab={managementSubTab}
+            recurringTemplates={recurringTemplates}
+            recurringOccurrences={recurringOccurrences}
+            budget={budget}
+            categories={categories}
+            userProfile={userProfile}
+            merchantRules={merchantRules}
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
+            onSaveRecurringTemplate={saveRecurringTemplate}
+            onUpdateRecurringTemplate={updateRecurringTemplate}
+            onDeleteRecurringTemplate={deleteRecurringTemplate}
+            onPostOccurrence={handlePostOccurrence}
+            onUpdateOccurrenceStatus={updateOccurrenceStatus}
+            onUpdateBudget={updateBudget}
+            onSaveCategory={saveCategory}
+            onToggleCategoryActive={toggleCategoryActive}
+            onMergeCategory={mergeAndRemoveCategory}
+            onUpdateUserProfile={updateUserProfile}
+            onExportCSV={handleExportCSV}
+            onResetData={resetAllData}
+          />
+        )}
+      </main>
+
+      {/* Central Add Transaction Modal */}
+      <AddTransactionModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        categories={categories}
+        merchantRules={merchantRules}
+        bankAccounts={bankAccounts}
+        paymentCards={paymentCards}
+        onSaveTransaction={saveTransaction}
+        onSaveMerchantRule={saveMerchantRule}
+      />
+
+      {/* Security App & API Lock Overlay Modal */}
+      <AppLockModal
+        isOpen={isLocked}
+        userProfile={userProfile}
+        onUnlockSuccess={() => setIsLocked(false)}
+      />
+
+      {/* Fixed Bottom Navigation Bar */}
+      <BottomNav
+        activeTab={activeTab}
+        onSelectTab={tab => handleNavigateTab(tab)}
+        onOpenAddModal={() => setIsAddModalOpen(true)}
+      />
+    </div>
+  );
+}

@@ -1,0 +1,6 @@
+{
+  "name": "지출브레이크",
+  "description": "월급 및 정기 현금흐름과 변동지출을 통제하고, AI 기록 분류 및 안전 잔액 관리를 제공하는 지출 통제 웹 앱",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
