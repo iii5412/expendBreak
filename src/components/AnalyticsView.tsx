@@ -17,12 +17,14 @@ import { Sparkles, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Refresh
 import { MonthSummary, formatKRW } from '../utils/calculations';
 import { Transaction, Category, Budget, AIFeedbackResult } from '../types';
 import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
+import { authenticatedFetch } from '../utils/auth';
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
   transactions: Transaction[];
   categories: Category[];
   budget: Budget;
+  aiInsightsEnabled?: boolean;
 }
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
@@ -30,6 +32,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   transactions,
   categories,
   budget,
+  aiInsightsEnabled = true,
 }) => {
   const [feedback, setFeedback] = useState<AIFeedbackResult | null>(null);
   const [isLoadingFeedback, setIsLoadingFeedback] = useState<boolean>(false);
@@ -48,15 +51,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   transactions
     .filter(t => t.type === 'expense' && t.localDate.startsWith(summary.yearMonth))
     .forEach(t => {
-      categoryMap[t.categoryId] = (categoryMap[t.categoryId] || 0) + t.amount;
+      const categoryId = catMap.get(t.categoryId)?.type === 'expense' ? t.categoryId : '__needs_review_expense';
+      categoryMap[categoryId] = (categoryMap[categoryId] || 0) + t.amount;
     });
 
   const categoryPieData = Object.entries(categoryMap).map(([catId, amount]) => {
     const info = catMap.get(catId);
     return {
-      name: info?.name || '기타',
+      name: catId === '__needs_review_expense' ? '분류 확인 필요' : info?.name || '기타',
       value: amount,
-      color: info?.color || '#94A3B8',
+      color: catId === '__needs_review_expense' ? '#F59E0B' : info?.color || '#94A3B8',
     };
   });
 
@@ -93,6 +97,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   // Fetch AI Feedback
   const fetchAiFeedback = async (force = false) => {
+    if (!aiInsightsEnabled) return;
     const periodId = summary.yearMonth;
     if (!force) {
       const cached = getCachedAIFeedback(periodId);
@@ -104,13 +109,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
     setIsLoadingFeedback(true);
     try {
-      const pin = sessionStorage.getItem('app_access_pin') || '';
-      const res = await fetch('/api/ai/feedback', {
+      const res = await authenticatedFetch('/api/ai/feedback', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-app-access-key': pin,
-          'x-app-pin': pin,
         },
         body: JSON.stringify({
           monthSummary: summary,
@@ -132,8 +134,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   };
 
   useEffect(() => {
-    fetchAiFeedback();
-  }, [summary.yearMonth]);
+    if (aiInsightsEnabled) fetchAiFeedback();
+    else setFeedback(null);
+  }, [summary.yearMonth, aiInsightsEnabled]);
 
   return (
     <div className="space-y-6 pb-24">
@@ -152,7 +155,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
           <button
             onClick={() => fetchAiFeedback(true)}
-            disabled={isLoadingFeedback}
+            disabled={isLoadingFeedback || !aiInsightsEnabled}
             className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFeedback ? 'animate-spin' : ''}`} />
@@ -160,7 +163,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           </button>
         </div>
 
-        {feedback ? (
+        {!aiInsightsEnabled ? (
+          <div className="text-center py-6 text-xs text-slate-400 bg-slate-950/60 rounded-xl border border-slate-800">
+            AI 월간 리포트가 꺼져 있습니다. 설정에서 다시 활성화할 수 있습니다.
+          </div>
+        ) : feedback ? (
           <div className="space-y-3.5 text-xs">
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 font-bold text-slate-100 text-sm">
               "{feedback.oneLiner}"

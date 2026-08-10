@@ -23,18 +23,25 @@ import {
   syncTransactionToFirestore,
   deleteTransactionFromFirestore,
   syncCategoriesToFirestore,
+  deleteCategoryFromFirestore,
   syncBudgetToFirestore,
   syncRecurringTemplateToFirestore,
   deleteRecurringTemplateFromFirestore,
   syncRecurringOccurrencesToFirestore,
+  commitRecurringPosting,
   syncMerchantRuleToFirestore,
   syncBankAccountToFirestore,
   deleteBankAccountFromFirestore,
   syncPaymentCardToFirestore,
   deletePaymentCardFromFirestore,
   clearFirestoreAllData,
+  hydrateFirestoreFromCloud,
+  stopFirestoreSync,
 } from './firestoreSync';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
+import { authenticatedFetch } from './auth';
+import { getDefaultCategoryIdForType } from './categoryIntegrity';
+import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'brake_transactions',
@@ -48,6 +55,23 @@ const STORAGE_KEYS = {
   PAYMENT_CARDS: 'brake_payment_cards',
   AI_INSIGHTS: 'brake_ai_insights',
 };
+
+let storageReady = false;
+let initializationPromise: Promise<void> | null = null;
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) as T : fallback;
+  } catch (error) {
+    console.error(`Invalid local cache for ${key}:`, error);
+    return fallback;
+  }
+}
+
+export function clearLocalAppData() {
+  Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+}
 
 // Event listener mechanism for reactive state updates
 type StorageChangeListener = () => void;
@@ -65,77 +89,147 @@ function notifyListeners() {
 }
 
 /**
- * Initialize storage with clean sample data if empty
+ * Authenticated boot sequence: migrate legacy root data, hydrate cloud state, then start listeners.
+ * No caller should invoke this before Firebase PIN authentication succeeds.
  */
+export function initializeStorageAfterLogin() {
+  if (storageReady) return Promise.resolve();
+  if (initializationPromise) return initializationPromise;
+
+  initializationPromise = (async () => {
+    const migrationResponse = await authenticatedFetch('/api/migration/ensure', { method: 'POST' });
+    if (!migrationResponse.ok) {
+      const payload = await migrationResponse.json().catch(() => ({}));
+      throw new Error(payload.message || '기존 운영 데이터 확인에 실패했습니다.');
+    }
+
+    const { hasCloudData } = await hydrateFirestoreFromCloud();
+    if (!hasCloudData) {
+      const currentYM = getYearMonthString();
+      const categories = [...DEFAULT_INCOME_CATEGORIES, ...DEFAULT_EXPENSE_CATEGORIES];
+      const budget = getSampleBudget(currentYM);
+      const templates = getSampleRecurringTemplates();
+
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(INITIAL_USER_PROFILE));
+      localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
+      localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify({ [currentYM]: budget }));
+      localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(generateSampleTransactionsForMonth(currentYM)));
+      localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
+
+      await Promise.all([
+        syncCategoriesToFirestore(categories),
+        syncUserProfileToFirestore(INITIAL_USER_PROFILE),
+        syncBudgetToFirestore(budget),
+        ...DEFAULT_MERCHANT_RULES.map(rule => syncMerchantRuleToFirestore(rule)),
+      ]);
+    }
+
+    storageReady = true;
+    initFirestoreSync(notifyListeners);
+    notifyListeners();
+  })().finally(() => {
+    initializationPromise = null;
+  });
+
+  return initializationPromise;
+}
+
+/** Legacy name retained for internal callers; it never starts network access. */
 export function initializeStorageIfEmpty() {
-  initFirestoreSync(notifyListeners);
+  return storageReady;
+}
 
-  if (!localStorage.getItem(STORAGE_KEYS.CATEGORIES)) {
-    const allCategories = [...DEFAULT_INCOME_CATEGORIES, ...DEFAULT_EXPENSE_CATEGORIES];
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(allCategories));
-    syncCategoriesToFirestore(allCategories);
-  }
-
-  if (!localStorage.getItem(STORAGE_KEYS.USER_PROFILE)) {
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(INITIAL_USER_PROFILE));
-    syncUserProfileToFirestore(INITIAL_USER_PROFILE);
-  }
-
-  if (!localStorage.getItem(STORAGE_KEYS.MERCHANT_RULES)) {
-    localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
-  }
-
-  const currentYM = getYearMonthString();
-  if (!localStorage.getItem(STORAGE_KEYS.BUDGETS)) {
-    const budgetMap: Record<string, Budget> = {
-      [currentYM]: getSampleBudget(currentYM),
-    };
-    localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
-  }
-
-  if (!localStorage.getItem(STORAGE_KEYS.RECURRING_TEMPLATES)) {
-    const templates = getSampleRecurringTemplates();
-    localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
-    generateOccurrencesForMonth(currentYM, templates);
-  }
-
-  if (!localStorage.getItem(STORAGE_KEYS.TRANSACTIONS)) {
-    const sampleTransactions = generateSampleTransactionsForMonth(currentYM);
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(sampleTransactions));
-  }
+export function shutdownStorage() {
+  stopFirestoreSync();
+  storageReady = false;
+  initializationPromise = null;
+  clearLocalAppData();
+  notifyListeners();
 }
 
 /**
  * Generate recurring occurrences for a given YYYY-MM based on templates
  */
 function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemplate[]) {
-  const existingStr = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
-  let occurrences: RecurringOccurrence[] = existingStr ? JSON.parse(existingStr) : [];
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  let added = false;
+
+  const toLocalDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const adjustForWeekend = (dateText: string, policy: RecurringTemplate['holidayPolicy']) => {
+    if (policy === 'fixed_date') return dateText;
+    const [year, month, day] = dateText.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    const direction = policy === 'previous_business_day' ? -1 : 1;
+    while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() + direction);
+    return toLocalDate(date);
+  };
+
+  const scheduledDatesFor = (template: RecurringTemplate) => {
+    const [year, month] = yearMonth.split('-').map(Number);
+    const monthStart = `${yearMonth}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const monthEnd = `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
+
+    if (template.endDate && template.endDate < monthStart) return [];
+    if (template.startDate > monthEnd) return [];
+
+    if (template.frequency === 'weekly') {
+      const [startYear, startMonth, startDay] = template.startDate.split('-').map(Number);
+      const cursor = new Date(startYear, startMonth - 1, startDay);
+      while (toLocalDate(cursor) < monthStart) cursor.setDate(cursor.getDate() + 7);
+      const dates: string[] = [];
+      while (toLocalDate(cursor) <= monthEnd) {
+        const dateText = toLocalDate(cursor);
+        if (!template.endDate || dateText <= template.endDate) dates.push(adjustForWeekend(dateText, template.holidayPolicy));
+        cursor.setDate(cursor.getDate() + 7);
+      }
+      return dates;
+    }
+
+    const clampedDay = Math.min(Math.max(1, template.dayOfMonth), lastDay);
+    const dateText = `${yearMonth}-${String(clampedDay).padStart(2, '0')}`;
+    if (dateText < template.startDate || (template.endDate && dateText > template.endDate)) return [];
+    return [adjustForWeekend(dateText, template.holidayPolicy)];
+  };
 
   for (const tmpl of templates) {
     if (!tmpl.active) continue;
 
-    // e.g. occurrenceKey = tmpl.id + '_' + yearMonth + '-' + day
-    const day = String(tmpl.dayOfMonth).padStart(2, '0');
-    const scheduledDate = `${yearMonth}-${day}`;
-    const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
-
-    if (!occurrences.some(o => o.occurrenceKey === occurrenceKey)) {
-      occurrences.push({
-        id: `occ_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        templateId: tmpl.id,
-        occurrenceKey,
-        scheduledDate,
-        expectedAmount: tmpl.defaultAmount,
-        actualAmount: null,
-        status: tmpl.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+    for (const scheduledDate of scheduledDatesFor(tmpl)) {
+      const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
+      if (!occurrences.some(o => o.occurrenceKey === occurrenceKey)) {
+        const now = new Date().toISOString();
+        occurrences.push({
+          id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+          templateId: tmpl.id,
+          occurrenceKey,
+          scheduledDate,
+          expectedAmount: tmpl.defaultAmount,
+          actualAmount: null,
+          status: tmpl.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
+          typeSnapshot: tmpl.type,
+          categoryIdSnapshot: tmpl.categoryId,
+          templateRevision: tmpl.updatedAt,
+          createdAt: now,
+          updatedAt: now,
+        });
+        added = true;
+      }
     }
   }
 
   localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  if (added && storageReady) syncRecurringOccurrencesToFirestore(occurrences);
 }
 
 /**
@@ -148,11 +242,79 @@ function generateSampleTransactionsForMonth(_yearMonth: string): Transaction[] {
 // Getters & Setters
 export function getTransactions(): Transaction[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-  return raw ? JSON.parse(raw) : [];
+  return readJson<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+}
+
+export function getDefaultCategoryId(type: Transaction['type'], categories = getCategories()) {
+  return getDefaultCategoryIdForType(categories, type);
+}
+
+export function getClassificationIssueSummary() {
+  const categories = getCategories();
+  const categoryMap = new Map(categories.map(category => [category.id, category]));
+  const transactions = getTransactions();
+  const templates = getRecurringTemplates();
+  const templateIds = new Set(templates.map(template => template.id));
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+
+  const invalidTransactions = transactions.filter(transaction => categoryMap.get(transaction.categoryId)?.type !== transaction.type);
+  const invalidTemplates = templates.filter(template => categoryMap.get(template.categoryId)?.type !== template.type);
+  const orphanOccurrences = occurrences.filter(occurrence => !templateIds.has(occurrence.templateId) && !occurrence.typeSnapshot);
+
+  return {
+    transactionCount: invalidTransactions.length,
+    transactionAmount: invalidTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+    templateCount: invalidTemplates.length,
+    orphanOccurrenceCount: orphanOccurrences.length,
+    totalCount: invalidTransactions.length + invalidTemplates.length + orphanOccurrences.length,
+  };
+}
+
+export function repairClassificationIssues() {
+  const categories = getCategories();
+  const categoryMap = new Map(categories.map(category => [category.id, category]));
+  const transactions = getTransactions();
+  const templates = getRecurringTemplates();
+  const now = new Date().toISOString();
+  let repairedTransactions = 0;
+  let repairedTemplates = 0;
+
+  transactions.forEach(transaction => {
+    if (categoryMap.get(transaction.categoryId)?.type === transaction.type) return;
+    const categoryId = getDefaultCategoryIdForType(categories, transaction.type);
+    if (!categoryId) return;
+    transaction.categoryId = categoryId;
+    transaction.updatedAt = now;
+    syncTransactionToFirestore(transaction);
+    repairedTransactions += 1;
+  });
+
+  templates.forEach(template => {
+    if (categoryMap.get(template.categoryId)?.type === template.type) return;
+    const categoryId = getDefaultCategoryIdForType(categories, template.type);
+    if (!categoryId) return;
+    template.categoryId = categoryId;
+    template.updatedAt = now;
+    syncRecurringTemplateToFirestore(template);
+    repairedTemplates += 1;
+  });
+
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+  notifyListeners();
+  return { repairedTransactions, repairedTemplates };
+}
+
+function assertCategoryMatchesType(type: Transaction['type'], categoryId: string) {
+  const category = getCategories().find(item => item.id === categoryId);
+  if (!category) throw new Error('선택한 카테고리를 찾을 수 없습니다.');
+  if (category.type !== type) {
+    throw new Error(`${type === 'expense' ? '지출' : '수입'} 항목에는 같은 유형의 카테고리만 사용할 수 있습니다.`);
+  }
 }
 
 export function saveTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>): Transaction {
+  assertCategoryMatchesType(tx.type, tx.categoryId);
   const txs = getTransactions();
   const now = new Date().toISOString();
   const newTx: Transaction = {
@@ -174,6 +336,10 @@ export function updateTransaction(id: string, updates: Partial<Transaction>): Tr
   const idx = txs.findIndex(t => t.id === id);
   if (idx === -1) return null;
 
+  const nextType = updates.type ?? txs[idx].type;
+  const nextCategoryId = updates.categoryId ?? txs[idx].categoryId;
+  assertCategoryMatchesType(nextType, nextCategoryId);
+
   txs[idx] = {
     ...txs[idx],
     ...updates,
@@ -188,12 +354,32 @@ export function updateTransaction(id: string, updates: Partial<Transaction>): Tr
 
 export function deleteTransaction(id: string): boolean {
   let txs = getTransactions();
+  const deletedTransaction = txs.find(transaction => transaction.id === id);
   const initialLen = txs.length;
   txs = txs.filter(t => t.id !== id);
 
   if (txs.length !== initialLen) {
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
     deleteTransactionFromFirestore(id);
+    if (deletedTransaction?.receipt?.storagePath) {
+      deleteReceiptImage(deletedTransaction.receipt.storagePath).catch(error => {
+        console.error('Failed to delete receipt image:', error);
+      });
+    }
+
+    const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+    let restoredOccurrence = false;
+    occurrences.forEach(occurrence => {
+      if (occurrence.transactionId !== id) return;
+      occurrence.status = 'needs_confirmation';
+      occurrence.transactionId = null;
+      occurrence.updatedAt = new Date().toISOString();
+      restoredOccurrence = true;
+    });
+    if (restoredOccurrence) {
+      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+      syncRecurringOccurrencesToFirestore(occurrences);
+    }
     notifyListeners();
     return true;
   }
@@ -202,8 +388,7 @@ export function deleteTransaction(id: string): boolean {
 
 export function getCategories(): Category[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
-  return raw ? JSON.parse(raw) : [];
+  return readJson<Category[]>(STORAGE_KEYS.CATEGORIES, []);
 }
 
 export function saveCategory(cat: Omit<Category, 'id'>): Category {
@@ -233,6 +418,12 @@ export function toggleCategoryActive(id: string): boolean {
 }
 
 export function mergeAndRemoveCategory(removeId: string, replaceWithId: string): boolean {
+  const categoryList = getCategories();
+  const removeCategory = categoryList.find(category => category.id === removeId);
+  const replacementCategory = categoryList.find(category => category.id === replaceWithId);
+  if (!removeCategory || !replacementCategory || removeCategory.type !== replacementCategory.type) {
+    throw new Error('같은 유형의 카테고리끼리만 병합할 수 있습니다.');
+  }
   // Move all transactions using removeId to replaceWithId
   const txs = getTransactions();
   let modified = false;
@@ -247,18 +438,52 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
   }
 
+  const templates = getRecurringTemplates();
+  let templatesModified = false;
+  templates.forEach(template => {
+    if (template.categoryId !== removeId) return;
+    template.categoryId = replaceWithId;
+    template.updatedAt = new Date().toISOString();
+    syncRecurringTemplateToFirestore(template);
+    templatesModified = true;
+  });
+  if (templatesModified) localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+
+  const rules = getMerchantRules();
+  let rulesModified = false;
+  rules.forEach(rule => {
+    if (rule.categoryId !== removeId) return;
+    rule.categoryId = replaceWithId;
+    syncMerchantRuleToFirestore(rule);
+    rulesModified = true;
+  });
+  if (rulesModified) localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
+
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  let occurrencesModified = false;
+  occurrences.forEach(occurrence => {
+    if (occurrence.categoryIdSnapshot !== removeId) return;
+    occurrence.categoryIdSnapshot = replaceWithId;
+    occurrence.updatedAt = new Date().toISOString();
+    occurrencesModified = true;
+  });
+  if (occurrencesModified) {
+    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+    syncRecurringOccurrencesToFirestore(occurrences);
+  }
+
   // Remove category
   const cats = getCategories().filter(c => c.id !== removeId);
   localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
   syncCategoriesToFirestore(cats);
+  deleteCategoryFromFirestore(removeId);
   notifyListeners();
   return true;
 }
 
 export function getBudget(yearMonth: string): Budget {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.BUDGETS);
-  const map: Record<string, Budget> = raw ? JSON.parse(raw) : {};
+  const map = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {});
   if (!map[yearMonth]) {
     map[yearMonth] = getSampleBudget(yearMonth);
     localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
@@ -281,11 +506,11 @@ export function updateBudget(budget: Budget): void {
 
 export function getRecurringTemplates(): RecurringTemplate[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_TEMPLATES);
-  return raw ? JSON.parse(raw) : [];
+  return readJson<RecurringTemplate[]>(STORAGE_KEYS.RECURRING_TEMPLATES, []);
 }
 
 export function saveRecurringTemplate(tmpl: Omit<RecurringTemplate, 'id' | 'createdAt' | 'updatedAt'>): RecurringTemplate {
+  assertCategoryMatchesType(tmpl.type, tmpl.categoryId);
   const tmpls = getRecurringTemplates();
   const now = new Date().toISOString();
   const newTmpl: RecurringTemplate = {
@@ -310,6 +535,10 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
   const idx = tmpls.findIndex(t => t.id === id);
   if (idx === -1) return null;
 
+  const nextType = updates.type ?? tmpls[idx].type;
+  const nextCategoryId = updates.categoryId ?? tmpls[idx].categoryId;
+  assertCategoryMatchesType(nextType, nextCategoryId);
+
   tmpls[idx] = {
     ...tmpls[idx],
     ...updates,
@@ -330,6 +559,19 @@ export function deleteRecurringTemplate(id: string): boolean {
   if (tmpls.length !== initialLen) {
     localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
     deleteRecurringTemplateFromFirestore(id);
+
+    const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+    let changedOccurrences = false;
+    occurrences.forEach(occurrence => {
+      if (occurrence.templateId !== id || occurrence.status === 'posted') return;
+      occurrence.status = 'skipped';
+      occurrence.updatedAt = new Date().toISOString();
+      changedOccurrences = true;
+    });
+    if (changedOccurrences) {
+      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+      syncRecurringOccurrencesToFirestore(occurrences);
+    }
     notifyListeners();
     return true;
   }
@@ -338,14 +580,12 @@ export function deleteRecurringTemplate(id: string): boolean {
 
 export function getRecurringOccurrences(yearMonth: string): RecurringOccurrence[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
-  let all: RecurringOccurrence[] = raw ? JSON.parse(raw) : [];
+  let all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   
   // Ensure occurrences generated for requested month
   generateOccurrencesForMonth(yearMonth, getRecurringTemplates());
   
-  const rawUpdated = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
-  all = rawUpdated ? JSON.parse(rawUpdated) : [];
+  all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   return all.filter(o => o.scheduledDate.startsWith(yearMonth));
 }
 
@@ -371,13 +611,13 @@ export function updateOccurrenceStatus(
   }
 }
 
-export function postOccurrenceToTransaction(
+export async function postOccurrenceToTransaction(
   occurrenceId: string,
   customAmount?: number,
   customPaymentMethodType?: PaymentMethodType,
   customAccountId?: string | null,
   customCardId?: string | null
-): Transaction | null {
+): Promise<Transaction | null> {
   const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
   if (!raw) return null;
   const all: RecurringOccurrence[] = JSON.parse(raw);
@@ -392,14 +632,25 @@ export function postOccurrenceToTransaction(
   const paymentMethodType = customPaymentMethodType ?? target.paymentMethodType ?? template.paymentMethodType;
   const accountId = customAccountId ?? target.accountId ?? template.accountId;
   const cardId = customCardId ?? target.cardId ?? template.cardId;
+  const occurrenceType = target.typeSnapshot ?? template.type;
+  const occurrenceCategoryId = target.categoryIdSnapshot ?? template.categoryId;
 
-  // Create Transaction
-  const newTx = saveTransaction({
-    type: template.type,
+  try {
+    assertCategoryMatchesType(occurrenceType, occurrenceCategoryId);
+  } catch (error) {
+    console.error('Recurring occurrence requires category review:', error);
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const transactionId = `tx_recurring_${target.occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const newTx: Transaction = {
+    id: transactionId,
+    type: occurrenceType,
     amount,
     occurredAt: `${target.scheduledDate}T10:00:00.000Z`,
     localDate: target.scheduledDate,
-    categoryId: template.categoryId,
+    categoryId: occurrenceCategoryId,
     merchant: template.counterparty || template.name,
     memo: `[정기] ${template.name}`,
     source: 'manual',
@@ -408,7 +659,9 @@ export function postOccurrenceToTransaction(
     paymentMethodType,
     accountId,
     cardId,
-  });
+    createdAt: now,
+    updatedAt: now,
+  };
 
   // Mark occurrence as posted
   target.status = 'posted';
@@ -417,9 +670,19 @@ export function postOccurrenceToTransaction(
   target.accountId = accountId;
   target.cardId = cardId;
   target.transactionId = newTx.id;
-  target.updatedAt = new Date().toISOString();
+  target.updatedAt = now;
+
+  try {
+    await commitRecurringPosting(newTx, target);
+  } catch (error) {
+    console.error('Atomic recurring posting failed:', error);
+    return null;
+  }
+
+  const transactions = getTransactions().filter(transaction => transaction.id !== newTx.id);
+  transactions.unshift(newTx);
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
   localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-  syncRecurringOccurrencesToFirestore(all);
 
   notifyListeners();
   return newTx;
@@ -427,8 +690,7 @@ export function postOccurrenceToTransaction(
 
 export function getMerchantRules(): MerchantRule[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.MERCHANT_RULES);
-  return raw ? JSON.parse(raw) : [];
+  return readJson<MerchantRule[]>(STORAGE_KEYS.MERCHANT_RULES, []);
 }
 
 export function saveMerchantRule(pattern: string, categoryId: string): MerchantRule {
@@ -457,22 +719,17 @@ export function saveMerchantRule(pattern: string, categoryId: string): MerchantR
 
 export function getUserProfile(): UserProfile {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.USER_PROFILE);
-  const profile: UserProfile = raw ? JSON.parse(raw) : INITIAL_USER_PROFILE;
-  if (profile.securityPinEnabled === undefined) {
-    profile.securityPinEnabled = true;
-  }
-  if (!profile.accessPin) {
-    profile.accessPin = '1234';
-  }
-  return profile;
+  const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+  const { accessPin: _legacyPin, ...safeProfile } = profile;
+  return { ...safeProfile, securityPinEnabled: true } as UserProfile;
 }
 
 export function updateUserProfile(updates: Partial<UserProfile>): UserProfile {
   const current = getUserProfile();
+  const { accessPin: _ignoredPin, ...safeUpdates } = updates;
   const updated = {
     ...current,
-    ...updates,
+    ...safeUpdates,
     updatedAt: new Date().toISOString(),
   };
   localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(updated));
@@ -482,9 +739,7 @@ export function updateUserProfile(updates: Partial<UserProfile>): UserProfile {
 }
 
 export function getCachedAIFeedback(periodId: string): AIFeedbackResult | null {
-  const raw = localStorage.getItem(STORAGE_KEYS.AI_INSIGHTS);
-  if (!raw) return null;
-  const map: Record<string, AIFeedbackResult> = JSON.parse(raw);
+  const map = readJson<Record<string, AIFeedbackResult>>(STORAGE_KEYS.AI_INSIGHTS, {});
   return map[periodId] || null;
 }
 
@@ -495,30 +750,37 @@ export function saveCachedAIFeedback(periodId: string, feedback: AIFeedbackResul
   localStorage.setItem(STORAGE_KEYS.AI_INSIGHTS, JSON.stringify(map));
 }
 
-export function exportTransactionsCSV(): string {
-  const txs = getTransactions();
+export function exportTransactionsCSV(yearMonth?: string): string {
+  const txs = getTransactions().filter(transaction => !yearMonth || transaction.localDate.startsWith(yearMonth));
   const cats = getCategories();
   const catMap = new Map(cats.map(c => [c.id, c.name]));
+  const csvCell = (value: string | number) => {
+    let text = String(value ?? '');
+    if (/^[=+\-@]/.test(text)) text = `'${text}`;
+    return `"${text.replace(/"/g, '""')}"`;
+  };
 
-  const headers = ['날짜', '유형', '금액(KRW)', '카테고리', '사용처/거래처', '메모', '입력방식'];
+  const headers = ['날짜', '유형', '금액(KRW)', '카테고리', '사용처/거래처', '메모', '생활태그', '입력방식', '영수증번호', '영수증품목'];
   const rows = txs.map(t => [
-    t.localDate,
-    t.type === 'income' ? '수입' : '지출',
-    t.amount,
-    catMap.get(t.categoryId) || '기타',
-    `"${(t.merchant || '').replace(/"/g, '""')}"`,
-    `"${(t.memo || '').replace(/"/g, '""')}"`,
-    t.source === 'ai' ? 'AI자동' : '직접입력',
+    csvCell(t.localDate),
+    csvCell(t.type === 'income' ? '수입' : '지출'),
+    csvCell(t.amount),
+    csvCell(catMap.get(t.categoryId) || '기타'),
+    csvCell(t.merchant || ''),
+    csvCell(t.memo || ''),
+    csvCell((t.tags || []).join('|')),
+    csvCell(t.source === 'receipt' ? '영수증OCR' : t.source === 'ai' ? 'AI자동' : '직접입력'),
+    csvCell(t.receipt?.receiptNumber || ''),
+    csvCell((t.receipt?.lineItems || []).map(item => item.name).join('|')),
   ]);
 
-  return '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  return '\uFEFF' + [headers.map(csvCell).join(','), ...rows.map(r => r.join(','))].join('\n');
 }
 
 // Bank Account CRUD
 export function getBankAccounts(): BankAccount[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.BANK_ACCOUNTS);
-  return raw ? JSON.parse(raw) : [];
+  return readJson<BankAccount[]>(STORAGE_KEYS.BANK_ACCOUNTS, []);
 }
 
 export function saveBankAccount(acc: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt'>): BankAccount {
@@ -526,6 +788,8 @@ export function saveBankAccount(acc: Omit<BankAccount, 'id' | 'createdAt' | 'upd
   const now = new Date().toISOString();
   const newAcc: BankAccount = {
     ...acc,
+    balanceAsOf: acc.balanceAsOf || getLocalDateString(),
+    balanceUpdatedAt: now,
     id: `acc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     createdAt: now,
     updatedAt: now,
@@ -545,6 +809,9 @@ export function updateBankAccount(id: string, updates: Partial<BankAccount>): Ba
   accounts[idx] = {
     ...accounts[idx],
     ...updates,
+    ...(updates.balance !== undefined && updates.balance !== accounts[idx].balance
+      ? { balanceAsOf: updates.balanceAsOf || getLocalDateString(), balanceUpdatedAt: new Date().toISOString() }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
 
@@ -555,6 +822,11 @@ export function updateBankAccount(id: string, updates: Partial<BankAccount>): Ba
 }
 
 export function deleteBankAccount(id: string): boolean {
+  const isReferenced = getPaymentCards().some(card => card.linkedAccountId === id)
+    || getRecurringTemplates().some(template => template.accountId === id)
+    || getTransactions().some(transaction => transaction.accountId === id);
+  if (isReferenced) return false;
+
   let accounts = getBankAccounts();
   const initialLen = accounts.length;
   accounts = accounts.filter(a => a.id !== id);
@@ -571,8 +843,7 @@ export function deleteBankAccount(id: string): boolean {
 // Payment Card CRUD
 export function getPaymentCards(): PaymentCard[] {
   initializeStorageIfEmpty();
-  const raw = localStorage.getItem(STORAGE_KEYS.PAYMENT_CARDS);
-  return raw ? JSON.parse(raw) : [];
+  return readJson<PaymentCard[]>(STORAGE_KEYS.PAYMENT_CARDS, []);
 }
 
 export function savePaymentCard(card: Omit<PaymentCard, 'id' | 'createdAt' | 'updatedAt'>): PaymentCard {
@@ -609,6 +880,10 @@ export function updatePaymentCard(id: string, updates: Partial<PaymentCard>): Pa
 }
 
 export function deletePaymentCard(id: string): boolean {
+  const isReferenced = getRecurringTemplates().some(template => template.cardId === id)
+    || getTransactions().some(transaction => transaction.cardId === id);
+  if (isReferenced) return false;
+
   let cards = getPaymentCards();
   const initialLen = cards.length;
   cards = cards.filter(c => c.id !== id);
@@ -622,9 +897,11 @@ export function deletePaymentCard(id: string): boolean {
   return false;
 }
 
-export function resetAllData(): void {
-  localStorage.clear();
-  clearFirestoreAllData();
-  initializeStorageIfEmpty();
-  notifyListeners();
+export async function resetAllData(): Promise<void> {
+  stopFirestoreSync();
+  await clearAllReceiptImages();
+  await clearFirestoreAllData();
+  clearLocalAppData();
+  storageReady = false;
+  await initializeStorageAfterLogin();
 }

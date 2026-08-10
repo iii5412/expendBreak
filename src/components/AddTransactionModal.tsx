@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Sparkles,
@@ -9,9 +9,13 @@ import {
   Send,
   HelpCircle,
   BookmarkPlus,
+  Camera,
 } from 'lucide-react';
 import { Category, Transaction, AIClassifyResult, MerchantRule, BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { formatKRW, getLocalDateString } from '../utils/calculations';
+import { authenticatedFetch } from '../utils/auth';
+import { normalizeTags } from '../utils/receipt';
+import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -20,7 +24,8 @@ interface AddTransactionModalProps {
   merchantRules: MerchantRule[];
   bankAccounts?: BankAccount[];
   paymentCards?: PaymentCard[];
-  onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  aiClassificationEnabled?: boolean;
+  onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
 }
 
@@ -31,18 +36,24 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   merchantRules,
   bankAccounts = [],
   paymentCards = [],
+  aiClassificationEnabled = true,
   onSaveTransaction,
   onSaveMerchantRule,
 }) => {
-  const [activeMode, setActiveMode] = useState<'ai' | 'manual'>('ai');
+  const [activeMode, setActiveMode] = useState<'receipt' | 'ai' | 'manual'>('receipt');
 
   // Manual Form State
   const [type, setType] = useState<'income' | 'expense'>('expense');
   const [amount, setAmount] = useState<string>('');
   const [localDate, setLocalDate] = useState<string>(getLocalDateString());
-  const [categoryId, setCategoryId] = useState<string>(categories[0]?.id || 'delivery_food');
+  const [categoryId, setCategoryId] = useState<string>(
+    categories.find(category => category.id === 'etc_expense')?.id
+      || categories.find(category => category.type === 'expense' && category.active)?.id
+      || '',
+  );
   const [merchant, setMerchant] = useState<string>('');
   const [memo, setMemo] = useState<string>('');
+  const [tagsText, setTagsText] = useState<string>('');
   const [paymentMethodType, setPaymentMethodType] = useState<PaymentMethodType>('card');
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [selectedCardId, setSelectedCardId] = useState<string>('');
@@ -62,6 +73,15 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [confirmMemo, setConfirmMemo] = useState<string>('');
   const [rememberRule, setRememberRule] = useState<boolean>(true);
 
+  useEffect(() => {
+    if (!aiClassificationEnabled) setActiveMode('manual');
+  }, [aiClassificationEnabled]);
+
+  const categoryForType = (nextType: 'income' | 'expense') =>
+    categories.find(category => category.id === (nextType === 'expense' ? 'etc_expense' : 'etc_income'))?.id
+      || categories.find(category => category.type === nextType && category.active)?.id
+      || '';
+
   if (!isOpen) return null;
 
   const handleRunAiClassify = async () => {
@@ -71,13 +91,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setAiResult(null);
 
     try {
-      const pin = sessionStorage.getItem('app_access_pin') || '';
-      const res = await fetch('/api/ai/classify', {
+      const res = await authenticatedFetch('/api/ai/classify', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-app-access-key': pin,
-          'x-app-pin': pin,
         },
         body: JSON.stringify({
           text: aiPromptText,
@@ -90,11 +107,19 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       if (!res.ok) throw new Error('AI Server Error');
       const data: AIClassifyResult = await res.json();
 
-      setAiResult(data);
+      const safeType = data.type === 'income' ? 'income' : 'expense';
+      const suggestedCategory = categories.find(category => category.id === data.suggestedCategoryId);
+      const safeCategoryId = suggestedCategory?.type === safeType
+        ? suggestedCategory.id
+        : categories.find(category => category.id === (safeType === 'expense' ? 'etc_expense' : 'etc_income'))?.id
+          || categories.find(category => category.type === safeType && category.active)?.id
+          || '';
+
+      setAiResult({ ...data, type: safeType, suggestedCategoryId: safeCategoryId, needsConfirmation: true });
       setConfirmAmount(data.amount);
-      setConfirmCategoryId(data.suggestedCategoryId);
+      setConfirmCategoryId(safeCategoryId);
       setConfirmMerchant(data.merchant);
-      setConfirmType(data.type);
+      setConfirmType(safeType);
       setConfirmDate(data.date || getLocalDateString());
       setConfirmMemo(data.memo || aiPromptText);
     } catch (err: any) {
@@ -110,6 +135,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       alert('1원 이상의 정수 금액을 입력해주세요.');
       return;
     }
+    const selectedCategory = categories.find(category => category.id === confirmCategoryId);
+    if (!selectedCategory || selectedCategory.type !== confirmType) {
+      alert(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      return;
+    }
 
     onSaveTransaction({
       type: confirmType,
@@ -119,6 +149,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       categoryId: confirmCategoryId,
       merchant: confirmMerchant || '기타',
       memo: confirmMemo,
+      tags: normalizeTags(tagsText),
       source: 'ai',
       aiConfidence: aiResult?.confidence || 0.9,
       aiReviewed: true,
@@ -140,6 +171,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       alert('올바른 금액을 입력하세요.');
       return;
     }
+    const selectedCategory = categories.find(category => category.id === categoryId);
+    if (!selectedCategory || selectedCategory.type !== type) {
+      alert(`${type === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      return;
+    }
 
     onSaveTransaction({
       type,
@@ -149,6 +185,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       categoryId,
       merchant: merchant || '기타',
       memo,
+      tags: normalizeTags(tagsText),
       source: 'manual',
       paymentMethodType,
       accountId: paymentMethodType === 'account' ? selectedAccountId : null,
@@ -165,6 +202,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setAmount('');
     setMerchant('');
     setMemo('');
+    setTagsText('');
   };
 
   const examplePrompts = [
@@ -192,18 +230,33 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         </div>
 
         {/* Mode Switcher */}
-        <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => setActiveMode('ai')}
-            className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
-              activeMode === 'ai'
-                ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-amber-300" />
-            <span>AI 자연어 입력</span>
-          </button>
+        <div className={`grid ${aiClassificationEnabled ? 'grid-cols-3' : 'grid-cols-1'} gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800`}>
+          {aiClassificationEnabled && (
+            <button
+              onClick={() => setActiveMode('receipt')}
+              className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                activeMode === 'receipt'
+                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Camera className="w-4 h-4" />
+              <span>영수증</span>
+            </button>
+          )}
+          {aiClassificationEnabled && (
+            <button
+              onClick={() => setActiveMode('ai')}
+              className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                activeMode === 'ai'
+                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>AI 문장</span>
+            </button>
+          )}
 
           <button
             onClick={() => setActiveMode('manual')}
@@ -214,12 +267,27 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             }`}
           >
             <PenTool className="w-4 h-4" />
-            <span>직접 수동 입력</span>
+            <span>직접 입력</span>
           </button>
         </div>
 
+        {aiClassificationEnabled && activeMode === 'receipt' && (
+          <ReceiptCapturePanel
+            categories={categories}
+            merchantRules={merchantRules}
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
+            onSaveTransaction={onSaveTransaction}
+            onSaveMerchantRule={onSaveMerchantRule}
+            onDone={() => {
+              resetAll();
+              onClose();
+            }}
+          />
+        )}
+
         {/* MODE 1: AI Quick Input */}
-        {activeMode === 'ai' && (
+        {aiClassificationEnabled && activeMode === 'ai' && (
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-xs text-slate-300 font-semibold block">
@@ -284,7 +352,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     <label className="text-slate-400 block mb-1">구분</label>
                     <select
                       value={confirmType}
-                      onChange={e => setConfirmType(e.target.value as 'income' | 'expense')}
+                      onChange={e => {
+                        const nextType = e.target.value as 'income' | 'expense';
+                        setConfirmType(nextType);
+                        const current = categories.find(category => category.id === confirmCategoryId);
+                        if (!current || current.type !== nextType) setConfirmCategoryId(categoryForType(nextType));
+                      }}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-white font-bold"
                     >
                       <option value="expense">지출 (-)</option>
@@ -319,7 +392,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                       onChange={e => setConfirmCategoryId(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-white"
                     >
-                      {categories.map(c => (
+                      {categories.filter(c => c.type === confirmType && c.active).map(c => (
                         <option key={c.id} value={c.id}>
                           {c.name}
                         </option>
@@ -330,6 +403,17 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
                 <div className="text-[11px] text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
                   <span className="font-semibold text-amber-300">AI 판단 이유:</span> {aiResult.reason}
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">생활 태그 (선택)</label>
+                  <input
+                    type="text"
+                    value={tagsText}
+                    onChange={e => setTagsText(e.target.value)}
+                    placeholder="예: 가족, 여행, 병원"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-white"
+                  />
                 </div>
 
                 {confirmMerchant && (
@@ -363,7 +447,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 <label className="text-slate-400 block mb-1">유형</label>
                 <select
                   value={type}
-                  onChange={e => setType(e.target.value as 'income' | 'expense')}
+                  onChange={e => {
+                    const nextType = e.target.value as 'income' | 'expense';
+                    setType(nextType);
+                    const current = categories.find(category => category.id === categoryId);
+                    if (!current || current.type !== nextType) setCategoryId(categoryForType(nextType));
+                  }}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white font-bold"
                 >
                   <option value="expense">지출 (-)</option>
@@ -387,12 +476,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               <label className="text-slate-400 block mb-1">금액 (KRW 정수)</label>
               <input
                 type="number"
+                inputMode="numeric"
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
                 placeholder="예: 24900"
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-base font-extrabold text-rose-400 placeholder-slate-600"
                 required
               />
+              {Number(amount) > 0 && <p className="text-[11px] text-slate-500 mt-1">{formatKRW(Number(amount))}</p>}
             </div>
 
             <div>
@@ -500,6 +591,17 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 value={memo}
                 onChange={e => setMemo(e.target.value)}
                 placeholder="예: 저녁 보쌈 배달"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-slate-400 block mb-1">생활 태그 (선택)</label>
+              <input
+                type="text"
+                value={tagsText}
+                onChange={e => setTagsText(e.target.value)}
+                placeholder="예: 가족, 여행, 병원 (쉼표로 구분)"
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white"
               />
             </div>

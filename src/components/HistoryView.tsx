@@ -11,9 +11,13 @@ import {
   Calendar,
   X,
   Check,
+  ReceiptText,
+  Tags,
 } from 'lucide-react';
 import { Transaction, Category } from '../types';
 import { formatKRW } from '../utils/calculations';
+import { normalizeTags } from '../utils/receipt';
+import { ReceiptDetailsModal } from './ReceiptDetailsModal';
 
 interface HistoryViewProps {
   transactions: Transaction[];
@@ -32,9 +36,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [aiOnlyFilter, setAiOnlyFilter] = useState(false);
+  const [receiptOnlyFilter, setReceiptOnlyFilter] = useState(false);
 
   // Edit State
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
+  const [viewingReceiptTx, setViewingReceiptTx] = useState<Transaction | null>(null);
 
   const categoryMap = useMemo(() => {
     return new Map(categories.map(c => [c.id, c]));
@@ -44,31 +50,39 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     return transactions.filter(t => {
       if (typeFilter !== 'all' && t.type !== typeFilter) return false;
       if (selectedCategory !== 'all' && t.categoryId !== selectedCategory) return false;
-      if (aiOnlyFilter && t.source !== 'ai') return false;
+      if (aiOnlyFilter && t.source === 'manual') return false;
+      if (receiptOnlyFilter && !t.receipt) return false;
 
       if (searchTerm.trim()) {
         const query = searchTerm.toLowerCase();
         const catName = (categoryMap.get(t.categoryId)?.name || '').toLowerCase();
         const merchant = (t.merchant || '').toLowerCase();
         const memo = (t.memo || '').toLowerCase();
-        if (!merchant.includes(query) && !memo.includes(query) && !catName.includes(query)) {
+        const receiptText = `${t.receipt?.rawText || ''} ${(t.receipt?.lineItems || []).map(item => item.name).join(' ')}`.toLowerCase();
+        const tags = (t.tags || []).join(' ').toLowerCase();
+        if (!merchant.includes(query) && !memo.includes(query) && !catName.includes(query) && !receiptText.includes(query) && !tags.includes(query)) {
           return false;
         }
       }
       return true;
     });
-  }, [transactions, typeFilter, selectedCategory, aiOnlyFilter, searchTerm, categoryMap]);
+  }, [transactions, typeFilter, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap]);
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTx) return;
+    const amount = Math.round(Number(editingTx.amount));
+    const selectedCategory = categories.find(category => category.id === editingTx.categoryId);
+    if (!Number.isFinite(amount) || amount <= 0 || !selectedCategory || selectedCategory.type !== editingTx.type) return;
     onUpdateTransaction(editingTx.id, {
-      amount: Math.round(Number(editingTx.amount)),
+      amount,
       merchant: editingTx.merchant,
       memo: editingTx.memo,
       categoryId: editingTx.categoryId,
       localDate: editingTx.localDate,
+      occurredAt: `${editingTx.localDate}T12:00:00.000Z`,
       type: editingTx.type,
+      tags: normalizeTags(editingTx.tags || []),
     });
     setEditingTx(null);
   };
@@ -84,7 +98,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             type="text"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
-            placeholder="사용처, 메모, 카테고리 검색..."
+            placeholder="사용처, 메모, 태그, 영수증 품목 검색..."
             className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-8 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-rose-500"
           />
           {searchTerm && (
@@ -153,6 +167,18 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             <span>AI 자동기록만</span>
           </button>
+
+          <button
+            onClick={() => setReceiptOnlyFilter(!receiptOnlyFilter)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
+              receiptOnlyFilter
+                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 font-semibold'
+                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+            }`}
+          >
+            <ReceiptText className="w-3.5 h-3.5" />
+            <span>영수증만</span>
+          </button>
         </div>
       </div>
 
@@ -198,6 +224,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           <span>AI</span>
                         </span>
                       )}
+                      {t.receipt && (
+                        <button onClick={() => setViewingReceiptTx(t)} className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <ReceiptText className="w-2.5 h-2.5" /><span>영수증</span>
+                        </button>
+                      )}
                       {isLowConfidence && (
                         <span
                           className="text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded flex items-center gap-0.5"
@@ -212,6 +243,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       <span>{t.localDate}</span>
                       {t.memo && <span>• {t.memo}</span>}
                     </div>
+                    {(t.tags || []).length > 0 && <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-slate-500"><Tags className="h-3 w-3" />{t.tags!.map(tag => <span key={tag}>#{tag}</span>)}</div>}
                   </div>
                 </div>
 
@@ -263,7 +295,16 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <label className="text-slate-400 mb-1 block">유형</label>
                 <select
                   value={editingTx.type}
-                  onChange={e => setEditingTx({ ...editingTx, type: e.target.value as 'income' | 'expense' })}
+                  onChange={e => {
+                    const nextType = e.target.value as 'income' | 'expense';
+                    const currentCategory = categories.find(category => category.id === editingTx.categoryId);
+                    const nextCategoryId = currentCategory?.type === nextType
+                      ? currentCategory.id
+                      : categories.find(category => category.id === (nextType === 'expense' ? 'etc_expense' : 'etc_income'))?.id
+                        || categories.find(category => category.type === nextType && category.active)?.id
+                        || '';
+                    setEditingTx({ ...editingTx, type: nextType, categoryId: nextCategoryId });
+                  }}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100"
                 >
                   <option value="expense">지출</option>
@@ -311,7 +352,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   onChange={e => setEditingTx({ ...editingTx, categoryId: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100"
                 >
-                  {categories.map(c => (
+                  {categories.filter(c => c.type === editingTx.type && c.active).map(c => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
@@ -325,6 +366,17 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   type="text"
                   value={editingTx.memo}
                   onChange={e => setEditingTx({ ...editingTx, memo: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 mb-1 block">생활 태그</label>
+                <input
+                  type="text"
+                  value={(editingTx.tags || []).join(', ')}
+                  onChange={e => setEditingTx({ ...editingTx, tags: e.target.value.split(',') })}
+                  placeholder="예: 가족, 여행, 병원"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100"
                 />
               </div>
@@ -348,6 +400,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           </div>
         </div>
       )}
+
+      {viewingReceiptTx?.receipt && <ReceiptDetailsModal receipt={viewingReceiptTx.receipt} merchant={viewingReceiptTx.merchant} onClose={() => setViewingReceiptTx(null)} />}
     </div>
   );
 };

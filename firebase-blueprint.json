@@ -2,14 +2,13 @@
   "entities": {
     "appSettings": {
       "title": "App Settings",
-      "description": "Global app settings and security PIN",
+      "description": "Single-owner app preferences. PIN is kept only as a server-side secret hash.",
       "type": "object",
       "properties": {
-        "accessPin": { "type": "string" },
         "securityPinEnabled": { "type": "boolean" },
         "updatedAt": { "type": "string" }
       },
-      "required": ["accessPin", "securityPinEnabled"]
+      "required": ["securityPinEnabled"]
     },
     "transactions": {
       "title": "Transaction",
@@ -23,6 +22,21 @@
         "categoryId": { "type": "string" },
         "merchant": { "type": "string" },
         "memo": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "receipt": {
+          "type": "object",
+          "description": "Owner-only receipt OCR record; the original image is kept in Firebase Storage.",
+          "properties": {
+            "id": { "type": "string" },
+            "storagePath": { "type": "string" },
+            "receiptNumber": { "type": "string" },
+            "businessNumber": { "type": "string" },
+            "lineItems": { "type": "array" },
+            "rawText": { "type": "string" },
+            "ocrConfidence": { "type": "number" },
+            "scannedAt": { "type": "string" }
+          }
+        },
         "source": { "type": "string" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
@@ -83,6 +97,8 @@
         "accountNumber": { "type": "string" },
         "accountHolder": { "type": "string" },
         "balance": { "type": "number" },
+        "balanceAsOf": { "type": "string" },
+        "balanceUpdatedAt": { "type": "string" },
         "memo": { "type": "string" }
       },
       "required": ["bankName", "accountName", "accountNumber"]

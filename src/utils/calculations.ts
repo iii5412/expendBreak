@@ -124,7 +124,7 @@ export function calculateMonthSummary(
   const scheduledIncome = pendingOccurrences
     .filter(o => {
       const tmpl = templateMap.get(o.templateId);
-      return tmpl?.type === 'income';
+      return (o.typeSnapshot ?? tmpl?.type) === 'income';
     })
     .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
 
@@ -132,7 +132,7 @@ export function calculateMonthSummary(
   const remainingScheduledExpenses = pendingOccurrences
     .filter(o => {
       const tmpl = templateMap.get(o.templateId);
-      return tmpl ? tmpl.type === 'expense' : true;
+      return (o.typeSnapshot ?? tmpl?.type) === 'expense';
     })
     .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
 
@@ -157,26 +157,31 @@ export function calculateMonthSummary(
     
   // Alert Level
   let alertLevel: BudgetAlertLevel = 'safe';
-  if (budgetUsagePercent >= 100) {
+  const [cautionThreshold = 0.7, warningThreshold = 0.85, dangerThreshold = 1] = budget.thresholds || [];
+  if (budgetUsagePercent >= dangerThreshold * 100) {
     alertLevel = 'danger';
-  } else if (budgetUsagePercent >= 85) {
+  } else if (budgetUsagePercent >= warningThreshold * 100) {
     alertLevel = 'warning';
-  } else if (budgetUsagePercent >= 70) {
+  } else if (budgetUsagePercent >= cautionThreshold * 100) {
     alertLevel = 'caution';
   }
   
   // Forecast Month-End Spend based on recent 14 days variable spend average
   // Variable spend = non-fixed expense transactions
   const variableTxs = monthTxs.filter(t => t.type === 'expense' && !t.recurringTemplateId);
-  const variableSpendSum = variableTxs.reduce((sum, t) => sum + Math.round(t.amount), 0);
-  
   let forecastMonthEndSpend: number | null = null;
   let forecastAverageDailyVariable = 0;
   
   if (daysPassed >= 3) {
-    // Average daily variable spend over days passed (or max 14 days)
-    const effectiveDaysForAvg = Math.min(14, daysPassed);
-    forecastAverageDailyVariable = Math.round(variableSpendSum / daysPassed);
+    const endDay = Math.min(daysInMonth, daysPassed);
+    const startDay = Math.max(1, endDay - 13);
+    const recentStart = `${yearMonth}-${String(startDay).padStart(2, '0')}`;
+    const recentEnd = `${yearMonth}-${String(endDay).padStart(2, '0')}`;
+    const recentVariableSpend = variableTxs
+      .filter(transaction => transaction.localDate >= recentStart && transaction.localDate <= recentEnd)
+      .reduce((sum, transaction) => sum + Math.round(transaction.amount), 0);
+    const observedDays = endDay - startDay + 1;
+    forecastAverageDailyVariable = Math.round(recentVariableSpend / observedDays);
     
     // Month-End Forecast = Confirmed Expenses + Remaining Scheduled Expenses + (Daily Variable Avg * Days Remaining)
     forecastMonthEndSpend = confirmedExpenses + remainingScheduledExpenses + Math.round(forecastAverageDailyVariable * (daysRemaining - 1));
@@ -223,7 +228,7 @@ export function formatKRW(amount: number): string {
 export function getCategoryBreakdown(
   yearMonth: string,
   transactions: Transaction[],
-  categories: Record<string, { name: string; color: string; icon: string }>
+  categories: Record<string, { name: string; color: string; icon: string; type: Transaction['type'] }>
 ) {
   const expenses = transactions.filter(
     t => t.type === 'expense' && t.localDate.startsWith(yearMonth)
@@ -233,13 +238,16 @@ export function getCategoryBreakdown(
   let total = 0;
   
   for (const t of expenses) {
-    map[t.categoryId] = (map[t.categoryId] || 0) + t.amount;
+    const categoryId = categories[t.categoryId]?.type === 'expense' ? t.categoryId : '__needs_review_expense';
+    map[categoryId] = (map[categoryId] || 0) + t.amount;
     total += t.amount;
   }
   
   return Object.entries(map)
     .map(([catId, amount]) => {
-      const catInfo = categories[catId] || { name: '기타', color: '#94A3B8', icon: 'MoreHorizontal' };
+      const catInfo = catId === '__needs_review_expense'
+        ? { name: '분류 확인 필요', color: '#F59E0B', icon: 'AlertTriangle', type: 'expense' as const }
+        : categories[catId] || { name: '기타', color: '#94A3B8', icon: 'MoreHorizontal', type: 'expense' as const };
       const percent = total > 0 ? Math.round((amount / total) * 100) : 0;
       return {
         categoryId: catId,

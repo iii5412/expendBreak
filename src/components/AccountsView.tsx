@@ -11,7 +11,8 @@ import {
   ArrowRightLeft,
   Calendar,
   AlertCircle,
-  FileText
+  FileText,
+  Copy
 } from 'lucide-react';
 import { BankAccount, PaymentCard } from '../types';
 import { formatKRW } from '../utils/calculations';
@@ -58,7 +59,10 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [accNumber, setAccNumber] = useState('');
   const [accHolder, setAccHolder] = useState('');
   const [accBalance, setAccBalance] = useState<number>(0);
+  const [accBalanceAsOf, setAccBalanceAsOf] = useState(new Date().toISOString().slice(0, 10));
   const [accMemo, setAccMemo] = useState('');
+  const [copyToast, setCopyToast] = useState('');
+  const [balanceUndo, setBalanceUndo] = useState<{ id: string; balance: number; balanceAsOf?: string } | null>(null);
 
   // Card Modal State
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
@@ -79,6 +83,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setAccNumber(acc.accountNumber || '');
       setAccHolder(acc.accountHolder || '');
       setAccBalance(acc.balance || 0);
+      setAccBalanceAsOf(acc.balanceAsOf || new Date().toISOString().slice(0, 10));
       setAccMemo(acc.memo || '');
     } else {
       setEditingAccountId(null);
@@ -87,6 +92,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setAccNumber('');
       setAccHolder('');
       setAccBalance(0);
+      setAccBalanceAsOf(new Date().toISOString().slice(0, 10));
       setAccMemo('');
     }
     setIsAccountModalOpen(true);
@@ -100,14 +106,20 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     }
 
     if (editingAccountId) {
+      const previous = bankAccounts.find(account => account.id === editingAccountId);
       onUpdateBankAccount(editingAccountId, {
         bankName: accBankName,
         accountName: accName,
         accountNumber: accNumber,
         accountHolder: accHolder,
         balance: accBalance,
+        balanceAsOf: accBalanceAsOf,
         memo: accMemo,
       });
+      if (previous && previous.balance !== accBalance) {
+        setBalanceUndo({ id: previous.id, balance: previous.balance, balanceAsOf: previous.balanceAsOf });
+        window.setTimeout(() => setBalanceUndo(current => current?.id === previous.id ? null : current), 5000);
+      }
     } else {
       onSaveBankAccount({
         bankName: accBankName,
@@ -115,6 +127,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         accountNumber: accNumber,
         accountHolder: accHolder,
         balance: accBalance,
+        balanceAsOf: accBalanceAsOf,
         memo: accMemo,
       });
     }
@@ -175,6 +188,16 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   // Total balance sum
   const totalAccountBalance = bankAccounts.reduce((sum, a) => sum + (a.balance || 0), 0);
 
+  const copyText = async (text: string, message: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyToast(message);
+      window.setTimeout(() => setCopyToast(''), 2200);
+    } catch {
+      window.prompt('아래 내용을 직접 복사해 주세요.', text);
+    }
+  };
+
   return (
     <div className="space-y-6 pb-20">
       {/* Header */}
@@ -222,7 +245,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           {/* Top Summary Box */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col xs:flex-row items-center justify-between gap-3">
             <div>
-              <span className="text-xs text-slate-400 font-medium">등록된 계좌 총 예치 잔액</span>
+              <span className="text-xs text-slate-400 font-medium">직접 입력 잔액 합계</span>
               <p className="text-2xl font-bold text-white mt-0.5">{formatKRW(totalAccountBalance)}</p>
             </div>
             <button
@@ -271,9 +294,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                             {acc.bankName}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-400 mt-0.5 tracking-wide font-mono">
-                          {acc.accountNumber} {acc.accountHolder ? `(${acc.accountHolder})` : ''}
-                        </p>
+                        <button
+                          onClick={() => copyText(acc.accountNumber, `${acc.bankName} ${acc.accountName} 계좌번호를 복사했습니다.`)}
+                          className="text-xs text-slate-300 hover:text-emerald-300 mt-0.5 tracking-wide font-mono flex items-center gap-1.5 text-left transition-colors"
+                          title="계좌번호 복사"
+                        >
+                          <span>{acc.accountNumber} {acc.accountHolder ? `(${acc.accountHolder})` : ''}</span>
+                          <Copy className="w-3.5 h-3.5 shrink-0" />
+                        </button>
                       </div>
                     </div>
 
@@ -306,14 +334,62 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     </div>
                   )}
 
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => copyText(acc.accountNumber, `${acc.bankName} ${acc.accountName} 계좌번호를 복사했습니다.`)}
+                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg py-2 text-[11px] font-bold flex items-center justify-center gap-1.5"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> 계좌번호만 복사
+                    </button>
+                    <button
+                      onClick={() => copyText(
+                        `${acc.bankName} ${acc.accountNumber}${acc.accountHolder ? ` ${acc.accountHolder}` : ''}`,
+                        `${acc.accountName} 송금정보를 복사했습니다.`,
+                      )}
+                      className="bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 rounded-lg py-2 text-[11px] font-bold flex items-center justify-center gap-1.5"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> 송금정보 복사
+                    </button>
+                  </div>
+
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                    <span className="text-slate-500">잔액</span>
-                    <span className="font-bold text-emerald-400 text-sm">{formatKRW(acc.balance || 0)}</span>
+                    <span className="text-slate-500">
+                      직접 입력 잔액
+                      <span className="block text-[10px] mt-0.5">기준 {acc.balanceAsOf || '미지정'}</span>
+                    </span>
+                    <button
+                      onClick={() => handleOpenAccountModal(acc)}
+                      className="font-bold text-emerald-400 text-sm hover:text-emerald-300"
+                      title="잔액 수정"
+                    >
+                      {formatKRW(acc.balance || 0)}
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {copyToast && (
+        <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[70] bg-emerald-500 text-slate-950 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2">
+          <Check className="w-4 h-4" /> {copyToast}
+        </div>
+      )}
+
+      {balanceUndo && (
+        <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[70] bg-slate-800 border border-slate-700 text-slate-100 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-3">
+          <span>수동 잔액을 변경했습니다.</span>
+          <button
+            onClick={() => {
+              onUpdateBankAccount(balanceUndo.id, { balance: balanceUndo.balance, balanceAsOf: balanceUndo.balanceAsOf });
+              setBalanceUndo(null);
+            }}
+            className="text-emerald-300 hover:text-emerald-200"
+          >
+            실행 취소
+          </button>
         </div>
       )}
 
@@ -505,15 +581,45 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block font-medium text-slate-300 mb-1">현재 잔액 (KRW)</label>
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={accBalance || ''}
-                  onChange={(e) => setAccBalance(Number(e.target.value))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">직접 입력 잔액 (KRW)</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    placeholder="0"
+                    value={accBalance || ''}
+                    onChange={(e) => setAccBalance(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-emerald-300 font-bold placeholder-slate-600 focus:outline-none focus:border-rose-500"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">{formatKRW(accBalance || 0)}</p>
+                  <div className="grid grid-cols-4 gap-1 mt-2">
+                    {[
+                      { label: '-5만', value: -50000 },
+                      { label: '-1만', value: -10000 },
+                      { label: '+1만', value: 10000 },
+                      { label: '+5만', value: 50000 },
+                    ].map(adjustment => (
+                      <button
+                        key={adjustment.label}
+                        type="button"
+                        onClick={() => setAccBalance(current => current + adjustment.value)}
+                        className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-[10px] font-bold text-slate-300"
+                      >
+                        {adjustment.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">잔액 기준일</label>
+                  <input
+                    type="date"
+                    value={accBalanceAsOf}
+                    onChange={(e) => setAccBalanceAsOf(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-rose-500"
+                  />
+                </div>
               </div>
 
               <div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Navbar } from './components/Navbar';
 import { BottomNav, NavTab } from './components/BottomNav';
 import { DashboardView } from './components/DashboardView';
@@ -43,7 +44,10 @@ import {
   deleteRecurringTemplate,
   exportTransactionsCSV,
   resetAllData,
-  initializeStorageIfEmpty,
+  initializeStorageAfterLogin,
+  shutdownStorage,
+  getClassificationIssueSummary,
+  repairClassificationIssues,
 } from './utils/storage';
 import {
   calculateMonthSummary,
@@ -52,25 +56,31 @@ import {
   getLocalDateString,
   formatKRW,
 } from './utils/calculations';
+import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
+import { BankAccount, Budget, Category, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
+import { auth } from './lib/firebase';
+import { logoutOwner } from './utils/auth';
+
+type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
 export default function App() {
   // Navigation State
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [managementSubTab, setManagementSubTab] = useState<string>('recurring');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const [isLocked, setIsLocked] = useState<boolean>(false);
+  const [bootState, setBootState] = useState<BootState>('checking');
 
   // App Reactive State
   const [currentYM, setCurrentYM] = useState<string>(getYearMonthString());
-  const [transactions, setTransactions] = useState(getTransactions());
-  const [categories, setCategories] = useState(getCategories());
-  const [budget, setBudget] = useState(getBudget(currentYM));
-  const [recurringTemplates, setRecurringTemplates] = useState(getRecurringTemplates());
-  const [recurringOccurrences, setRecurringOccurrences] = useState(getRecurringOccurrences(currentYM));
-  const [merchantRules, setMerchantRules] = useState(getMerchantRules());
-  const [userProfile, setUserProfile] = useState(getUserProfile());
-  const [bankAccounts, setBankAccounts] = useState(getBankAccounts());
-  const [paymentCards, setPaymentCards] = useState(getPaymentCards());
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [budget, setBudget] = useState<Budget>(() => getSampleBudget(getYearMonthString()));
+  const [recurringTemplates, setRecurringTemplates] = useState<RecurringTemplate[]>([]);
+  const [recurringOccurrences, setRecurringOccurrences] = useState<RecurringOccurrence[]>([]);
+  const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([]);
+  const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [paymentCards, setPaymentCards] = useState<PaymentCard[]>([]);
 
   // Reload state from storage
   const refreshAppData = () => {
@@ -86,39 +96,71 @@ export default function App() {
   };
 
   useEffect(() => {
-    initializeStorageIfEmpty();
-    refreshAppData();
-    const unsubscribe = subscribeToStorage(refreshAppData);
-    return () => unsubscribe();
-  }, [currentYM]);
-
-  useEffect(() => {
-    const checkLockStatus = async () => {
-      const unlocked = sessionStorage.getItem('app_unlocked') === 'true';
-      if (unlocked) {
-        setIsLocked(false);
+    const unsubscribeAuth = onAuthStateChanged(auth, user => {
+      if (!user) {
+        shutdownStorage();
+        setBootState('locked');
         return;
       }
 
-      try {
-        const res = await fetch('/api/auth/status');
-        const data = await res.json();
-        if (data.isProtectedByServerEnv || userProfile.securityPinEnabled) {
-          setIsLocked(true);
-        } else {
-          setIsLocked(false);
-        }
-      } catch (err) {
-        if (userProfile.securityPinEnabled) {
-          setIsLocked(true);
-        } else {
-          setIsLocked(false);
-        }
-      }
-    };
+      setBootState('loading');
+      initializeStorageAfterLogin()
+        .then(() => {
+          refreshAppData();
+          setBootState('ready');
+        })
+        .catch(async error => {
+          console.error('Authenticated data initialization failed:', error);
+          shutdownStorage();
+          await logoutOwner().catch(() => undefined);
+          setBootState('locked');
+        });
+    });
+    return unsubscribeAuth;
+  }, []);
 
-    checkLockStatus();
-  }, [userProfile.securityPinEnabled]);
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    refreshAppData();
+    return subscribeToStorage(refreshAppData);
+  }, [bootState, currentYM]);
+
+  const handleUnlockSuccess = async () => {
+    setBootState('loading');
+    await initializeStorageAfterLogin();
+    refreshAppData();
+    setBootState('ready');
+  };
+
+  const handleLock = async () => {
+    setIsAddModalOpen(false);
+    shutdownStorage();
+    await logoutOwner();
+    setTransactions([]);
+    setCategories([]);
+    setRecurringTemplates([]);
+    setRecurringOccurrences([]);
+    setMerchantRules([]);
+    setBankAccounts([]);
+    setPaymentCards([]);
+    setUserProfile(INITIAL_USER_PROFILE);
+    setBootState('locked');
+  };
+
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    let timer = window.setTimeout(() => void handleLock(), 30 * 60 * 1000);
+    const resetIdleTimer = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void handleLock(), 30 * 60 * 1000);
+    };
+    const events: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart'];
+    events.forEach(event => window.addEventListener(event, resetIdleTimer, { passive: true }));
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach(event => window.removeEventListener(event, resetIdleTimer));
+    };
+  }, [bootState]);
 
   // Calculations
   const summary = useMemo(() => {
@@ -126,12 +168,17 @@ export default function App() {
   }, [currentYM, transactions, recurringOccurrences, budget, recurringTemplates]);
 
   const categoryMap = useMemo(() => {
-    return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon }]));
+    return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
   }, [categories]);
 
   const categoryBreakdown = useMemo(() => {
     return getCategoryBreakdown(currentYM, transactions, categoryMap);
   }, [currentYM, transactions, categoryMap]);
+
+  const classificationIssues = useMemo(
+    () => getClassificationIssueSummary(),
+    [transactions, categories, recurringTemplates, recurringOccurrences],
+  );
 
   // Next Payday badge
   const nextPaydayText = useMemo(() => {
@@ -148,8 +195,9 @@ export default function App() {
     }
   };
 
-  const handlePostOccurrence = (occId: string) => {
-    postOccurrenceToTransaction(occId);
+  const handlePostOccurrence = async (occId: string) => {
+    await postOccurrenceToTransaction(occId);
+    refreshAppData();
   };
 
   const handleApplyPresetOnboarding = () => {
@@ -210,7 +258,7 @@ export default function App() {
   };
 
   const handleExportCSV = () => {
-    const csvContent = exportTransactionsCSV();
+    const csvContent = exportTransactionsCSV(currentYM);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -221,6 +269,22 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  if (bootState === 'checking' || bootState === 'loading') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 mx-auto rounded-full border-4 border-slate-800 border-t-emerald-400 animate-spin" />
+          <p className="font-bold">운영 데이터를 안전하게 불러오는 중입니다.</p>
+          <p className="text-xs text-slate-500">검증이 끝날 때까지 금융 정보는 표시되지 않습니다.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (bootState === 'locked') {
+    return <AppLockModal isOpen onUnlockSuccess={handleUnlockSuccess} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-rose-500 selection:text-white">
       {/* Top Navbar */}
@@ -228,6 +292,7 @@ export default function App() {
         userProfile={userProfile}
         nextPaydayText={nextPaydayText}
         onOpenSettings={() => handleNavigateTab('management', 'settings')}
+        onLock={handleLock}
       />
 
       {/* Main View Area */}
@@ -254,8 +319,9 @@ export default function App() {
             categories={categories}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
-            onPostOccurrence={(occId, amt, pType, accId, cId) => {
-              postOccurrenceToTransaction(occId, amt, pType, accId, cId);
+            classificationIssues={classificationIssues}
+            onPostOccurrence={async (occId, amt, pType, accId, cId) => {
+              await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
               refreshAppData();
             }}
             onUpdateOccurrenceStatus={(occId, status) => {
@@ -278,7 +344,9 @@ export default function App() {
               refreshAppData();
             }}
             onDeleteBankAccount={(id) => {
-              deleteBankAccount(id);
+              if (!deleteBankAccount(id)) {
+                alert('카드, 정기 항목 또는 거래에서 사용 중인 계좌입니다. 연결을 변경한 뒤 삭제해 주세요.');
+              }
               refreshAppData();
             }}
             onSavePaymentCard={(card) => {
@@ -290,7 +358,9 @@ export default function App() {
               refreshAppData();
             }}
             onDeletePaymentCard={(id) => {
-              deletePaymentCard(id);
+              if (!deletePaymentCard(id)) {
+                alert('정기 항목 또는 거래에서 사용 중인 카드입니다. 연결을 변경한 뒤 삭제해 주세요.');
+              }
               refreshAppData();
             }}
           />
@@ -311,6 +381,7 @@ export default function App() {
             transactions={transactions}
             categories={categories}
             budget={budget}
+            aiInsightsEnabled={userProfile.aiInsightsEnabled}
           />
         )}
 
@@ -337,6 +408,7 @@ export default function App() {
             onUpdateUserProfile={updateUserProfile}
             onExportCSV={handleExportCSV}
             onResetData={resetAllData}
+            onRepairClassificationIssues={repairClassificationIssues}
           />
         )}
       </main>
@@ -349,15 +421,9 @@ export default function App() {
         merchantRules={merchantRules}
         bankAccounts={bankAccounts}
         paymentCards={paymentCards}
+        aiClassificationEnabled={userProfile.aiClassificationEnabled}
         onSaveTransaction={saveTransaction}
         onSaveMerchantRule={saveMerchantRule}
-      />
-
-      {/* Security App & API Lock Overlay Modal */}
-      <AppLockModal
-        isOpen={isLocked}
-        userProfile={userProfile}
-        onUnlockSuccess={() => setIsLocked(false)}
       />
 
       {/* Fixed Bottom Navigation Bar */}

@@ -36,6 +36,7 @@ import {
   PaymentMethodType,
 } from '../types';
 import { formatKRW } from '../utils/calculations';
+import { authenticatedFetch } from '../utils/auth';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -64,6 +65,13 @@ interface ManagementViewProps {
   merchantRules: MerchantRule[];
   bankAccounts?: BankAccount[];
   paymentCards?: PaymentCard[];
+  classificationIssues?: {
+    transactionCount: number;
+    transactionAmount: number;
+    templateCount: number;
+    orphanOccurrenceCount: number;
+    totalCount: number;
+  };
   onSaveRecurringTemplate: (tmpl: Omit<RecurringTemplate, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onUpdateRecurringTemplate?: (id: string, updates: Partial<RecurringTemplate>) => void;
   onDeleteRecurringTemplate?: (id: string) => void;
@@ -75,7 +83,8 @@ interface ManagementViewProps {
   onMergeCategory: (removeId: string, replaceId: string) => void;
   onUpdateUserProfile: (updates: Partial<UserProfile>) => void;
   onExportCSV: () => void;
-  onResetData: () => void;
+  onResetData: () => void | Promise<void>;
+  onRepairClassificationIssues?: () => { repairedTransactions: number; repairedTemplates: number };
 }
 
 export const ManagementView: React.FC<ManagementViewProps> = ({
@@ -88,6 +97,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   merchantRules,
   bankAccounts = [],
   paymentCards = [],
+  classificationIssues = { transactionCount: 0, transactionAmount: 0, templateCount: 0, orphanOccurrenceCount: 0, totalCount: 0 },
   onSaveRecurringTemplate,
   onUpdateRecurringTemplate,
   onDeleteRecurringTemplate,
@@ -100,6 +110,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   onUpdateUserProfile,
   onExportCSV,
   onResetData,
+  onRepairClassificationIssues,
 }) => {
   const [subTab, setSubTab] = useState<'recurring' | 'budget' | 'category' | 'settings'>(
     (initialSubTab as any) || 'recurring'
@@ -115,7 +126,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   const [recType, setRecType] = useState<'income' | 'expense'>('expense');
   const [recName, setRecName] = useState('');
   const [recAmount, setRecAmount] = useState('');
-  const [recCategoryId, setRecCategoryId] = useState(categories[0]?.id || 'housing_utilities');
+  const [recCategoryId, setRecCategoryId] = useState(
+    categories.find(category => category.id === 'etc_expense')?.id
+      || categories.find(category => category.type === 'expense' && category.active)?.id
+      || '',
+  );
   const [recDay, setRecDay] = useState('25');
   const [recPostingMode, setRecPostingMode] = useState<'confirm' | 'auto'>('confirm');
   const [recBankName, setRecBankName] = useState('신한은행');
@@ -128,9 +143,6 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   // Toast notification for copy action
   const [copyToast, setCopyToast] = useState<string | null>(null);
-
-  // Security Access PIN state
-  const [tempPin, setTempPin] = useState(userProfile.accessPin || '1234');
 
   // Modal State for Budget Edit
   const [tempTotalBudget, setTempTotalBudget] = useState(budget.totalLimit.toString());
@@ -161,7 +173,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     setRecType('expense');
     setRecName('');
     setRecAmount('');
-    setRecCategoryId(categories[0]?.id || 'housing_utilities');
+    setRecCategoryId(
+      categories.find(category => category.id === 'etc_expense')?.id
+        || categories.find(category => category.type === 'expense' && category.active)?.id
+        || '',
+    );
     setRecDay('25');
     setRecPostingMode('confirm');
     setRecPaymentMethodType('account');
@@ -188,7 +204,17 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     setRecType(tmpl.type);
     setRecName(tmpl.name);
     setRecAmount(tmpl.defaultAmount.toString());
-    setRecCategoryId(tmpl.categoryId);
+    const templateCategory = categories.find(category => category.id === tmpl.categoryId);
+    setRecCategoryId(
+      templateCategory?.type === tmpl.type
+        ? tmpl.categoryId
+        : categories.find(category => category.id === (tmpl.type === 'expense' ? 'etc_expense' : 'etc_income'))?.id
+          || categories.find(category => category.type === tmpl.type && category.active)?.id
+          || '',
+    );
+    if (templateCategory && templateCategory.type !== tmpl.type) {
+      triggerToast('기존 분류가 유형과 달라 호환되는 기타 카테고리로 보정했습니다.');
+    }
     setRecDay(tmpl.dayOfMonth.toString());
     setRecPostingMode(tmpl.postingMode);
     setRecPaymentMethodType(tmpl.paymentMethodType || 'account');
@@ -205,8 +231,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     const amountNum = parseInt(recAmount, 10);
     const dayNum = parseInt(recDay, 10);
 
-    if (!recName || isNaN(amountNum) || isNaN(dayNum)) {
+    const selectedCategory = categories.find(category => category.id === recCategoryId);
+    if (!recName || isNaN(amountNum) || amountNum <= 0 || isNaN(dayNum) || dayNum < 1 || dayNum > 31) {
       alert('올바른 명칭, 금액, 날짜를 입력해주세요.');
+      return;
+    }
+    if (!selectedCategory || selectedCategory.type !== recType) {
+      alert(`${recType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
 
@@ -279,13 +310,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     if (!aiCatPrompt.trim()) return;
     setIsAiCatLoading(true);
     try {
-      const pin = sessionStorage.getItem('app_access_pin') || '';
-      const res = await fetch('/api/ai/category-recommend', {
+      const res = await authenticatedFetch('/api/ai/category-recommend', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-app-access-key': pin,
-          'x-app-pin': pin,
         },
         body: JSON.stringify({
           description: aiCatPrompt,
@@ -825,6 +853,44 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       {/* SUBTAB 3: 카테고리 (CATEGORIES) */}
       {subTab === 'category' && (
         <div className="space-y-4 text-xs">
+          <div className={`border rounded-2xl p-4 ${
+            classificationIssues.totalCount > 0
+              ? 'bg-amber-500/10 border-amber-500/30'
+              : 'bg-emerald-500/10 border-emerald-500/30'
+          }`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className={`font-bold flex items-center gap-1.5 ${classificationIssues.totalCount > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+                  {classificationIssues.totalCount > 0 ? <AlertCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                  분류 무결성 점검
+                </h3>
+                {classificationIssues.totalCount > 0 ? (
+                  <p className="text-slate-300 mt-1.5 leading-relaxed">
+                    유형과 카테고리가 다른 거래 {classificationIssues.transactionCount}건({formatKRW(classificationIssues.transactionAmount)}),
+                    정기 항목 {classificationIssues.templateCount}건, 고아 예정 건 {classificationIssues.orphanOccurrenceCount}건을 찾았습니다.
+                  </p>
+                ) : (
+                  <p className="text-slate-300 mt-1.5">수입·지출 유형과 카테고리가 모두 일치합니다.</p>
+                )}
+              </div>
+              {classificationIssues.transactionCount + classificationIssues.templateCount > 0 && onRepairClassificationIssues && (
+                <button
+                  onClick={() => {
+                    if (!confirm('금액과 수입·지출 유형은 유지하고, 맞지 않는 카테고리만 유형별 기타 카테고리로 변경할까요?')) return;
+                    const result = onRepairClassificationIssues();
+                    triggerToast(`거래 ${result.repairedTransactions}건, 정기 항목 ${result.repairedTemplates}건의 분류를 정리했습니다.`);
+                  }}
+                  className="shrink-0 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-3 py-2 rounded-lg"
+                >
+                  분류 정리
+                </button>
+              )}
+            </div>
+            {classificationIssues.orphanOccurrenceCount > 0 && (
+              <p className="text-[11px] text-amber-200/80 mt-2">고아 예정 건은 금액 계산에서 제외되며 원본 확인 후 별도로 정리해야 합니다.</p>
+            )}
+          </div>
+
           {/* AI Category Name Recommendation */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -960,7 +1026,14 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 <input
                   type="checkbox"
                   checked={userProfile.aiClassificationEnabled}
-                  onChange={e => onUpdateUserProfile({ aiClassificationEnabled: e.target.checked })}
+                  onChange={e => {
+                    const enabled = e.target.checked;
+                    if (enabled && !userProfile.aiConsentAt && !confirm('입력 문장과 카테고리 목록이 Gemini API로 전송됩니다. AI 자동분류를 사용할까요?')) return;
+                    onUpdateUserProfile({
+                      aiClassificationEnabled: enabled,
+                      aiConsentAt: enabled ? (userProfile.aiConsentAt || new Date().toISOString()) : userProfile.aiConsentAt,
+                    });
+                  }}
                   className="w-5 h-5 rounded border-slate-700 bg-slate-900 text-rose-500 focus:ring-rose-500"
                 />
               </label>
@@ -973,91 +1046,41 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 <input
                   type="checkbox"
                   checked={userProfile.aiInsightsEnabled}
-                  onChange={e => onUpdateUserProfile({ aiInsightsEnabled: e.target.checked })}
+                  onChange={e => {
+                    const enabled = e.target.checked;
+                    if (enabled && !userProfile.aiConsentAt && !confirm('월별 수입·지출 집계와 카테고리 요약이 Gemini API로 전송됩니다. AI 리포트를 사용할까요?')) return;
+                    onUpdateUserProfile({
+                      aiInsightsEnabled: enabled,
+                      aiConsentAt: enabled ? (userProfile.aiConsentAt || new Date().toISOString()) : userProfile.aiConsentAt,
+                    });
+                  }}
                   className="w-5 h-5 rounded border-slate-700 bg-slate-900 text-rose-500 focus:ring-rose-500"
                 />
               </label>
             </div>
           </div>
 
-          {/* Security & API Quota Defense Settings */}
+          {/* PIN Security Status */}
           <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 space-y-3.5 relative overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <Lock className="w-4 h-4 text-emerald-400" />
-                <span>🛡️ 본인 전용 Gemini API & 접속 방어 설정</span>
+                <span>PIN 로그인 보안</span>
               </h3>
-              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border ${
-                userProfile.securityPinEnabled
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-slate-800 text-slate-400 border-slate-700'
-              }`}>
-                {userProfile.securityPinEnabled ? '🟢 방어 활성화됨' : '⚪ 방어 미설정'}
+              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded border bg-emerald-500/20 text-emerald-300 border-emerald-500/40">
+                활성화됨
               </span>
             </div>
 
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              공유된 링크나 타인의 무단 접속으로 인해 사용자 본인의 Gemini API 쿼터가 오남용되는 것을 완벽히 방지합니다.
+              PIN 확인 후 고정 소유자 세션을 발급하며, 확인 전에는 Firestore 데이터와 Gemini API를 불러오지 않습니다.
             </p>
 
-            <div className="space-y-3">
-              <label className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer">
-                <div>
-                  <span className="font-bold text-slate-200 block">앱 및 Gemini API 접속 암호(PIN) 보호</span>
-                  <span className="text-[11px] text-slate-400">접속 시 PIN 암호를 요구하여 본인만 Gemini API를 사용할 수 있게 합니다.</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={userProfile.securityPinEnabled || false}
-                  onChange={e => {
-                    const enabled = e.target.checked;
-                    onUpdateUserProfile({
-                      securityPinEnabled: enabled,
-                      accessPin: userProfile.accessPin || '1234',
-                    });
-                    if (enabled) {
-                      triggerToast('보안 방어 모드가 활성화되었습니다.');
-                    }
-                  }}
-                  className="w-5 h-5 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500"
-                />
-              </label>
-
-              {userProfile.securityPinEnabled && (
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                  <label className="text-slate-300 font-bold block">접근 암호 (PIN) 변경</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={tempPin}
-                      onChange={e => setTempPin(e.target.value)}
-                      placeholder="비밀번호 입력 (예: 1234)"
-                      className="flex-1 bg-slate-900 border border-slate-800 rounded-lg p-2 font-bold text-emerald-400 tracking-wider text-sm"
-                    />
-                    <button
-                      onClick={() => {
-                        if (!tempPin.trim()) return;
-                        onUpdateUserProfile({ accessPin: tempPin.trim() });
-                        sessionStorage.setItem('app_access_pin', tempPin.trim());
-                        triggerToast(`접근 암호가 '${tempPin.trim()}'(으)로 변경되었습니다.`);
-                      }}
-                      className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black px-4 py-2 rounded-lg transition-colors text-xs"
-                    >
-                      PIN 저장
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
-                <span className="font-bold text-amber-300 block flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>서버 차원의 완전 차단 옵션 (Cloud Run 환경변수)</span>
-                </span>
-                <p className="text-slate-400 leading-normal">
-                  더 강력하게 서버 차원에서 미인증 API 요청을 완전 차단하려면 프로젝트의 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">.env</code> 파일에 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">APP_ACCESS_KEY=내비밀번호</code>를 지정하면 서버에서 자동으로 정식 키를 검증합니다.
-                </p>
-              </div>
+            <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
+              <span className="font-bold text-emerald-300 block">PIN 변경 방법</span>
+              <p className="leading-normal">
+                PIN은 앱 데이터에 저장되지 않습니다. 새 PIN hash를 생성한 뒤 배포 환경의 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">APP_PIN_HASH</code> secret을 교체하세요.
+              </p>
             </div>
           </div>
 
@@ -1095,9 +1118,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </button>
 
               <button
-                onClick={() => {
-                  if (confirm('모든 거래 기록과 예산 설정을 초기화하시겠습니까?')) {
-                    onResetData();
+                onClick={async () => {
+                  const confirmation = prompt('운영 데이터 전체 초기화는 되돌리기 어렵습니다. 계속하려면 "전체 초기화"를 입력하세요.');
+                  if (confirmation === '전체 초기화') {
+                    await onResetData();
+                    triggerToast('데이터 초기화가 완료되었습니다.');
                   }
                 }}
                 className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-4 py-2.5 rounded-xl transition-colors"
@@ -1132,9 +1157,14 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     setRecType(newType);
                     // auto select category matching new type if current category type doesn't match
                     const currentCat = categories.find(c => c.id === recCategoryId);
-                    if (currentCat && currentCat.type !== newType) {
-                      const matchedCat = categories.find(c => c.type === newType);
-                      if (matchedCat) setRecCategoryId(matchedCat.id);
+                    if (!currentCat || currentCat.type !== newType) {
+                      const defaultId = newType === 'expense' ? 'etc_expense' : 'etc_income';
+                      const matchedCat = categories.find(c => c.id === defaultId)
+                        || categories.find(c => c.type === newType && c.active);
+                      if (matchedCat) {
+                        setRecCategoryId(matchedCat.id);
+                        triggerToast(`${newType === 'expense' ? '지출' : '수입'} 유형에 맞춰 '${matchedCat.name}' 카테고리로 변경했습니다.`);
+                      }
                     }
                   }}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100 font-bold"
@@ -1189,20 +1219,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     onChange={e => setRecCategoryId(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100 font-medium"
                   >
-                    <optgroup label="💰 수입 카테고리">
-                      {categories.filter(c => c.type === 'income').map(c => (
-                        <option key={c.id} value={c.id}>
-                          [수입] {c.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="💸 지출 카테고리">
-                      {categories.filter(c => c.type === 'expense').map(c => (
-                        <option key={c.id} value={c.id}>
-                          [지출] {c.name}
-                        </option>
-                      ))}
-                    </optgroup>
+                    {categories.filter(c => c.type === recType && c.active).map(c => (
+                      <option key={c.id} value={c.id}>
+                        {recType === 'expense' ? '[지출]' : '[수입]'} {c.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

@@ -6,9 +6,10 @@ import {
   getDocs,
   onSnapshot,
   deleteDoc,
-  writeBatch
+  writeBatch,
+  runTransaction,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
 import {
   BankAccount,
   PaymentCard,
@@ -47,123 +48,145 @@ const STORAGE_KEYS = {
 type SyncNotifyCallback = () => void;
 
 let isSyncInitialized = false;
+let activeUnsubscribers: Array<() => void> = [];
 
-/**
- * Initialize Firestore Listeners to sync cloud DB data with local state in real-time
- */
+function requireOwnerUid() {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('PIN 로그인 후에만 Firestore에 접근할 수 있습니다.');
+  return uid;
+}
+
+function scopedCollection(collectionName: string) {
+  return collection(db, 'users', requireOwnerUid(), collectionName);
+}
+
+function scopedDoc(collectionName: string, documentId: string) {
+  return doc(db, 'users', requireOwnerUid(), collectionName, documentId);
+}
+
+function parseStoredObject<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function snapshotError(error: unknown) {
+  console.error('Firestore realtime sync error:', error);
+}
+
+async function readCollection<T>(collectionName: string): Promise<T[]> {
+  const snapshot = await getDocs(scopedCollection(collectionName));
+  return snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
+}
+
+/** Loads the cloud source of truth only after PIN/Firebase authentication succeeds. */
+export async function hydrateFirestoreFromCloud() {
+  const [
+    profileSnapshot,
+    categories,
+    transactions,
+    budgets,
+    templates,
+    occurrences,
+    merchantRules,
+    bankAccounts,
+    paymentCards,
+  ] = await Promise.all([
+    getDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS)),
+    readCollection<Category>(COLLECTION_CATEGORIES),
+    readCollection<Transaction>(COLLECTION_TRANSACTIONS),
+    readCollection<Budget>(COLLECTION_BUDGETS),
+    readCollection<RecurringTemplate>(COLLECTION_RECURRING_TEMPLATES),
+    readCollection<RecurringOccurrence>(COLLECTION_RECURRING_OCCURRENCES),
+    readCollection<MerchantRule>(COLLECTION_MERCHANT_RULES),
+    readCollection<BankAccount>(COLLECTION_BANK_ACCOUNTS),
+    readCollection<PaymentCard>(COLLECTION_PAYMENT_CARDS),
+  ]);
+
+  transactions.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+  const budgetMap = Object.fromEntries(budgets.filter(budget => budget.yearMonth).map(budget => [budget.yearMonth, budget]));
+
+  localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
+  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(merchantRules));
+  localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(bankAccounts));
+  localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(paymentCards));
+  if (profileSnapshot.exists()) {
+    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profileSnapshot.data()));
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
+  }
+
+  return {
+    hasCloudData: profileSnapshot.exists()
+      || categories.length + transactions.length + budgets.length + templates.length + occurrences.length
+        + merchantRules.length + bankAccounts.length + paymentCards.length > 0,
+  };
+}
+
+/** Initialize scoped realtime listeners after the initial cloud hydration. */
 export function initFirestoreSync(onNotify: SyncNotifyCallback) {
   if (isSyncInitialized) return;
+  requireOwnerUid();
   isSyncInitialized = true;
 
-  try {
-    // 1. App Settings / User Profile (including access PIN)
-    const settingsDocRef = doc(db, COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS);
-    onSnapshot(settingsDocRef, (snapshot) => {
+  const subscribeArray = <T,>(collectionName: string, storageKey: string, sort?: (values: T[]) => void) =>
+    onSnapshot(scopedCollection(collectionName), snapshot => {
+      const values = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
+      sort?.(values);
+      localStorage.setItem(storageKey, JSON.stringify(values));
+      onNotify();
+    }, snapshotError);
+
+  activeUnsubscribers = [
+    onSnapshot(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS), snapshot => {
       if (snapshot.exists()) {
         const cloudProfile = snapshot.data() as UserProfile;
-        const localRaw = localStorage.getItem(STORAGE_KEYS.USER_PROFILE);
-        const localProfile = localRaw ? JSON.parse(localRaw) : {};
-        const merged = { ...localProfile, ...cloudProfile };
-        localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(merged));
-        onNotify();
+        const localProfile = parseStoredObject<Partial<UserProfile>>(STORAGE_KEYS.USER_PROFILE, {});
+        localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify({ ...localProfile, ...cloudProfile }));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
       }
-    });
-
-    // 2. Categories
-    onSnapshot(collection(db, COLLECTION_CATEGORIES), (snapshot) => {
-      if (!snapshot.empty) {
-        const cloudCats: Category[] = [];
-        snapshot.forEach((docSnap) => {
-          cloudCats.push({ id: docSnap.id, ...docSnap.data() } as Category);
-        });
-        localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cloudCats));
-        onNotify();
-      }
-    });
-
-    // 3. Transactions
-    onSnapshot(collection(db, COLLECTION_TRANSACTIONS), (snapshot) => {
-      const cloudTxs: Transaction[] = [];
-      snapshot.forEach((docSnap) => {
-        cloudTxs.push({ id: docSnap.id, ...docSnap.data() } as Transaction);
-      });
-      // Sort newest first
-      cloudTxs.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(cloudTxs));
       onNotify();
-    });
-
-    // 4. Budgets
-    onSnapshot(collection(db, COLLECTION_BUDGETS), (snapshot) => {
+    }, snapshotError),
+    subscribeArray<Category>(COLLECTION_CATEGORIES, STORAGE_KEYS.CATEGORIES),
+    subscribeArray<Transaction>(COLLECTION_TRANSACTIONS, STORAGE_KEYS.TRANSACTIONS, values => {
+      values.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+    }),
+    onSnapshot(scopedCollection(COLLECTION_BUDGETS), snapshot => {
       const budgetMap: Record<string, Budget> = {};
-      snapshot.forEach((docSnap) => {
-        budgetMap[docSnap.id] = docSnap.data() as Budget;
+      snapshot.docs.forEach(document => {
+        const budget = { id: document.id, ...document.data() } as Budget & { id?: string };
+        budgetMap[budget.yearMonth || document.id] = budget;
       });
-      if (Object.keys(budgetMap).length > 0) {
-        localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
-        onNotify();
-      }
-    });
-
-    // 5. Recurring Templates
-    onSnapshot(collection(db, COLLECTION_RECURRING_TEMPLATES), (snapshot) => {
-      const tmpls: RecurringTemplate[] = [];
-      snapshot.forEach((docSnap) => {
-        tmpls.push({ id: docSnap.id, ...docSnap.data() } as RecurringTemplate);
-      });
-      localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
+      localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
       onNotify();
-    });
+    }, snapshotError),
+    subscribeArray<RecurringTemplate>(COLLECTION_RECURRING_TEMPLATES, STORAGE_KEYS.RECURRING_TEMPLATES),
+    subscribeArray<RecurringOccurrence>(COLLECTION_RECURRING_OCCURRENCES, STORAGE_KEYS.RECURRING_OCCURRENCES),
+    subscribeArray<MerchantRule>(COLLECTION_MERCHANT_RULES, STORAGE_KEYS.MERCHANT_RULES),
+    subscribeArray<BankAccount>(COLLECTION_BANK_ACCOUNTS, STORAGE_KEYS.BANK_ACCOUNTS),
+    subscribeArray<PaymentCard>(COLLECTION_PAYMENT_CARDS, STORAGE_KEYS.PAYMENT_CARDS),
+  ];
+}
 
-    // 6. Recurring Occurrences
-    onSnapshot(collection(db, COLLECTION_RECURRING_OCCURRENCES), (snapshot) => {
-      const occs: RecurringOccurrence[] = [];
-      snapshot.forEach((docSnap) => {
-        occs.push({ id: docSnap.id, ...docSnap.data() } as RecurringOccurrence);
-      });
-      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occs));
-      onNotify();
-    });
-
-    // 7. Merchant Rules
-    onSnapshot(collection(db, COLLECTION_MERCHANT_RULES), (snapshot) => {
-      const rules: MerchantRule[] = [];
-      snapshot.forEach((docSnap) => {
-        rules.push({ id: docSnap.id, ...docSnap.data() } as MerchantRule);
-      });
-      localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
-      onNotify();
-    });
-
-    // 8. Bank Accounts
-    onSnapshot(collection(db, COLLECTION_BANK_ACCOUNTS), (snapshot) => {
-      const accounts: BankAccount[] = [];
-      snapshot.forEach((docSnap) => {
-        accounts.push({ id: docSnap.id, ...docSnap.data() } as BankAccount);
-      });
-      localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
-      onNotify();
-    });
-
-    // 9. Payment Cards
-    onSnapshot(collection(db, COLLECTION_PAYMENT_CARDS), (snapshot) => {
-      const cards: PaymentCard[] = [];
-      snapshot.forEach((docSnap) => {
-        cards.push({ id: docSnap.id, ...docSnap.data() } as PaymentCard);
-      });
-      localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
-      onNotify();
-    });
-  } catch (err) {
-    console.error('Firestore sync error:', err);
-  }
+export function stopFirestoreSync() {
+  activeUnsubscribers.forEach(unsubscribe => unsubscribe());
+  activeUnsubscribers = [];
+  isSyncInitialized = false;
 }
 
 /* Helper functions to save / update / delete items in Firestore */
 
 export async function syncUserProfileToFirestore(profile: UserProfile) {
   try {
-    const settingsDocRef = doc(db, COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS);
+    const settingsDocRef = scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS);
     await setDoc(settingsDocRef, profile, { merge: true });
   } catch (err) {
     console.error('Failed to sync user profile to Firestore:', err);
@@ -172,7 +195,7 @@ export async function syncUserProfileToFirestore(profile: UserProfile) {
 
 export async function fetchUserProfileFromFirestore(): Promise<UserProfile | null> {
   try {
-    const settingsDocRef = doc(db, COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS);
+    const settingsDocRef = scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS);
     const snap = await getDoc(settingsDocRef);
     if (snap.exists()) {
       return snap.data() as UserProfile;
@@ -185,7 +208,7 @@ export async function fetchUserProfileFromFirestore(): Promise<UserProfile | nul
 
 export async function syncTransactionToFirestore(tx: Transaction) {
   try {
-    await setDoc(doc(db, COLLECTION_TRANSACTIONS, tx.id), tx);
+    await setDoc(scopedDoc(COLLECTION_TRANSACTIONS, tx.id), tx);
   } catch (err) {
     console.error('Failed to sync transaction to Firestore:', err);
   }
@@ -193,7 +216,7 @@ export async function syncTransactionToFirestore(tx: Transaction) {
 
 export async function deleteTransactionFromFirestore(id: string) {
   try {
-    await deleteDoc(doc(db, COLLECTION_TRANSACTIONS, id));
+    await deleteDoc(scopedDoc(COLLECTION_TRANSACTIONS, id));
   } catch (err) {
     console.error('Failed to delete transaction from Firestore:', err);
   }
@@ -201,19 +224,29 @@ export async function deleteTransactionFromFirestore(id: string) {
 
 export async function syncCategoriesToFirestore(categories: Category[]) {
   try {
-    const batch = writeBatch(db);
-    categories.forEach((cat) => {
-      batch.set(doc(db, COLLECTION_CATEGORIES, cat.id), cat);
-    });
-    await batch.commit();
+    for (let offset = 0; offset < categories.length; offset += 400) {
+      const batch = writeBatch(db);
+      categories.slice(offset, offset + 400).forEach(cat => {
+        batch.set(scopedDoc(COLLECTION_CATEGORIES, cat.id), cat);
+      });
+      await batch.commit();
+    }
   } catch (err) {
     console.error('Failed to sync categories to Firestore:', err);
   }
 }
 
+export async function deleteCategoryFromFirestore(id: string) {
+  try {
+    await deleteDoc(scopedDoc(COLLECTION_CATEGORIES, id));
+  } catch (err) {
+    console.error('Failed to delete category from Firestore:', err);
+  }
+}
+
 export async function syncBudgetToFirestore(budget: Budget) {
   try {
-    await setDoc(doc(db, COLLECTION_BUDGETS, budget.yearMonth), budget);
+    await setDoc(scopedDoc(COLLECTION_BUDGETS, budget.yearMonth), budget);
   } catch (err) {
     console.error('Failed to sync budget to Firestore:', err);
   }
@@ -221,7 +254,7 @@ export async function syncBudgetToFirestore(budget: Budget) {
 
 export async function syncRecurringTemplateToFirestore(tmpl: RecurringTemplate) {
   try {
-    await setDoc(doc(db, COLLECTION_RECURRING_TEMPLATES, tmpl.id), tmpl);
+    await setDoc(scopedDoc(COLLECTION_RECURRING_TEMPLATES, tmpl.id), tmpl);
   } catch (err) {
     console.error('Failed to sync recurring template to Firestore:', err);
   }
@@ -229,7 +262,7 @@ export async function syncRecurringTemplateToFirestore(tmpl: RecurringTemplate) 
 
 export async function deleteRecurringTemplateFromFirestore(id: string) {
   try {
-    await deleteDoc(doc(db, COLLECTION_RECURRING_TEMPLATES, id));
+    await deleteDoc(scopedDoc(COLLECTION_RECURRING_TEMPLATES, id));
   } catch (err) {
     console.error('Failed to delete recurring template from Firestore:', err);
   }
@@ -237,19 +270,35 @@ export async function deleteRecurringTemplateFromFirestore(id: string) {
 
 export async function syncRecurringOccurrencesToFirestore(occs: RecurringOccurrence[]) {
   try {
-    const batch = writeBatch(db);
-    occs.forEach((occ) => {
-      batch.set(doc(db, COLLECTION_RECURRING_OCCURRENCES, occ.id), occ);
-    });
-    await batch.commit();
+    for (let offset = 0; offset < occs.length; offset += 400) {
+      const batch = writeBatch(db);
+      occs.slice(offset, offset + 400).forEach(occ => {
+        batch.set(scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occ.id), occ);
+      });
+      await batch.commit();
+    }
   } catch (err) {
     console.error('Failed to sync recurring occurrences to Firestore:', err);
   }
 }
 
+export async function commitRecurringPosting(tx: Transaction, occurrence: RecurringOccurrence) {
+  const transactionRef = scopedDoc(COLLECTION_TRANSACTIONS, tx.id);
+  const occurrenceRef = scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occurrence.id);
+
+  await runTransaction(db, async firestoreTransaction => {
+    const currentOccurrence = await firestoreTransaction.get(occurrenceRef);
+    if (currentOccurrence.exists() && currentOccurrence.data().status === 'posted') {
+      throw new Error('이미 처리된 정기 항목입니다.');
+    }
+    firestoreTransaction.set(transactionRef, tx);
+    firestoreTransaction.set(occurrenceRef, occurrence);
+  });
+}
+
 export async function syncMerchantRuleToFirestore(rule: MerchantRule) {
   try {
-    await setDoc(doc(db, COLLECTION_MERCHANT_RULES, rule.id), rule);
+    await setDoc(scopedDoc(COLLECTION_MERCHANT_RULES, rule.id), rule);
   } catch (err) {
     console.error('Failed to sync merchant rule to Firestore:', err);
   }
@@ -257,7 +306,7 @@ export async function syncMerchantRuleToFirestore(rule: MerchantRule) {
 
 export async function syncBankAccountToFirestore(account: BankAccount) {
   try {
-    await setDoc(doc(db, COLLECTION_BANK_ACCOUNTS, account.id), account);
+    await setDoc(scopedDoc(COLLECTION_BANK_ACCOUNTS, account.id), account);
   } catch (err) {
     console.error('Failed to sync bank account to Firestore:', err);
   }
@@ -265,7 +314,7 @@ export async function syncBankAccountToFirestore(account: BankAccount) {
 
 export async function deleteBankAccountFromFirestore(id: string) {
   try {
-    await deleteDoc(doc(db, COLLECTION_BANK_ACCOUNTS, id));
+    await deleteDoc(scopedDoc(COLLECTION_BANK_ACCOUNTS, id));
   } catch (err) {
     console.error('Failed to delete bank account from Firestore:', err);
   }
@@ -273,7 +322,7 @@ export async function deleteBankAccountFromFirestore(id: string) {
 
 export async function syncPaymentCardToFirestore(card: PaymentCard) {
   try {
-    await setDoc(doc(db, COLLECTION_PAYMENT_CARDS, card.id), card);
+    await setDoc(scopedDoc(COLLECTION_PAYMENT_CARDS, card.id), card);
   } catch (err) {
     console.error('Failed to sync payment card to Firestore:', err);
   }
@@ -281,7 +330,7 @@ export async function syncPaymentCardToFirestore(card: PaymentCard) {
 
 export async function deletePaymentCardFromFirestore(id: string) {
   try {
-    await deleteDoc(doc(db, COLLECTION_PAYMENT_CARDS, id));
+    await deleteDoc(scopedDoc(COLLECTION_PAYMENT_CARDS, id));
   } catch (err) {
     console.error('Failed to delete payment card from Firestore:', err);
   }
@@ -291,6 +340,7 @@ export async function clearFirestoreAllData() {
   try {
     const collectionsToClear = [
       COLLECTION_TRANSACTIONS,
+      COLLECTION_CATEGORIES,
       COLLECTION_BUDGETS,
       COLLECTION_RECURRING_TEMPLATES,
       COLLECTION_RECURRING_OCCURRENCES,
@@ -300,13 +350,14 @@ export async function clearFirestoreAllData() {
     ];
 
     for (const colName of collectionsToClear) {
-      const snap = await getDocs(collection(db, colName));
-      const batch = writeBatch(db);
-      snap.forEach((docSnap) => {
-        batch.delete(docSnap.ref);
-      });
-      await batch.commit();
+      const snap = await getDocs(scopedCollection(colName));
+      for (let offset = 0; offset < snap.docs.length; offset += 400) {
+        const batch = writeBatch(db);
+        snap.docs.slice(offset, offset + 400).forEach(docSnap => batch.delete(docSnap.ref));
+        await batch.commit();
+      }
     }
+    await deleteDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS));
   } catch (err) {
     console.error('Failed to clear Firestore collections:', err);
   }

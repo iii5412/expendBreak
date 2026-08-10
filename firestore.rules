@@ -1,8 +1,110 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null
+        && request.auth.uid == userId
+        && request.auth.token.role == 'owner';
+    }
+
+    function validTransactionType() {
+      return request.resource.data.type in ['income', 'expense'];
+    }
+
+    function categoryMatches(userId) {
+      return request.resource.data.categoryId is string
+        && exists(/databases/$(database)/documents/users/$(userId)/categories/$(request.resource.data.categoryId))
+        && get(/databases/$(database)/documents/users/$(userId)/categories/$(request.resource.data.categoryId)).data.type
+          == request.resource.data.type;
+    }
+
+    function validReceipt(userId) {
+      return !('receipt' in request.resource.data)
+        || request.resource.data.receipt == null
+        || (
+          request.resource.data.receipt.id is string
+          && request.resource.data.receipt.ocrConfidence is number
+          && request.resource.data.receipt.ocrConfidence >= 0
+          && request.resource.data.receipt.ocrConfidence <= 1
+          && request.resource.data.receipt.lineItems is list
+          && request.resource.data.receipt.lineItems.size() <= 50
+          && (!('rawText' in request.resource.data.receipt)
+            || request.resource.data.receipt.rawText == null
+            || request.resource.data.receipt.rawText.size() <= 5000)
+          && (!('storagePath' in request.resource.data.receipt)
+            || request.resource.data.receipt.storagePath == null
+            || request.resource.data.receipt.storagePath.matches('users/' + userId + '/receipts/[^/]+/original\\.jpg'))
+        );
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /categories/{categoryId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.type in ['income', 'expense']
+          && request.resource.data.name is string;
+        allow delete: if isOwner(userId);
+      }
+
+      match /transactions/{transactionId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && validTransactionType()
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.source in ['manual', 'ai', 'receipt']
+          && (!('tags' in request.resource.data) || request.resource.data.tags is list && request.resource.data.tags.size() <= 10)
+          && categoryMatches(userId)
+          && validReceipt(userId);
+      }
+
+      match /recurringTemplates/{templateId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && validTransactionType()
+          && request.resource.data.defaultAmount is number
+          && request.resource.data.defaultAmount > 0
+          && categoryMatches(userId);
+      }
+
+      match /appSettings/{documentId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && !('accessPin' in request.resource.data);
+      }
+
+      match /budgets/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /recurringOccurrences/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /merchantRules/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /bankAccounts/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /paymentCards/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /migrations/{documentId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+    }
+
+    // Legacy global collections are copied by the trusted Admin migration endpoint.
+    // Client access remains closed; source documents are retained for rollback.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
