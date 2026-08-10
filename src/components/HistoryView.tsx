@@ -13,6 +13,7 @@ import {
   Check,
   ReceiptText,
   Tags,
+  Mic,
 } from 'lucide-react';
 import { Transaction, Category } from '../types';
 import { formatKRW } from '../utils/calculations';
@@ -222,6 +223,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                         <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
                           <Sparkles className="w-2.5 h-2.5" />
                           <span>AI</span>
+                        </span>
+                      )}
+                      {t.source === 'voice' && (
+                        <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <Mic className="w-2.5 h-2.5" />
+                          <span>음성</span>
                         </span>
                       )}
                       {t.receipt && (

@@ -128,7 +128,15 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
     const receiptId = `receipt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     let storagePath: string | null = null;
     try {
-      if (saveOriginal) storagePath = await uploadReceiptImage(receiptId, prepared.blob);
+      if (saveOriginal) {
+        try {
+          storagePath = await uploadReceiptImage(receiptId, prepared.blob);
+        } catch (storageErr) {
+          console.warn('Receipt image upload failed or timed out, continuing transaction save without image:', storageErr);
+          storagePath = null;
+        }
+      }
+
       onSaveTransaction({
         type: 'expense',
         amount: Math.round(amount),
@@ -147,8 +155,8 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
         receipt: {
           id: receiptId,
           storagePath,
-          mimeType: saveOriginal ? prepared.mimeType : null,
-          imageSize: saveOriginal ? prepared.blob.size : null,
+          mimeType: saveOriginal && storagePath ? prepared.mimeType : null,
+          imageSize: saveOriginal && storagePath ? prepared.blob.size : null,
           receiptNumber: result.receiptNumber || null,
           businessNumber: result.businessNumber || null,
           purchasedTime: result.purchasedTime || null,
@@ -162,7 +170,15 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
           scannedAt: new Date().toISOString(),
         },
       });
-      if (rememberRule && merchant.trim()) onSaveMerchantRule(merchant.trim(), categoryId);
+
+      if (rememberRule && merchant.trim()) {
+        try {
+          onSaveMerchantRule(merchant.trim(), categoryId);
+        } catch (ruleErr) {
+          console.warn('Failed to save merchant rule:', ruleErr);
+        }
+      }
+
       onDone();
     } catch (nextError) {
       if (storagePath) await deleteReceiptImage(storagePath).catch(() => undefined);

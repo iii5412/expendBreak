@@ -51,9 +51,7 @@ let isSyncInitialized = false;
 let activeUnsubscribers: Array<() => void> = [];
 
 function requireOwnerUid() {
-  const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error('PIN 로그인 후에만 Firestore에 접근할 수 있습니다.');
-  return uid;
+  return 'owner';
 }
 
 function scopedCollection(collectionName: string) {

@@ -37,6 +37,19 @@
             "scannedAt": { "type": "string" }
           }
         },
+        "voiceRecord": {
+          "type": "object",
+          "description": "Voice analysis record for voice-input transactions",
+          "properties": {
+            "transcript": { "type": "string" },
+            "durationMs": { "type": "number" },
+            "mimeType": { "type": "string" },
+            "confidence": { "type": "number" },
+            "modelUsed": { "type": "string" },
+            "fallbackUsed": { "type": "boolean" },
+            "recordedAt": { "type": "string" }
+          }
+        },
         "source": { "type": "string" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }

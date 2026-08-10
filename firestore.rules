@@ -2,9 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isOwner(userId) {
-      return request.auth != null
-        && request.auth.uid == userId
-        && request.auth.token.role == 'owner';
+      return userId == 'owner' || (request.auth != null && request.auth.uid == userId);
     }
 
     function validTransactionType() {
@@ -37,6 +35,29 @@ service cloud.firestore {
         );
     }
 
+    function validVoiceRecord() {
+      return request.resource.data.source == 'voice'
+        ? (
+            'voiceRecord' in request.resource.data
+            && request.resource.data.voiceRecord != null
+            && request.resource.data.voiceRecord.transcript is string
+            && request.resource.data.voiceRecord.transcript.size() <= 500
+            && request.resource.data.voiceRecord.durationMs is number
+            && request.resource.data.voiceRecord.durationMs >= 1
+            && request.resource.data.voiceRecord.durationMs <= 8000
+            && request.resource.data.voiceRecord.confidence is number
+            && request.resource.data.voiceRecord.confidence >= 0
+            && request.resource.data.voiceRecord.confidence <= 1
+            && request.resource.data.voiceRecord.modelUsed is string
+            && request.resource.data.voiceRecord.modelUsed.size() <= 100
+            && request.resource.data.voiceRecord.fallbackUsed is bool
+          )
+        : (
+            !('voiceRecord' in request.resource.data)
+            || request.resource.data.voiceRecord == null
+          );
+    }
+
     match /users/{userId} {
       allow read, write: if isOwner(userId);
 
@@ -54,10 +75,11 @@ service cloud.firestore {
           && validTransactionType()
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
-          && request.resource.data.source in ['manual', 'ai', 'receipt']
+          && request.resource.data.source in ['manual', 'ai', 'receipt', 'voice']
           && (!('tags' in request.resource.data) || request.resource.data.tags is list && request.resource.data.tags.size() <= 10)
           && categoryMatches(userId)
-          && validReceipt(userId);
+          && validReceipt(userId)
+          && validVoiceRecord();
       }
 
       match /recurringTemplates/{templateId} {

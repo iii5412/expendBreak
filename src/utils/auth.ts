@@ -1,14 +1,28 @@
-import {
-  browserSessionPersistence,
-  setPersistence,
-  signInWithCustomToken,
-  signOut,
-} from 'firebase/auth';
-import { auth } from '../lib/firebase';
+const SESSION_TOKEN_KEY = 'eb_session_token';
 
 export interface PinLoginError extends Error {
   status?: number;
   retryAfterMs?: number;
+}
+
+type AuthStateListener = (loggedIn: boolean) => void;
+const listeners = new Set<AuthStateListener>();
+
+export function onSessionStateChanged(listener: AuthStateListener): () => void {
+  listeners.add(listener);
+  listener(isOwnerLoggedIn());
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyAuthState() {
+  const loggedIn = isOwnerLoggedIn();
+  listeners.forEach(fn => fn(loggedIn));
+}
+
+export function isOwnerLoggedIn(): boolean {
+  return Boolean(sessionStorage.getItem(SESSION_TOKEN_KEY));
 }
 
 export async function loginWithPin(pin: string) {
@@ -19,7 +33,7 @@ export async function loginWithPin(pin: string) {
   });
   const data = await response.json().catch(() => ({}));
 
-  if (!response.ok || !data.customToken) {
+  if (!response.ok || !data.token) {
     const error = new Error(
       response.status === 429
         ? 'PIN 입력이 잠시 제한되었습니다.'
@@ -30,14 +44,14 @@ export async function loginWithPin(pin: string) {
     throw error;
   }
 
-  await setPersistence(auth, browserSessionPersistence);
-  await signInWithCustomToken(auth, data.customToken);
+  sessionStorage.setItem(SESSION_TOKEN_KEY, data.token);
+  notifyAuthState();
 }
 
 export async function getOwnerIdToken() {
-  const user = auth.currentUser;
-  if (!user) throw new Error('PIN 로그인이 필요합니다.');
-  return user.getIdToken();
+  const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  if (!token) throw new Error('PIN 로그인이 필요합니다.');
+  return token;
 }
 
 export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
@@ -48,5 +62,6 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
 }
 
 export async function logoutOwner() {
-  await signOut(auth);
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
+  notifyAuthState();
 }

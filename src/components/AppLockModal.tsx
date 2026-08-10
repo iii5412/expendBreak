@@ -59,7 +59,8 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
             <span>🛡️ Gemini API & 접근 보안 모드</span>
           </h2>
           <p className="text-xs text-slate-400 leading-relaxed px-2">
-            PIN 확인이 완료된 뒤에만 가계부 정보를 안전하게 불러옵니다.
+            PIN 확인이 완료된 뒤에만 가계부 정보를 안전하게 불러옵니다. <br />
+            <span className="text-emerald-400/90 font-medium">(기본 설정 PIN: 0000)</span>
           </p>
         </div>
 
@@ -72,7 +73,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
                 setEnteredPin(e.target.value);
                 setErrorMsg(null);
               }}
-              placeholder="접근 암호(PIN) 입력"
+              placeholder="접근 암호(PIN) 입력 (기본: 0000)"
               inputMode="numeric"
               pattern="[0-9]*"
               autoComplete="current-password"

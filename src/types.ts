@@ -68,6 +68,16 @@ export interface Category {
   active: boolean;
 }
 
+export interface VoiceRecord {
+  transcript: string;
+  durationMs: number;
+  mimeType: string;
+  confidence: number;
+  modelUsed: string;
+  fallbackUsed: boolean;
+  recordedAt: string;
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
@@ -77,7 +87,7 @@ export interface Transaction {
   categoryId: string;
   merchant: string;
   memo: string;
-  source: 'manual' | 'ai' | 'receipt';
+  source: 'manual' | 'ai' | 'receipt' | 'voice';
   aiConfidence?: number | null;
   aiReviewed?: boolean;
   recurringTemplateId?: string | null;
@@ -87,6 +97,7 @@ export interface Transaction {
   cardId?: string | null;
   tags?: string[];
   receipt?: ReceiptRecord | null;
+  voiceRecord?: VoiceRecord | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -200,6 +211,27 @@ export interface AIReceiptResult {
   lineItems: ReceiptLineItem[];
   rawText: string;
   needsConfirmation: boolean;
+}
+
+export interface VoiceAnalysisResult {
+  transcript: string;
+  type: TransactionType;
+  amount: number;
+  date: string;
+  merchant: string;
+  memo: string;
+  suggestedCategoryId: string;
+  paymentMethodType?: PaymentMethodType;
+  paymentMethodHint?: string;
+  suggestedAccountId?: string | null;
+  suggestedCardId?: string | null;
+  tags?: string[];
+  confidence: number;
+  reason: string;
+  multipleTransactionsDetected: boolean;
+  needsConfirmation: boolean;
+  modelUsed: string;
+  fallbackUsed: boolean;
 }
 
 export interface AIFeedbackResult {

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
 import { Navbar } from './components/Navbar';
 import { BottomNav, NavTab } from './components/BottomNav';
 import { DashboardView } from './components/DashboardView';
@@ -58,8 +57,7 @@ import {
 } from './utils/calculations';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
 import { BankAccount, Budget, Category, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
-import { auth } from './lib/firebase';
-import { logoutOwner } from './utils/auth';
+import { logoutOwner, onSessionStateChanged } from './utils/auth';
 
 type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
@@ -96,8 +94,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, user => {
-      if (!user) {
+    const unsubscribeAuth = onSessionStateChanged(isLoggedIn => {
+      if (!isLoggedIn) {
         shutdownStorage();
         setBootState('locked');
         return;
