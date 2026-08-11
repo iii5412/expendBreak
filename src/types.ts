@@ -174,6 +174,10 @@ export interface UserProfile {
   aiClassificationEnabled: boolean;
   aiInsightsEnabled: boolean;
   aiConsentAt: string | null;
+  /** Set once the setup sheet is finished or skipped, so it stops prompting. */
+  onboardingCompletedAt?: string | null;
+  /** Idle minutes before the app locks. 0 disables the idle lock. */
+  idleLockMinutes?: number;
   securityPinEnabled?: boolean;
   accessPin?: string; // Legacy only. New PIN authentication never stores this field.
   createdAt: string;

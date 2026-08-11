@@ -21,6 +21,15 @@ import {
   MerchantRule,
   UserProfile
 } from '../types';
+import {
+  PendingWriteSummary,
+  registerOutboxFlusher,
+  reportPendingCount,
+  reportWriteFailed,
+  reportWriteStarted,
+  reportWriteSucceeded,
+  resetSyncStatus,
+} from './syncStatus';
 
 const COLLECTION_APP_SETTINGS = 'appSettings';
 const DOC_GLOBAL_SETTINGS = 'global';
@@ -59,9 +68,39 @@ function readFirestoreOutbox(): PendingFirestoreWrite[] {
 function writeFirestoreOutbox(entries: PendingFirestoreWrite[]) {
   if (entries.length === 0) {
     localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
-    return;
+  } else {
+    localStorage.setItem(FIRESTORE_OUTBOX_KEY, JSON.stringify(entries));
   }
-  localStorage.setItem(FIRESTORE_OUTBOX_KEY, JSON.stringify(entries));
+  reportPendingCount(entries.length);
+}
+
+/** Human-readable label for the pending-changes screen. */
+const COLLECTION_LABELS: Record<string, string> = {
+  transactions: '거래',
+  categories: '카테고리',
+  budgets: '용돈 한도',
+  recurringTemplates: '정기 항목',
+  recurringOccurrences: '정기 발생 건',
+  merchantRules: '분류 규칙',
+  bankAccounts: '계좌',
+  paymentCards: '카드',
+  appSettings: '앱 설정',
+};
+
+export function describePendingCollection(collectionName: string): string {
+  return COLLECTION_LABELS[collectionName] || collectionName;
+}
+
+export function getPendingFirestoreWrites(): PendingWriteSummary[] {
+  return readFirestoreOutbox()
+    .map(({ id, operation, collectionName, documentId, queuedAt }) => ({
+      id,
+      operation,
+      collectionName,
+      documentId,
+      queuedAt,
+    }))
+    .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
 }
 
 function enqueueFirestoreWrite(entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>): PendingFirestoreWrite {
@@ -96,18 +135,24 @@ function persistFirestoreWrite(
   errorLabel: string,
 ): Promise<boolean> {
   const queued = enqueueFirestoreWrite(entry);
+  reportWriteStarted();
   const operation = persistenceChain.then(async () => {
     await executeFirestoreWrite(queued);
     removeFirestoreWrite(queued.id);
   });
   persistenceChain = operation.catch(() => undefined);
-  return operation.then(() => true).catch(error => {
+  return operation.then(() => {
+    reportWriteSucceeded();
+    return true;
+  }).catch(error => {
     console.error(`${errorLabel}:`, error);
+    reportWriteFailed(errorLabel);
     return false;
   });
 }
 
 export function flushFirestoreOutbox(): Promise<boolean> {
+  reportWriteStarted();
   const operation = persistenceChain.then(async () => {
     const pending = readFirestoreOutbox().sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
     for (const entry of pending) {
@@ -116,14 +161,26 @@ export function flushFirestoreOutbox(): Promise<boolean> {
     }
   });
   persistenceChain = operation.catch(() => undefined);
-  return operation.then(() => true).catch(error => {
+  return operation.then(() => {
+    reportWriteSucceeded();
+    return true;
+  }).catch(error => {
     console.error('Failed to flush Firestore persistence outbox:', error);
+    reportWriteFailed('미반영 변경사항을 DB에 저장하지 못했습니다.');
     return false;
   });
 }
 
+registerOutboxFlusher(flushFirestoreOutbox);
+
+/** Publishes the outbox length that already exists in this browser at boot. */
+export function syncPendingCountFromStorage() {
+  reportPendingCount(readFirestoreOutbox().length);
+}
+
 export function clearFirestoreOutbox() {
   localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
+  resetSyncStatus();
 }
 
 const STORAGE_KEYS = {

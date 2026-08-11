@@ -1,4 +1,5 @@
 import { PaymentCard, Transaction } from '../types';
+import { getAccountingPeriod, isDateInPeriod } from './calculations';
 
 export interface CreditCardPaymentEstimate {
   cardId: string;
@@ -71,7 +72,9 @@ export function calculateCardPaymentSummary(
   yearMonth: string,
   transactions: Transaction[],
   paymentCards: PaymentCard[],
+  monthStartDay: number = 1,
 ): CardPaymentSummary {
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
   const cardMap = new Map(paymentCards.map(card => [card.id, card]));
   const creditCards = new Map<string, CreditCardPaymentEstimate>();
 
@@ -98,7 +101,7 @@ export function calculateCardPaymentSummary(
   transactions
     .filter(transaction => transaction.type === 'expense'
       && transaction.paymentMethodType === 'card'
-      && transaction.localDate.startsWith(yearMonth))
+      && isDateInPeriod(transaction.localDate, period))
     .forEach(transaction => {
       const amount = Math.round(transaction.amount);
       totalCardUsage += amount;
@@ -142,11 +145,13 @@ export function calculateMonthlyCardSettlementSummary(
   paymentYearMonth: string,
   transactions: Transaction[],
   paymentCards: PaymentCard[],
+  monthStartDay: number = 1,
 ): MonthlyCardSettlementSummary {
   const previousMonthUsage = calculateCardPaymentSummary(
     getPreviousYearMonth(paymentYearMonth),
     transactions,
     paymentCards,
+    monthStartDay,
   );
   const estimateMap = new Map(previousMonthUsage.creditCards.map(card => [card.cardId, card]));
 

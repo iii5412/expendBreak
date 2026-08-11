@@ -9,8 +9,6 @@ import {
   Wallet,
   ArrowRightLeft,
   DollarSign,
-  ChevronLeft,
-  ChevronRight,
   Filter,
   Check,
   X,
@@ -25,11 +23,13 @@ import {
   RecurringOccurrence,
   RecurringTemplate
 } from '../types';
-import { formatKRW, getYearMonthString } from '../utils/calculations';
+import { AccountingPeriod, formatKRW, formatPeriodRange } from '../utils/calculations';
+import { Modal } from './ui/Modal';
+import { AmountInput } from './ui/AmountInput';
 
 interface RecurringPaymentViewProps {
-  currentYM: string;
-  onChangeYM: (ym: string) => void;
+  /** Period comes from the app-wide selector; this view no longer owns month state. */
+  period: AccountingPeriod;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
   categories: Category[];
@@ -46,8 +46,7 @@ interface RecurringPaymentViewProps {
 }
 
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
-  currentYM,
-  onChangeYM,
+  period,
   recurringOccurrences,
   recurringTemplates,
   categories,
@@ -64,24 +63,14 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   const [paymentMethodType, setPaymentMethodType] = useState<PaymentMethodType>('account');
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [selectedCardId, setSelectedCardId] = useState<string>('');
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  const periodRange = formatPeriodRange(period);
   const templateMap = new Map<string, RecurringTemplate>(recurringTemplates.map((t) => [t.id, t]));
   const categoryMap = new Map<string, Category>(categories.map((c) => [c.id, c]));
   const accountMap = new Map<string, BankAccount>(bankAccounts.map((a) => [a.id, a]));
   const cardMap = new Map<string, PaymentCard>(paymentCards.map((c) => [c.id, c]));
 
-  // Change Month Handler
-  const handlePrevMonth = () => {
-    const [y, m] = currentYM.split('-').map(Number);
-    const date = new Date(y, m - 2, 1);
-    onChangeYM(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
-  };
-
-  const handleNextMonth = () => {
-    const [y, m] = currentYM.split('-').map(Number);
-    const date = new Date(y, m, 1);
-    onChangeYM(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
-  };
 
   // Open Payment Confirmation Modal
   const handleOpenPaymentModal = (occ: RecurringOccurrence) => {
@@ -108,9 +97,11 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     if (!selectedOcc) return;
 
     if (paymentAmount <= 0) {
-      alert('금액은 0원보다 커야 합니다.');
+      setPaymentError('금액은 0원보다 커야 합니다.');
+      document.getElementById('occurrence-amount')?.focus();
       return;
     }
+    setPaymentError(null);
 
     onPostOccurrence(
       selectedOcc.id,
@@ -174,23 +165,9 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           </p>
         </div>
 
-        {/* Month Selector Controls */}
-        <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800 self-start sm:self-auto">
-          <button
-            onClick={handlePrevMonth}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <span className="font-bold text-sm text-white px-2">
-            {currentYM.replace('-', '년 ')}월
-          </span>
-          <button
-            onClick={handleNextMonth}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
+        <div className="self-start rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs sm:self-auto">
+          <span className="font-bold text-white">{period.yearMonth.replace('-', '년 ')}월</span>
+          {periodRange && <span className="ml-1.5 text-slate-400">{periodRange}</span>}
         </div>
       </div>
 
@@ -202,10 +179,10 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
               <TrendingUp className="w-4 h-4" />
               월 고정 수입 예정액
             </span>
-            <span className="text-[10px] text-emerald-400/80 font-medium">입금 완료: {formatKRW(totalPostedIncome)}</span>
+            <span className="text-xs text-emerald-400/80 font-medium">입금 완료: {formatKRW(totalPostedIncome)}</span>
           </div>
           <p className="text-xl font-extrabold text-emerald-400 mt-1">{formatKRW(totalScheduledIncome)}</p>
-          <p className="text-[11px] text-slate-400 mt-1">
+          <p className="text-xs text-slate-400 mt-1">
             남은 입금 예정: <strong className="text-emerald-300">{formatKRW(pendingIncomeAmount)}</strong>
           </p>
         </div>
@@ -216,10 +193,10 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
               <TrendingDown className="w-4 h-4" />
               월 고정 지출 예정액
             </span>
-            <span className="text-[10px] text-slate-400 font-medium">납부 완료: {formatKRW(totalPostedExpense)}</span>
+            <span className="text-xs text-slate-400 font-medium">납부 완료: {formatKRW(totalPostedExpense)}</span>
           </div>
           <p className="text-xl font-extrabold text-white mt-1">{formatKRW(totalScheduledExpense)}</p>
-          <p className="text-[11px] text-slate-400 mt-1">
+          <p className="text-xs text-slate-400 mt-1">
             남은 납부 예정: <strong className="text-amber-300">{formatKRW(pendingExpenseAmount)}</strong>
           </p>
         </div>
@@ -232,7 +209,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           <p className="text-xl font-extrabold text-indigo-300 mt-1">
             {recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length}건
           </p>
-          <p className="text-[11px] text-slate-400 mt-1">
+          <p className="text-xs text-slate-400 mt-1">
             수입 {incomeOccurrences.filter(o => o.status !== 'posted').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted').length}건 대기 중
           </p>
         </div>
@@ -301,11 +278,11 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       {/* List of Recurring Items */}
       {filteredOccurrences.length === 0 ? (
         <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-8 text-center space-y-3">
-          <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-500">
+          <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
             <Receipt className="w-6 h-6" />
           </div>
           <p className="text-sm text-slate-300 font-medium">해당 조건의 정기 항목이 없습니다.</p>
-          <p className="text-xs text-slate-500 max-w-xs mx-auto">
+          <p className="text-xs text-slate-400 max-w-xs mx-auto">
             관리 메뉴의 '정기 항목 템플릿'에서 월급, 부수입, 매월 발생하는 카드대금, 관리비 등을 등록해보세요.
           </p>
         </div>
@@ -350,21 +327,21 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-base text-white">{tmpl?.name || '정기 항목'}</span>
                       {isIncome ? (
-                        <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1">
+                        <span className="text-xs font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1">
                           <TrendingUp className="w-3 h-3" /> 고정 수입
                         </span>
                       ) : (
-                        <span className="text-[10px] font-bold bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-md border border-rose-500/30 flex items-center gap-1">
+                        <span className="text-xs font-bold bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-md border border-rose-500/30 flex items-center gap-1">
                           <TrendingDown className="w-3 h-3" /> 고정 지출
                         </span>
                       )}
                       {cat && (
-                        <span className="text-[10px] font-semibold bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
+                        <span className="text-xs font-semibold bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
                           {cat.name}
                         </span>
                       )}
                       {tmpl?.allowAmountChange && (
-                        <span className="text-[10px] font-semibold bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded-md border border-amber-500/30">
+                        <span className="text-xs font-semibold bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded-md border border-amber-500/30">
                           매월 금액 변동
                         </span>
                       )}
@@ -372,12 +349,12 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
 
                     <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
                       <span className="flex items-center gap-1 text-slate-300">
-                        <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
                         {isIncome ? '입금 예정일:' : '납부 예정일:'} {occ.scheduledDate}
                       </span>
 
                       {tmpl?.counterparty && (
-                        <span className="text-slate-500">· {tmpl.counterparty}</span>
+                        <span className="text-slate-400">· {tmpl.counterparty}</span>
                       )}
                     </div>
 
@@ -390,14 +367,14 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                             <span>입금계좌: <strong>[{accountObj.bankName}] {accountObj.accountName}</strong></span>
                           </div>
                         ) : (
-                          <span className="text-slate-500 text-[11px] italic">입금 계좌 미지정</span>
+                          <span className="text-slate-400 text-xs italic">입금 계좌 미지정</span>
                         )
                       ) : cardObj ? (
                         <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 text-indigo-300">
                           <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
                           <span>결제카드: <strong>{cardObj.cardName}</strong> ({cardObj.cardCompany})</span>
                           {linkedAccountOfCard && (
-                            <span className="text-slate-400 text-[11px] border-l border-slate-800 pl-1.5">
+                            <span className="text-slate-400 text-xs border-l border-slate-800 pl-1.5">
                               출금계좌: {linkedAccountOfCard.bankName}
                             </span>
                           )}
@@ -408,7 +385,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                           <span>출금계좌: <strong>[{accountObj.bankName}] {accountObj.accountName}</strong></span>
                         </div>
                       ) : (
-                        <span className="text-slate-500 text-[11px] italic">결제/출금 정보 미지정</span>
+                        <span className="text-slate-400 text-xs italic">결제/출금 정보 미지정</span>
                       )}
                     </div>
                   </div>
@@ -417,7 +394,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 {/* Right side: Amount & Action button */}
                 <div className="flex items-center justify-between sm:justify-end gap-4 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/80">
                   <div className="text-right">
-                    <span className="text-[11px] text-slate-500 block">
+                    <span className="text-xs text-slate-400 block">
                       {isIncome
                         ? (isPosted ? '최종 입금 금액' : '예상 입금 금액')
                         : (isPosted ? '최종 납부 금액' : '예상 납부 금액')}
@@ -461,10 +438,13 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       )}
 
       {/* CONFIRM PAYMENT / INCOME MODAL */}
-      {selectedOcc && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 text-slate-100 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-            {(() => {
+      <Modal
+        isOpen={Boolean(selectedOcc)}
+        onClose={() => setSelectedOcc(null)}
+        labelledById="occurrence-modal-title"
+        panelClassName="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 space-y-4 text-slate-100 shadow-2xl"
+      >
+        {selectedOcc && (() => {
               const tmpl = templateMap.get(selectedOcc.templateId);
               const isIncome = tmpl?.type === 'income';
 
@@ -472,7 +452,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 <>
                   <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <div>
-                      <h3 className="font-bold text-base text-white flex items-center gap-2">
+                      <h3 id="occurrence-modal-title" className="font-bold text-base text-white flex items-center gap-2">
                         {isIncome ? (
                           <TrendingUp className="w-5 h-5 text-emerald-400" />
                         ) : (
@@ -487,24 +467,26 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       </p>
                     </div>
                     <button
+                      type="button"
                       onClick={() => setSelectedOcc(null)}
-                      className="text-slate-400 hover:text-white p-1 rounded-lg"
+                      aria-label="확인 창 닫기"
+                      className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
                     >
                       <X className="w-5 h-5" />
                     </button>
                   </div>
 
-                  <form onSubmit={handleConfirmPayment} className="space-y-4 text-xs">
+                  <form onSubmit={handleConfirmPayment} className="space-y-4 text-xs" noValidate>
                     {/* Item Summary Banner */}
                     <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
                       <div>
-                        <span className="text-slate-400 text-[11px]">항목명</span>
+                        <span className="text-slate-400 text-xs">항목명</span>
                         <p className="font-bold text-sm text-white">
                           {tmpl?.name || '정기 항목'}
                         </p>
                       </div>
                       <div className="text-right">
-                        <span className="text-slate-400 text-[11px]">{isIncome ? '입금 예정일' : '납부 예정일'}</span>
+                        <span className="text-slate-400 text-xs">{isIncome ? '입금 예정일' : '납부 예정일'}</span>
                         <p className="font-semibold text-xs text-slate-300">{selectedOcc.scheduledDate}</p>
                       </div>
                     </div>
@@ -515,17 +497,25 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                         {isIncome ? '이번 달 실제 입금 금액 (KRW)' : '이번 달 실제 납부 금액 (KRW)'}{' '}
                         <span className={isIncome ? 'text-emerald-400' : 'text-rose-400'}>*</span>
                       </label>
-                      <input
-                        type="number"
-                        value={paymentAmount || ''}
-                        onChange={(e) => setPaymentAmount(Number(e.target.value))}
-                        required
-                        placeholder="예: 3500000"
-                        className={`w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white font-bold text-base placeholder-slate-600 focus:outline-none ${
-                          isIncome ? 'focus:border-emerald-500' : 'focus:border-rose-500'
-                        }`}
+                      <AmountInput
+                        id="occurrence-amount"
+                        value={paymentAmount}
+                        onChange={next => {
+                          setPaymentError(null);
+                          setPaymentAmount(next);
+                        }}
+                        placeholder="예: 3,500,000"
+                        showQuickAdd
+                        invalid={Boolean(paymentError)}
+                        describedById={paymentError ? 'occurrence-amount-error' : undefined}
+                        className="text-base"
                       />
-                      <p className="text-[11px] text-slate-500 mt-1">
+                      {paymentError && (
+                        <p id="occurrence-amount-error" role="alert" className="mt-1.5 text-xs font-semibold text-rose-300">
+                          {paymentError}
+                        </p>
+                      )}
+                      <p className="text-xs text-slate-400 mt-1">
                         {isIncome
                           ? '실제 수령한 급여/수입 금액을 확인하여 입력해주세요.'
                           : '가스비, 관리비, 카드 청구액 등 변경된 실제 지출 금액을 입력해 주세요.'}
@@ -615,7 +605,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                         </select>
 
                         {selectedCardId && cardMap.get(selectedCardId) && (
-                          <div className="text-[11px] text-indigo-300 bg-indigo-950/30 p-2 rounded-lg border border-indigo-500/20 flex items-center gap-1.5">
+                          <div className="text-xs text-indigo-300 bg-indigo-950/30 p-2 rounded-lg border border-indigo-500/20 flex items-center gap-1.5">
                             <ArrowRightLeft className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                             <span>
                               카드 연결 출금 계좌:{' '}
@@ -644,7 +634,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                         className={`text-white font-bold px-4 py-2 rounded-xl shadow-lg transition-colors flex items-center gap-1.5 ${
                           isIncome
                             ? 'bg-emerald-600 hover:bg-emerald-500'
-                            : 'bg-rose-500 hover:bg-rose-600'
+                            : 'bg-rose-600 hover:bg-rose-700'
                         }`}
                       >
                         <Check className="w-4 h-4" />
@@ -654,10 +644,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                   </form>
                 </>
               );
-            })()}
-          </div>
-        </div>
-      )}
+        })()}
+      </Modal>
     </div>
   );
 };

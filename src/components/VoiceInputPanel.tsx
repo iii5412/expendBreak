@@ -295,7 +295,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
   return (
     <div className="space-y-4">
       {/* Privacy Guard Notice */}
-      <div className="flex items-start gap-2 bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-[11px] text-slate-400">
+      <div className="flex items-start gap-2 bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs text-slate-400">
         <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
         <p className="leading-tight">
           녹음된 음성은 거래 분석을 위해 Gemini로 전송됩니다. 음성 원본은 저장하지 않으며, 확인된 음성 원문과 거래 정보만 저장할 수 있습니다.
@@ -316,8 +316,9 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
             <div className="relative inline-block">
               <button
                 onClick={startRecording}
-                className="w-20 h-20 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center mx-auto shadow-lg shadow-rose-950/50 transition-all hover:scale-105 active:scale-95 group"
+                className="w-20 h-20 rounded-full bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center mx-auto shadow-lg shadow-rose-950/50 transition-all hover:scale-105 active:scale-95 group"
                 title="녹음 시작"
+                aria-label="음성 녹음 시작"
               >
                 <Mic className="w-9 h-9 group-hover:scale-110 transition-transform" />
               </button>
@@ -330,7 +331,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
 
             {/* Example Presets */}
             <div className="pt-2 border-t border-slate-900 text-left space-y-1.5">
-              <p className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+              <p className="text-xs font-semibold text-slate-400 flex items-center gap-1">
                 <Sparkles className="w-3 h-3 text-amber-400" />
                 <span>이렇게 말해보세요:</span>
               </p>
@@ -338,7 +339,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
                 {examplePrompts.map((p) => (
                   <div
                     key={p}
-                    className="text-[11px] bg-slate-900 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1.5"
+                    className="text-xs bg-slate-900 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1.5"
                   >
                     "{p}"
                   </div>
@@ -411,7 +412,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
               <button
                 onClick={handleAnalyze}
                 disabled={isAnalyzing}
-                className="flex items-center gap-2 bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-lg shadow-rose-950/40"
+                className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-lg shadow-rose-950/40"
               >
                 {isAnalyzing ? (
                   <>

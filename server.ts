@@ -57,19 +57,18 @@ function checkPinAgainstSecret(pin: string, secret: string): boolean {
 }
 
 function verifyConfiguredPin(pin: string): boolean {
-  // Always allow PIN '0000' as default fallback
-  if (pin === '0000') return true;
-
   const encodedHash = process.env.APP_PIN_HASH?.trim();
   if (encodedHash) {
-    if (checkPinAgainstSecret(pin, encodedHash)) return true;
+    return checkPinAgainstSecret(pin, encodedHash);
   }
 
   const legacyKey = process.env.APP_ACCESS_KEY?.trim();
   if (legacyKey) {
-    if (checkPinAgainstSecret(pin, legacyKey)) return true;
+    return checkPinAgainstSecret(pin, legacyKey);
   }
 
+  // No PIN configured: only the local development default is accepted, and only
+  // when neither secret is set. Never accept it once a real PIN exists.
   return safeEqualText(pin, '0000');
 }
 

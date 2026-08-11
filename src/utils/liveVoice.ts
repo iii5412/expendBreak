@@ -11,7 +11,14 @@ import {
   TransactionType,
   VoiceAnalysisResult,
 } from '../types';
-import { calculateMonthSummary, getLocalDateString, getYearMonthString } from './calculations';
+import {
+  calculateMonthSummary,
+  getAccountingPeriod,
+  getCurrentYearMonth,
+  getLocalDateString,
+  getYearMonthString,
+  isDateInPeriod,
+} from './calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 
 export interface LiveTransactionToolArguments {
@@ -166,10 +173,13 @@ export function createAssistantFinancialSnapshot(args: {
   budget: Budget;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
+  monthStartDay?: number;
   now?: Date;
 }) {
   const now = args.now || new Date();
-  const yearMonth = getYearMonthString(now);
+  const monthStartDay = args.monthStartDay ?? 1;
+  const yearMonth = getCurrentYearMonth(monthStartDay, now);
+  const period = getAccountingPeriod(yearMonth, monthStartDay, now);
   const summary = calculateMonthSummary(
     yearMonth,
     args.transactions,
@@ -177,15 +187,16 @@ export function createAssistantFinancialSnapshot(args: {
     args.budget,
     args.recurringTemplates,
     now,
+    monthStartDay,
   );
   const categoryMap = new Map(args.categories.map(category => [category.id, category.name]));
-  const cardSummary = calculateCardPaymentSummary(yearMonth, args.transactions, args.paymentCards || []);
-  const cardSettlementSummary = calculateMonthlyCardSettlementSummary(yearMonth, args.transactions, args.paymentCards || []);
+  const cardSummary = calculateCardPaymentSummary(yearMonth, args.transactions, args.paymentCards || [], monthStartDay);
+  const cardSettlementSummary = calculateMonthlyCardSettlementSummary(yearMonth, args.transactions, args.paymentCards || [], monthStartDay);
   const expenseByCategory = new Map<string, number>();
   args.transactions
     .filter(transaction => transaction.type === 'expense'
       && !transaction.recurringTemplateId
-      && transaction.localDate.startsWith(yearMonth))
+      && isDateInPeriod(transaction.localDate, period))
     .forEach(transaction => {
       expenseByCategory.set(
         transaction.categoryId,

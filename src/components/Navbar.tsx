@@ -7,9 +7,17 @@ interface NavbarProps {
   nextPaydayText: string;
   onOpenSettings: () => void;
   onLock: () => void;
+  /** Sync status badge; kept as a slot so the Navbar stays presentational. */
+  syncStatusSlot?: React.ReactNode;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ userProfile, nextPaydayText, onOpenSettings, onLock }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  userProfile,
+  nextPaydayText,
+  onOpenSettings,
+  onLock,
+  syncStatusSlot,
+}) => {
   return (
     <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 text-slate-100">
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -23,7 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({ userProfile, nextPaydayText, onO
           <div>
             <div className="flex items-center gap-1.5">
               <h1 className="font-bold text-lg tracking-tight text-white leading-none">지출브레이크</h1>
-              <span className="text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded-full">
+              <span className="text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded-full">
                 강한 통제
               </span>
             </div>
@@ -33,6 +41,8 @@ export const Navbar: React.FC<NavbarProps> = ({ userProfile, nextPaydayText, onO
 
         {/* Right side info */}
         <div className="flex items-center gap-2">
+          {syncStatusSlot}
+
           {nextPaydayText && (
             <div className="hidden sm:flex items-center gap-1.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 text-xs px-2.5 py-1.5 rounded-lg text-slate-300">
               <Calendar className="w-3.5 h-3.5 text-emerald-400" />
@@ -47,7 +57,10 @@ export const Navbar: React.FC<NavbarProps> = ({ userProfile, nextPaydayText, onO
             <UserCheck className="w-3.5 h-3.5 text-slate-400" />
             <span className="font-medium hidden xs:inline">{userProfile.displayName}</span>
             {userProfile.aiClassificationEnabled && (
-              <Sparkles className="w-3 h-3 text-amber-400" title="AI 자동분류 활성화" />
+              // lucide icons drop unknown props, so the tooltip lives on a wrapper.
+              <span title="AI 자동분류 활성화" className="inline-flex">
+                <Sparkles className="w-3 h-3 text-amber-400" aria-label="AI 자동분류 활성화" />
+              </span>
             )}
           </button>
 

@@ -16,7 +16,7 @@ import {
   getSampleRecurringTemplates,
   getSampleBudget,
 } from '../data/initialData';
-import { getLocalDateString, getYearMonthString } from './calculations';
+import { getAccountingPeriod, getLocalDateString, getYearMonthString, isDateInPeriod } from './calculations';
 import {
   initFirestoreSync,
   syncUserProfileToFirestore,
@@ -339,7 +339,13 @@ function assertCategoryMatchesType(type: Transaction['type'], categoryId: string
   }
 }
 
-export function saveTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>): Transaction {
+export interface TransactionSaveResult {
+  transaction: Transaction;
+  /** Resolves false when the write stayed in the outbox instead of reaching Firestore. */
+  synced: Promise<boolean>;
+}
+
+export function saveTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>): TransactionSaveResult {
   assertCategoryMatchesType(tx.type, tx.categoryId);
   const txs = getTransactions();
   const now = new Date().toISOString();
@@ -352,9 +358,41 @@ export function saveTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'upda
 
   txs.unshift(newTx);
   localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
-  syncTransactionToFirestore(newTx);
+  const synced = syncTransactionToFirestore(newTx);
   notifyListeners();
-  return newTx;
+  return { transaction: newTx, synced };
+}
+
+/**
+ * Re-inserts a transaction removed by {@link deleteTransaction} and re-links any
+ * recurring occurrence that was reverted to `needs_confirmation` by the delete.
+ */
+export function restoreTransaction(transaction: Transaction, linkedOccurrenceIds: string[] = []): Transaction {
+  const txs = getTransactions().filter(existing => existing.id !== transaction.id);
+  txs.unshift(transaction);
+  txs.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+  syncTransactionToFirestore(transaction);
+
+  if (linkedOccurrenceIds.length > 0) {
+    const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+    const now = new Date().toISOString();
+    let changed = false;
+    occurrences.forEach(occurrence => {
+      if (!linkedOccurrenceIds.includes(occurrence.id)) return;
+      occurrence.status = 'posted';
+      occurrence.transactionId = transaction.id;
+      occurrence.updatedAt = now;
+      changed = true;
+    });
+    if (changed) {
+      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+      syncRecurringOccurrencesToFirestore(occurrences);
+    }
+  }
+
+  notifyListeners();
+  return transaction;
 }
 
 export function updateTransaction(id: string, updates: Partial<Transaction>): Transaction | null {
@@ -378,38 +416,55 @@ export function updateTransaction(id: string, updates: Partial<Transaction>): Tr
   return txs[idx];
 }
 
-export function deleteTransaction(id: string): boolean {
-  let txs = getTransactions();
+export interface DeletedTransactionSnapshot {
+  transaction: Transaction;
+  /** Occurrences reverted to `needs_confirmation` so undo can re-link them. */
+  restoredOccurrenceIds: string[];
+  /** Receipt image kept until the undo window closes. */
+  receiptStoragePath: string | null;
+}
+
+/**
+ * Removes a transaction and returns everything needed to undo it.
+ * The receipt image is intentionally left in Storage; call
+ * {@link finalizeTransactionDeletion} once the undo window expires.
+ */
+export function deleteTransaction(id: string): DeletedTransactionSnapshot | null {
+  const txs = getTransactions();
   const deletedTransaction = txs.find(transaction => transaction.id === id);
-  const initialLen = txs.length;
-  txs = txs.filter(t => t.id !== id);
+  if (!deletedTransaction) return null;
 
-  if (txs.length !== initialLen) {
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
-    deleteTransactionFromFirestore(id);
-    if (deletedTransaction?.receipt?.storagePath) {
-      deleteReceiptImage(deletedTransaction.receipt.storagePath).catch(error => {
-        console.error('Failed to delete receipt image:', error);
-      });
-    }
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs.filter(t => t.id !== id)));
+  deleteTransactionFromFirestore(id);
 
-    const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-    let restoredOccurrence = false;
-    occurrences.forEach(occurrence => {
-      if (occurrence.transactionId !== id) return;
-      occurrence.status = 'needs_confirmation';
-      occurrence.transactionId = null;
-      occurrence.updatedAt = new Date().toISOString();
-      restoredOccurrence = true;
-    });
-    if (restoredOccurrence) {
-      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-      syncRecurringOccurrencesToFirestore(occurrences);
-    }
-    notifyListeners();
-    return true;
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const restoredOccurrenceIds: string[] = [];
+  occurrences.forEach(occurrence => {
+    if (occurrence.transactionId !== id) return;
+    occurrence.status = 'needs_confirmation';
+    occurrence.transactionId = null;
+    occurrence.updatedAt = new Date().toISOString();
+    restoredOccurrenceIds.push(occurrence.id);
+  });
+  if (restoredOccurrenceIds.length > 0) {
+    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+    syncRecurringOccurrencesToFirestore(occurrences);
   }
-  return false;
+
+  notifyListeners();
+  return {
+    transaction: deletedTransaction,
+    restoredOccurrenceIds,
+    receiptStoragePath: deletedTransaction.receipt?.storagePath || null,
+  };
+}
+
+/** Confirms a deletion after the undo window: removes the retained receipt image. */
+export function finalizeTransactionDeletion(snapshot: DeletedTransactionSnapshot) {
+  if (!snapshot.receiptStoragePath) return;
+  deleteReceiptImage(snapshot.receiptStoragePath).catch(error => {
+    console.error('Failed to delete receipt image:', error);
+  });
 }
 
 export function getCategories(): Category[] {
@@ -612,15 +667,20 @@ export function deleteRecurringTemplate(id: string): boolean {
   return false;
 }
 
-export function getRecurringOccurrences(yearMonth: string): RecurringOccurrence[] {
+export function getRecurringOccurrences(yearMonth: string, monthStartDay: number = 1): RecurringOccurrence[] {
   initializeStorageIfEmpty();
-  let all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  
-  // Ensure occurrences generated for requested month
-  generateOccurrencesForMonth(yearMonth, getRecurringTemplates());
-  
-  all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  return all.filter(o => o.scheduledDate.startsWith(yearMonth));
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const templates = getRecurringTemplates();
+
+  // A period with a non-default start day spans two calendar months, so both
+  // calendar months need their occurrences generated before filtering.
+  generateOccurrencesForMonth(period.startDate.slice(0, 7), templates);
+  if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
+    generateOccurrencesForMonth(period.endDate.slice(0, 7), templates);
+  }
+
+  const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  return all.filter(o => isDateInPeriod(o.scheduledDate, period));
 }
 
 export function updateOccurrenceStatus(
@@ -784,8 +844,9 @@ export function saveCachedAIFeedback(periodId: string, feedback: AIFeedbackResul
   localStorage.setItem(STORAGE_KEYS.AI_INSIGHTS, JSON.stringify(map));
 }
 
-export function exportTransactionsCSV(yearMonth?: string): string {
-  const txs = getTransactions().filter(transaction => !yearMonth || transaction.localDate.startsWith(yearMonth));
+export function exportTransactionsCSV(yearMonth?: string, monthStartDay: number = 1): string {
+  const period = yearMonth ? getAccountingPeriod(yearMonth, monthStartDay) : null;
+  const txs = getTransactions().filter(transaction => !period || isDateInPeriod(transaction.localDate, period));
   const cats = getCategories();
   const catMap = new Map(cats.map(c => [c.id, c.name]));
   const csvCell = (value: string | number) => {

@@ -28,6 +28,15 @@ import {
 import { formatKRW, getLocalDateString } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
 import { normalizeTags } from '../utils/receipt';
+import { Modal } from './ui/Modal';
+import { AmountInput } from './ui/AmountInput';
+import { parseAmountInput } from '../utils/amount';
+import {
+  TransactionDraft,
+  clearTransactionDraft,
+  readTransactionDraft,
+  saveTransactionDraft,
+} from '../utils/transactionDraft';
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { LiveVoicePanel } from './LiveVoicePanel';
@@ -43,6 +52,7 @@ interface AddTransactionModalProps {
   budget: Budget;
   recurringOccurrences?: RecurringOccurrence[];
   recurringTemplates?: RecurringTemplate[];
+  monthStartDay?: number;
   aiClassificationEnabled?: boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
@@ -59,6 +69,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   budget,
   recurringOccurrences = [],
   recurringTemplates = [],
+  monthStartDay = 1,
   aiClassificationEnabled = true,
   onSaveTransaction,
   onSaveMerchantRule,
@@ -106,6 +117,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [confirmCardId, setConfirmCardId] = useState<string>('');
   const [rememberRule, setRememberRule] = useState<boolean>(true);
 
+  /** Inline validation message for whichever save flow is active. */
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [recoverableDraft, setRecoverableDraft] = useState<TransactionDraft | null>(null);
+
+  const failValidation = (message: string, focusElementId?: string) => {
+    setSaveError(message);
+    if (focusElementId) document.getElementById(focusElementId)?.focus();
+    return false;
+  };
+
   useEffect(() => {
     if (!aiClassificationEnabled) setActiveMode('manual');
   }, [aiClassificationEnabled]);
@@ -115,8 +136,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setActiveMode(aiClassificationEnabled ? 'voice' : 'manual');
       setVoiceInputKind('live');
       setVoiceResult(null);
+      setSaveError(null);
+      setRecoverableDraft(readTransactionDraft());
     }
   }, [isOpen, aiClassificationEnabled]);
+
+  // Persist the manual form so an auto-lock does not discard it.
+  useEffect(() => {
+    if (!isOpen) return;
+    saveTransactionDraft({ type, amount, localDate, categoryId, merchant, memo, tagsText });
+  }, [isOpen, type, amount, localDate, categoryId, merchant, memo, tagsText]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -180,14 +209,15 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
   const handleConfirmAiSave = () => {
     if (confirmAmount <= 0) {
-      alert('1원 이상의 정수 금액을 입력해주세요.');
+      failValidation('1원 이상의 정수 금액을 입력해 주세요.', 'ai-confirm-amount');
       return;
     }
     const selectedCategory = categories.find((category) => category.id === confirmCategoryId);
     if (!selectedCategory || selectedCategory.type !== confirmType) {
-      alert(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      failValidation(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
+    setSaveError(null);
 
     onSaveTransaction({
       type: confirmType,
@@ -244,18 +274,19 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
   const handleConfirmVoiceSave = () => {
     if (confirmAmount <= 0) {
-      alert('1원 이상의 정수 금액을 입력해주세요.');
+      failValidation('1원 이상의 정수 금액을 입력해 주세요.', 'voice-confirm-amount');
       return;
     }
     const selectedCategory = categories.find((c) => c.id === confirmCategoryId);
     if (!selectedCategory || selectedCategory.type !== confirmType) {
-      alert(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      failValidation(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
     if (confirmPaymentMethodType === 'card' && paymentCards.length > 0 && !confirmCardId) {
-      alert('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
+      failValidation('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
       return;
     }
+    setSaveError(null);
 
     onSaveTransaction({
       type: confirmType,
@@ -319,18 +350,19 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     e.preventDefault();
     const numAmount = parseInt(amount, 10);
     if (isNaN(numAmount) || numAmount <= 0) {
-      alert('올바른 금액을 입력하세요.');
+      failValidation('1원 이상의 정수 금액을 입력해 주세요.', 'manual-amount');
       return;
     }
     const selectedCategory = categories.find((category) => category.id === categoryId);
     if (!selectedCategory || selectedCategory.type !== type) {
-      alert(`${type === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      failValidation(`${type === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
     if (paymentMethodType === 'card' && paymentCards.length > 0 && !selectedCardId) {
-      alert('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
+      failValidation('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
       return;
     }
+    setSaveError(null);
 
     onSaveTransaction({
       type,
@@ -351,7 +383,28 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     onClose();
   };
 
+  const restoreDraft = () => {
+    if (!recoverableDraft) return;
+    setType(recoverableDraft.type);
+    setAmount(recoverableDraft.amount);
+    setLocalDate(recoverableDraft.localDate);
+    if (recoverableDraft.categoryId) setCategoryId(recoverableDraft.categoryId);
+    setMerchant(recoverableDraft.merchant);
+    setMemo(recoverableDraft.memo);
+    setTagsText(recoverableDraft.tagsText);
+    setActiveMode('manual');
+    setRecoverableDraft(null);
+  };
+
+  const discardDraft = () => {
+    clearTransactionDraft();
+    setRecoverableDraft(null);
+  };
+
   const resetAll = () => {
+    clearTransactionDraft();
+    setRecoverableDraft(null);
+    setSaveError(null);
     setAiPromptText('');
     setAiResult(null);
     setVoiceResult(null);
@@ -364,6 +417,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setTagsText('');
   };
 
+  const saveErrorNotice = saveError ? (
+    <p
+      role="alert"
+      className="flex items-start gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-xs font-semibold text-rose-300"
+    >
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>{saveError}</span>
+    </p>
+  ) : null;
+
   const examplePrompts = [
     '배민 저녁 24,900원',
     '아이 학원비 180000 오늘',
@@ -372,21 +435,59 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 space-y-4 shadow-2xl">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      labelledById="add-transaction-title"
+      dismissOnBackdrop={false}
+      backdropClassName="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4"
+      panelClassName="bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 space-y-4 shadow-2xl"
+    >
+      <>
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold text-white">거래 추가</h2>
-            <span className="text-[10px] text-rose-400 font-semibold bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 rounded-full">
+            <h2 id="add-transaction-title" className="text-base font-bold text-white">거래 추가</h2>
+            <span className="text-xs text-rose-400 font-semibold bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 rounded-full">
               10초 간편 입력
             </span>
           </div>
 
-          <button onClick={onClose} className="text-slate-400 hover:text-white p-1">
+          <button
+            onClick={onClose}
+            aria-label="거래 추가 창 닫기"
+            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Draft left behind by an auto-lock or an accidental close. */}
+        {recoverableDraft && (
+          <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs">
+            <p className="font-bold text-amber-200">작성 중이던 내용이 있습니다.</p>
+            <p className="text-amber-100/80">
+              {recoverableDraft.merchant || '사용처 미입력'}
+              {Number(recoverableDraft.amount) > 0 && ` · ${formatKRW(Number(recoverableDraft.amount))}`}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={restoreDraft}
+                className="min-h-9 flex-1 rounded-lg bg-amber-400 px-3 text-xs font-bold text-slate-950 transition-colors hover:bg-amber-300"
+              >
+                이어서 작성
+              </button>
+              <button
+                type="button"
+                onClick={discardDraft}
+                className="min-h-9 rounded-lg border border-amber-500/40 px-3 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/10"
+              >
+                지우기
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Mode Switcher - 2x2 Grid on Mobile for 4 modes */}
         <div
@@ -490,6 +591,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   budget={budget}
                   recurringOccurrences={recurringOccurrences}
                   recurringTemplates={recurringTemplates}
+                  monthStartDay={monthStartDay}
                   onDraftReady={handleVoiceAnalysisComplete}
                   onUseQuickVoice={() => setVoiceInputKind('quick')}
                 />
@@ -522,11 +624,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30 font-semibold">
+                    <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30 font-semibold">
                       신뢰도 {Math.round(voiceResult.confidence * 100)}%
                     </span>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded border font-semibold ${
+                      className={`text-xs px-2 py-0.5 rounded border font-semibold ${
                         voiceResult.fallbackUsed
                           ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                           : 'bg-slate-800 text-slate-300 border-slate-700'
@@ -552,7 +654,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 <div>
                   <label className="text-slate-400 block mb-1 font-semibold flex items-center justify-between">
                     <span>음성 인식 원문 (수정 가능)</span>
-                    <span className="text-[10px] text-slate-500">{(voiceDurationMs / 1000).toFixed(1)}초 녹음</span>
+                    <span className="text-xs text-slate-400">{(voiceDurationMs / 1000).toFixed(1)}초 녹음</span>
                   </label>
                   <input
                     type="text"
@@ -581,12 +683,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="text-slate-400 block mb-1">금액 (KRW)</label>
-                    <input
-                      type="number"
+                    <label htmlFor="voice-confirm-amount" className="text-slate-400 block mb-1">금액 (KRW)</label>
+                    <AmountInput
+                      id="voice-confirm-amount"
                       value={confirmAmount}
-                      onChange={(e) => setConfirmAmount(Number(e.target.value))}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-rose-300 font-extrabold"
+                      onChange={next => {
+                        setSaveError(null);
+                        setConfirmAmount(next);
+                      }}
+                      invalid={Boolean(saveError)}
+                      className="text-rose-300"
                     />
                   </div>
 
@@ -614,7 +720,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     <label className="text-slate-400 block mb-1">카테고리</label>
                     <select
                       value={confirmCategoryId}
-                      onChange={(e) => setConfirmCategoryId(e.target.value)}
+                      onChange={(e) => {
+                        setSaveError(null);
+                        setConfirmCategoryId(e.target.value);
+                      }}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-white"
                     >
                       {categories
@@ -698,7 +807,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   )}
                 </div>
 
-                <div className="text-[11px] text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+                <div className="text-xs text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
                   <span className="font-semibold text-purple-300">AI 판단 이유:</span> {voiceResult.reason}
                 </div>
 
@@ -745,9 +854,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </button>
                 </div>
 
+                {saveErrorNotice}
+
                 <button
                   onClick={handleConfirmVoiceSave}
-                  className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-rose-950/30 flex items-center justify-center gap-2 text-sm"
+                  className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-rose-950/30 flex items-center justify-center gap-2 text-sm"
                 >
                   <CheckCircle className="w-4 h-4" />
                   <span>확인 및 저장</span>
@@ -777,7 +888,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 <button
                   onClick={handleRunAiClassify}
                   disabled={isAiLoading || !aiPromptText.trim()}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-rose-500 hover:bg-rose-600 disabled:opacity-40 text-white p-2 rounded-lg transition-colors"
+                  aria-label={isAiLoading ? 'AI 분석 중' : 'AI로 분석하기'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white p-2 rounded-lg transition-colors"
                 >
                   {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
@@ -785,12 +897,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
               {/* Preset example buttons */}
               <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                <span className="text-[11px] text-slate-500">추천 예시:</span>
+                <span className="text-xs text-slate-400">추천 예시:</span>
                 {examplePrompts.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => setAiPromptText(prompt)}
-                    className="text-[11px] bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/60 px-2.5 py-1 rounded-md transition-colors"
+                    className="text-xs bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/60 px-2.5 py-1 rounded-md transition-colors"
                   >
                     {prompt}
                   </button>
@@ -813,7 +925,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     <span>AI 분류 결과 확인</span>
                   </div>
 
-                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
+                  <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
                     신뢰도 {Math.round(aiResult.confidence * 100)}%
                   </span>
                 </div>
@@ -837,12 +949,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="text-slate-400 block mb-1">금액 (KRW)</label>
-                    <input
-                      type="number"
+                    <label htmlFor="ai-confirm-amount" className="text-slate-400 block mb-1">금액 (KRW)</label>
+                    <AmountInput
+                      id="ai-confirm-amount"
                       value={confirmAmount}
-                      onChange={(e) => setConfirmAmount(Number(e.target.value))}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-rose-300 font-extrabold"
+                      onChange={next => {
+                        setSaveError(null);
+                        setConfirmAmount(next);
+                      }}
+                      invalid={Boolean(saveError)}
+                      className="text-rose-300"
                     />
                   </div>
 
@@ -874,7 +990,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </div>
                 </div>
 
-                <div className="text-[11px] text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+                <div className="text-xs text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
                   <span className="font-semibold text-amber-300">AI 판단 이유:</span> {aiResult.reason}
                 </div>
 
@@ -901,9 +1017,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </label>
                 )}
 
+                {saveErrorNotice}
+
                 <button
                   onClick={handleConfirmAiSave}
-                  className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-rose-950/30 flex items-center justify-center gap-2 text-sm"
+                  className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-rose-950/30 flex items-center justify-center gap-2 text-sm"
                 >
                   <CheckCircle className="w-4 h-4" />
                   <span>확인 및 저장</span>
@@ -947,17 +1065,18 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             </div>
 
             <div>
-              <label className="text-slate-400 block mb-1">금액 (KRW 정수)</label>
-              <input
-                type="number"
-                inputMode="numeric"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="예: 24900"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-base font-extrabold text-rose-400 placeholder-slate-600"
-                required
+              <label htmlFor="manual-amount" className="text-slate-400 block mb-1">금액 (KRW 정수)</label>
+              <AmountInput
+                id="manual-amount"
+                value={parseAmountInput(amount)}
+                onChange={next => {
+                  setSaveError(null);
+                  setAmount(next ? String(next) : '');
+                }}
+                showQuickAdd
+                invalid={Boolean(saveError)}
+                className="text-base text-rose-400"
               />
-              {Number(amount) > 0 && <p className="text-[11px] text-slate-500 mt-1">{formatKRW(Number(amount))}</p>}
             </div>
 
             <div>
@@ -1080,16 +1199,18 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               />
             </div>
 
+            {saveErrorNotice}
+
             <button
               type="submit"
-              className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-rose-950/30 flex items-center justify-center gap-2 text-sm"
+              className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-rose-950/30 flex items-center justify-center gap-2 text-sm"
             >
               <CheckCircle className="w-4 h-4" />
               <span>거래 저장하기</span>
             </button>
           </form>
         )}
-      </div>
-    </div>
+      </>
+    </Modal>
   );
 };

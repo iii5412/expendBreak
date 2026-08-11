@@ -59,8 +59,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
             <span>🛡️ Gemini API & 접근 보안 모드</span>
           </h2>
           <p className="text-xs text-slate-400 leading-relaxed px-2">
-            PIN 확인이 완료된 뒤에만 가계부 정보를 안전하게 불러옵니다. <br />
-            <span className="text-emerald-400/90 font-medium">(기본 설정 PIN: 0000)</span>
+            PIN 확인이 완료된 뒤에만 가계부 정보를 안전하게 불러옵니다.
           </p>
         </div>
 
@@ -73,7 +72,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
                 setEnteredPin(e.target.value);
                 setErrorMsg(null);
               }}
-              placeholder="접근 암호(PIN) 입력 (기본: 0000)"
+              placeholder="접근 암호(PIN) 입력"
               inputMode="numeric"
               pattern="[0-9]*"
               autoComplete="current-password"
@@ -82,11 +81,14 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
               autoFocus
               required
             />
-            <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
           {errorMsg && (
-            <div className="bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs px-3 py-2 rounded-lg flex items-center justify-center gap-1.5">
+            <div
+              role="alert"
+              className="bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs px-3 py-2 rounded-lg flex items-center justify-center gap-1.5"
+            >
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
               <span>{errorMsg}</span>
             </div>
@@ -108,7 +110,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
           </button>
         </form>
 
-        <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-center gap-1">
+        <div className="pt-2 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-center gap-1">
           <Sparkles className="w-3 h-3 text-amber-400" />
           <span>PIN은 브라우저나 Firestore에 저장되지 않습니다.</span>
         </div>

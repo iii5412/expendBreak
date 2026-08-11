@@ -65,31 +65,112 @@ export function getYearMonthString(date = new Date()): string {
   return `${y}-${m}`;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 /**
- * Calculate total days in a month and days remaining
+ * The accounting period a `YYYY-MM` label refers to.
+ *
+ * With the default `monthStartDay` of 1 this is exactly the calendar month.
+ * A salaried user paid on the 25th sets `monthStartDay` to 25, and the period
+ * labelled `2026-08` then runs 2026-08-25 ~ 2026-09-24: the cycle is named
+ * after the month it starts in, which keeps day 1 identical to the old behavior.
  */
-export function getMonthDaysInfo(yearMonth: string, now = new Date()) {
-  const [yStr, mStr] = yearMonth.split('-');
-  const year = parseInt(yStr, 10);
-  const month = parseInt(mStr, 10);
-  
-  const lastDayObj = new Date(year, month, 0);
-  const daysInMonth = lastDayObj.getDate();
-  
-  const currentYM = getYearMonthString(now);
-  let daysPassed = 1;
-  
-  if (currentYM === yearMonth) {
-    daysPassed = now.getDate();
-  } else if (currentYM > yearMonth) {
+export interface AccountingPeriod {
+  yearMonth: string;
+  monthStartDay: number;
+  startDate: string; // inclusive, YYYY-MM-DD
+  endDate: string; // inclusive, YYYY-MM-DD
+  daysInMonth: number; // total days in the period
+  daysPassed: number;
+  daysRemaining: number; // includes today
+}
+
+/** Days 29-31 do not exist in every month, so the cycle start is capped at 28. */
+export function normalizeMonthStartDay(monthStartDay?: number | null): number {
+  const parsed = Math.trunc(Number(monthStartDay));
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(28, Math.max(1, parsed));
+}
+
+/** Adds `offset` months to a `YYYY-MM` label. */
+export function shiftYearMonth(yearMonth: string, offset: number): string {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const shifted = new Date(year, month - 1 + offset, 1);
+  return getYearMonthString(shifted);
+}
+
+export function getAccountingPeriod(
+  yearMonth: string,
+  monthStartDay: number = 1,
+  now = new Date(),
+): AccountingPeriod {
+  const startDay = normalizeMonthStartDay(monthStartDay);
+  const [year, month] = yearMonth.split('-').map(Number);
+
+  const start = new Date(year, month - 1, startDay);
+  const nextStart = new Date(year, month, startDay);
+  const end = new Date(nextStart.getTime() - MS_PER_DAY);
+
+  const startDate = getLocalDateString(start);
+  const endDate = getLocalDateString(end);
+  const daysInMonth = Math.round((nextStart.getTime() - start.getTime()) / MS_PER_DAY);
+
+  const today = getLocalDateString(now);
+  let daysPassed: number;
+  if (today < startDate) {
+    daysPassed = 0;
+  } else if (today > endDate) {
     daysPassed = daysInMonth;
   } else {
-    daysPassed = 0;
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    daysPassed = Math.round((todayMidnight.getTime() - start.getTime()) / MS_PER_DAY) + 1;
   }
-  
-  // Days remaining includes today
-  const daysRemaining = Math.max(1, daysInMonth - daysPassed + 1);
-  
+
+  return {
+    yearMonth,
+    monthStartDay: startDay,
+    startDate,
+    endDate,
+    daysInMonth,
+    daysPassed,
+    // Days remaining includes today
+    daysRemaining: Math.max(1, daysInMonth - daysPassed + 1),
+  };
+}
+
+export function isDateInPeriod(localDate: string, period: AccountingPeriod): boolean {
+  return localDate >= period.startDate && localDate <= period.endDate;
+}
+
+/** Which period a date belongs to, e.g. 2026-09-02 with start day 25 -> 2026-08. */
+export function getYearMonthForDate(localDate: string, monthStartDay: number = 1): string {
+  const startDay = normalizeMonthStartDay(monthStartDay);
+  const calendarMonth = localDate.slice(0, 7);
+  const day = Number(localDate.slice(8, 10));
+  return day >= startDay ? calendarMonth : shiftYearMonth(calendarMonth, -1);
+}
+
+/** The period that contains today. Equals {@link getYearMonthString} when the start day is 1. */
+export function getCurrentYearMonth(monthStartDay: number = 1, now = new Date()): string {
+  return getYearMonthForDate(getLocalDateString(now), monthStartDay);
+}
+
+/** Short label such as `8/25~9/24`, omitted when the period is a plain calendar month. */
+export function formatPeriodRange(period: AccountingPeriod): string {
+  if (period.monthStartDay === 1) return '';
+  const short = (date: string) => {
+    const [, month, day] = date.split('-').map(Number);
+    return `${month}/${day}`;
+  };
+  return `${short(period.startDate)}~${short(period.endDate)}`;
+}
+
+/**
+ * Calculate total days in a period and days remaining.
+ * Retained for callers that only need the day counts.
+ */
+export function getMonthDaysInfo(yearMonth: string, now = new Date(), monthStartDay: number = 1) {
+  const { daysInMonth, daysPassed, daysRemaining } = getAccountingPeriod(yearMonth, monthStartDay, now);
   return { daysInMonth, daysPassed, daysRemaining };
 }
 
@@ -102,13 +183,15 @@ export function calculateMonthSummary(
   occurrences: RecurringOccurrence[],
   budget: Budget,
   templates: RecurringTemplate[] = [],
-  now = new Date()
+  now = new Date(),
+  monthStartDay: number = 1,
 ): MonthSummary {
-  const { daysInMonth, daysPassed, daysRemaining } = getMonthDaysInfo(yearMonth, now);
+  const period = getAccountingPeriod(yearMonth, monthStartDay, now);
+  const { daysInMonth, daysPassed, daysRemaining } = period;
   const templateMap = new Map(templates.map(t => [t.id, t]));
 
-  // Filter transactions for this YYYY-MM
-  const monthTxs = transactions.filter(t => t.localDate.startsWith(yearMonth));
+  // Filter transactions inside this accounting period
+  const monthTxs = transactions.filter(t => isDateInPeriod(t.localDate, period));
 
   // Confirmed Income
   const confirmedIncome = monthTxs
@@ -136,7 +219,8 @@ export function calculateMonthSummary(
 
   // Filter pending occurrences for scheduled / needs_confirmation / overdue in this month
   const pendingOccurrences = occurrences.filter(
-    o => o.scheduledDate.startsWith(yearMonth) && (o.status === 'scheduled' || o.status === 'needs_confirmation' || o.status === 'overdue')
+    o => isDateInPeriod(o.scheduledDate, period)
+      && (o.status === 'scheduled' || o.status === 'needs_confirmation' || o.status === 'overdue')
   );
 
   // Scheduled Income (recurring items with template.type === 'income')
@@ -202,14 +286,19 @@ export function calculateMonthSummary(
   let forecastAverageDailyVariable = 0;
   
   if (daysPassed >= 3) {
-    const endDay = Math.min(daysInMonth, daysPassed);
-    const startDay = Math.max(1, endDay - 13);
-    const recentStart = `${yearMonth}-${String(startDay).padStart(2, '0')}`;
-    const recentEnd = `${yearMonth}-${String(endDay).padStart(2, '0')}`;
+    // Recent 14-day window measured from the period start, not the calendar month.
+    const endOffset = Math.min(daysInMonth, daysPassed);
+    const startOffset = Math.max(1, endOffset - 13);
+    const dayFromPeriodStart = (offset: number) => {
+      const [year, month, day] = period.startDate.split('-').map(Number);
+      return getLocalDateString(new Date(year, month - 1, day + offset - 1));
+    };
+    const recentStart = dayFromPeriodStart(startOffset);
+    const recentEnd = dayFromPeriodStart(endOffset);
     const recentVariableSpend = variableTxs
       .filter(transaction => transaction.localDate >= recentStart && transaction.localDate <= recentEnd)
       .reduce((sum, transaction) => sum + Math.round(transaction.amount), 0);
-    const observedDays = endDay - startDay + 1;
+    const observedDays = endOffset - startOffset + 1;
     forecastAverageDailyVariable = Math.round(recentVariableSpend / observedDays);
     
     forecastVariableSpend = confirmedVariableExpenses + Math.round(forecastAverageDailyVariable * (daysRemaining - 1));
@@ -269,11 +358,12 @@ export function getCategoryBreakdown(
   yearMonth: string,
   transactions: Transaction[],
   categories: Record<string, { name: string; color: string; icon: string; type: Transaction['type'] }>,
-  options: { variableOnly?: boolean } = {},
+  options: { variableOnly?: boolean; monthStartDay?: number } = {},
 ) {
+  const period = getAccountingPeriod(yearMonth, options.monthStartDay ?? 1);
   const expenses = transactions.filter(
     t => t.type === 'expense'
-      && t.localDate.startsWith(yearMonth)
+      && isDateInPeriod(t.localDate, period)
       && (!options.variableOnly || !t.recurringTemplateId)
   );
   

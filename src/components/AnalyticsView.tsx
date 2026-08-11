@@ -14,13 +14,20 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { Sparkles, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-react';
-import { MonthSummary, formatKRW } from '../utils/calculations';
+import {
+  AccountingPeriod,
+  MonthSummary,
+  formatKRW,
+  getLocalDateString,
+  isDateInPeriod,
+} from '../utils/calculations';
 import { Transaction, Category, AIFeedbackResult } from '../types';
 import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
+  period: AccountingPeriod;
   transactions: Transaction[];
   categories: Category[];
   aiInsightsEnabled?: boolean;
@@ -28,6 +35,7 @@ interface AnalyticsViewProps {
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   summary,
+  period,
   transactions,
   categories,
   aiInsightsEnabled = true,
@@ -47,7 +55,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   // 2. Allowance category breakdown (fixed recurring expenses stay separate)
   const categoryMap: Record<string, number> = {};
   transactions
-    .filter(t => t.type === 'expense' && !t.recurringTemplateId && t.localDate.startsWith(summary.yearMonth))
+    .filter(t => t.type === 'expense' && !t.recurringTemplateId && isDateInPeriod(t.localDate, period))
     .forEach(t => {
       const categoryId = catMap.get(t.categoryId)?.type === 'expense' ? t.categoryId : '__needs_review_expense';
       categoryMap[categoryId] = (categoryMap[categoryId] || 0) + t.amount;
@@ -62,13 +70,15 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     };
   });
 
-  // 3. Cumulative daily allowance spend vs allowance limit
-  const daysInMonth = summary.daysInMonth;
+  // 3. Cumulative daily allowance spend vs allowance limit, walked across the
+  // accounting period so a payday cycle spanning two calendar months still lines up.
   const cumulativeData: { day: string; spend: number; limit: number }[] = [];
   let runningTotal = 0;
+  const [periodStartYear, periodStartMonth, periodStartDay] = period.startDate.split('-').map(Number);
 
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dayStr = `${summary.yearMonth}-${String(d).padStart(2, '0')}`;
+  for (let offset = 0; offset < period.daysInMonth; offset++) {
+    const dayDate = new Date(periodStartYear, periodStartMonth - 1, periodStartDay + offset);
+    const dayStr = getLocalDateString(dayDate);
     const daySpend = transactions
       .filter(t => t.type === 'expense' && !t.recurringTemplateId && t.localDate === dayStr)
       .reduce((sum, t) => sum + t.amount, 0);
@@ -76,7 +86,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     runningTotal += daySpend;
 
     cumulativeData.push({
-      day: `${d}일`,
+      day: `${dayDate.getDate()}일`,
       spend: runningTotal,
       limit: summary.allowanceLimit,
     });
@@ -136,7 +146,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-bold text-white">지출 브레이크 AI 맞춤 리포트</h2>
-              <p className="text-[11px] text-slate-400">수치 원본에 기반한 절약 및 위험 분석</p>
+              <p className="text-xs text-slate-400">수치 원본에 기반한 절약 및 위험 분석</p>
             </div>
           </div>
 
@@ -198,7 +208,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
           </div>
         ) : (
-          <div className="text-center py-6 text-xs text-slate-500">
+          <div className="text-center py-6 text-xs text-slate-400">
             {isLoadingFeedback ? 'AI 리포트를 생성하는 중입니다...' : 'AI 분석을 불러오는 중...'}
           </div>
         )}
@@ -226,7 +236,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
         <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 용돈 사용 비중</h3>
         {categoryPieData.length === 0 ? (
-          <div className="text-center py-10 text-xs text-slate-500">지출 기록이 없습니다.</div>
+          <div className="text-center py-10 text-xs text-slate-400">지출 기록이 없습니다.</div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
             <div className="h-48 w-full">

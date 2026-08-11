@@ -1,7 +1,8 @@
 import { Transaction } from '../types';
-import { getLocalDateString } from './calculations';
+import { AccountingPeriod, getLocalDateString, isDateInPeriod } from './calculations';
 
-export type HistoryPeriod = 'all' | 'today' | '7days' | '30days';
+/** `period` follows the app-wide accounting period; the rest are rolling windows. */
+export type HistoryPeriod = 'period' | 'all' | 'today' | '7days' | '30days';
 
 function subtractLocalDays(date: Date, days: number): string {
   const result = new Date(date);
@@ -14,8 +15,12 @@ export function isTransactionInPeriod(
   transaction: Transaction,
   period: HistoryPeriod,
   today = new Date(),
+  accountingPeriod?: AccountingPeriod,
 ): boolean {
   if (period === 'all') return true;
+  if (period === 'period') {
+    return accountingPeriod ? isDateInPeriod(transaction.localDate, accountingPeriod) : true;
+  }
 
   const end = getLocalDateString(today);
   const start = period === 'today'

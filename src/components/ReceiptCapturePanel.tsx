@@ -192,7 +192,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
     <div className="space-y-4 text-xs">
       <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3 text-indigo-100">
         <div className="flex items-center gap-2 font-bold"><ShieldCheck className="h-4 w-4" /> 영수증은 자동 저장되지 않습니다.</div>
-        <p className="mt-1 text-[11px] text-indigo-200/80">사진은 OCR을 위해 Gemini로 전송되며, 결과를 직접 확인한 뒤 저장합니다.</p>
+        <p className="mt-1 text-xs text-indigo-200/80">사진은 OCR을 위해 Gemini로 전송되며, 결과를 직접 확인한 뒤 저장합니다.</p>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -224,7 +224,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
         <div className="space-y-3 rounded-2xl border border-emerald-500/30 bg-slate-950 p-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <span className="flex items-center gap-2 font-bold text-emerald-300"><CheckCircle2 className="h-4 w-4" /> OCR 결과 확인</span>
-            <span className="text-[10px] text-slate-400">신뢰도 {Math.round(result.confidence * 100)}%</span>
+            <span className="text-xs text-slate-400">신뢰도 {Math.round(result.confidence * 100)}%</span>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -235,7 +235,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
               <input type="number" inputMode="numeric" value={amount} onChange={event => setAmount(Number(event.target.value))} className="w-full rounded-lg border border-slate-800 bg-slate-900 p-2 font-bold text-rose-300" />
             </label>
           </div>
-          {amount > 0 && <p className="-mt-2 text-right text-[11px] text-slate-500">{formatKRW(amount)}</p>}
+          {amount > 0 && <p className="-mt-2 text-right text-xs text-slate-400">{formatKRW(amount)}</p>}
 
           <label className="block space-y-1 text-slate-400">사용처
             <input value={merchant} onChange={event => setMerchant(event.target.value)} className="w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white" />
@@ -285,12 +285,12 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
                     onChange={event => setResult({ ...result, lineItems: result.lineItems.map((candidate, itemIndex) => itemIndex === index ? { ...candidate, amount: Math.max(0, Math.round(Number(event.target.value) || 0)) } : candidate) })}
                     className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-right text-slate-200"
                   />
-                  <button type="button" aria-label={`구매 항목 ${index + 1} 삭제`} onClick={() => setResult({ ...result, lineItems: result.lineItems.filter((_, itemIndex) => itemIndex !== index) })} className="text-slate-500 hover:text-rose-300"><Trash2 className="h-4 w-4" /></button>
+                  <button type="button" aria-label={`구매 항목 ${index + 1} 삭제`} onClick={() => setResult({ ...result, lineItems: result.lineItems.filter((_, itemIndex) => itemIndex !== index) })} className="text-slate-400 hover:text-rose-300"><Trash2 className="h-4 w-4" /></button>
                 </div>
               ))}
-              {result.lineItems.length < 50 && <button type="button" onClick={() => setResult({ ...result, lineItems: [...result.lineItems, { name: '', amount: 0 }] })} className="flex items-center gap-1 text-[11px] font-bold text-indigo-300"><Plus className="h-3.5 w-3.5" />품목 추가</button>}
+              {result.lineItems.length < 50 && <button type="button" onClick={() => setResult({ ...result, lineItems: [...result.lineItems, { name: '', amount: 0 }] })} className="flex items-center gap-1 text-xs font-bold text-indigo-300"><Plus className="h-3.5 w-3.5" />품목 추가</button>}
               {result.lineItems.some(item => item.amount > 0) && (
-                <button type="button" onClick={() => setAmount(result.lineItems.reduce((sum, item) => sum + Math.max(0, Number(item.amount) || 0), 0))} className="text-[11px] font-bold text-emerald-300">
+                <button type="button" onClick={() => setAmount(result.lineItems.reduce((sum, item) => sum + Math.max(0, Number(item.amount) || 0), 0))} className="text-xs font-bold text-emerald-300">
                   품목 합계 {formatKRW(result.lineItems.reduce((sum, item) => sum + Math.max(0, Number(item.amount) || 0), 0))}를 총액으로 적용
                 </button>
               )}
@@ -307,7 +307,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
         </div>
       )}
 
-      {!prepared && <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-500"><Camera className="mx-auto mb-2 h-8 w-8" /><p>구겨진 영수증은 펴고, 그림자가 적게 촬영하면 인식률이 좋아집니다.</p></div>}
+      {!prepared && <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-400"><Camera className="mx-auto mb-2 h-8 w-8" /><p>구겨진 영수증은 펴고, 그림자가 적게 촬영하면 인식률이 좋아집니다.</p></div>}
     </div>
   );
 };

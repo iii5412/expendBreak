@@ -5,7 +5,6 @@ import {
   Plus,
   Trash2,
   Edit2,
-  Check,
   X,
   Wallet,
   ArrowRightLeft,
@@ -17,9 +16,14 @@ import {
 import { BankAccount, PaymentCard, Transaction } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { calculateMonthlyCardSettlementSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
+import { useConfirm, useToast } from './ui/FeedbackProvider';
+import { Modal } from './ui/Modal';
+import { AmountInput } from './ui/AmountInput';
+import { formatAmountInput, parseAmountInput } from '../utils/amount';
 
 interface AccountsViewProps {
   currentYM: string;
+  monthStartDay: number;
   transactions: Transaction[];
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
@@ -45,6 +49,7 @@ const CARD_COMPANIES = [
 
 export const AccountsView: React.FC<AccountsViewProps> = ({
   currentYM,
+  monthStartDay,
   transactions,
   bankAccounts,
   paymentCards,
@@ -56,6 +61,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   onUpdatePaymentCard,
   onDeletePaymentCard,
 }) => {
+  const { showToast } = useToast();
+  const confirm = useConfirm();
   const [activeTab, setActiveTab] = useState<'accounts' | 'cards'>('accounts');
 
   // Account Modal State
@@ -68,8 +75,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [accBalance, setAccBalance] = useState<number>(0);
   const [accBalanceAsOf, setAccBalanceAsOf] = useState(new Date().toISOString().slice(0, 10));
   const [accMemo, setAccMemo] = useState('');
-  const [copyToast, setCopyToast] = useState('');
-  const [balanceUndo, setBalanceUndo] = useState<{ id: string; balance: number; balanceAsOf?: string } | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
 
   // Card Modal State
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
@@ -80,6 +86,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [cardLinkedAccountId, setCardLinkedAccountId] = useState<string>('');
   const [cardBillingDay, setCardBillingDay] = useState<number>(25);
   const [cardMemo, setCardMemo] = useState('');
+  const [cardError, setCardError] = useState<string | null>(null);
   const [cardPaymentMonth, setCardPaymentMonth] = useState(currentYM);
   const [monthlyAmountDrafts, setMonthlyAmountDrafts] = useState<Record<string, string>>({});
 
@@ -109,10 +116,17 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
   const handleSaveAccountSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!accName.trim() || !accNumber.trim()) {
-      alert('계좌 별칭과 계좌번호를 입력해주세요.');
+    if (!accName.trim()) {
+      setAccountError('계좌 별칭을 입력해 주세요.');
+      document.getElementById('account-name-input')?.focus();
       return;
     }
+    if (!accNumber.trim()) {
+      setAccountError('계좌번호를 입력해 주세요.');
+      document.getElementById('account-number-input')?.focus();
+      return;
+    }
+    setAccountError(null);
 
     if (editingAccountId) {
       const previous = bankAccounts.find(account => account.id === editingAccountId);
@@ -126,8 +140,20 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         memo: accMemo,
       });
       if (previous && previous.balance !== accBalance) {
-        setBalanceUndo({ id: previous.id, balance: previous.balance, balanceAsOf: previous.balanceAsOf });
-        window.setTimeout(() => setBalanceUndo(current => current?.id === previous.id ? null : current), 5000);
+        showToast({
+          message: '잔액을 수정했습니다.',
+          description: `${previous.accountName}: ${formatKRW(previous.balance)} → ${formatKRW(accBalance)}`,
+          tone: 'success',
+          action: {
+            label: '실행 취소',
+            onAction: () => onUpdateBankAccount(previous.id, {
+              balance: previous.balance,
+              balanceAsOf: previous.balanceAsOf,
+            }),
+          },
+        });
+      } else {
+        showToast({ message: '계좌 정보를 저장했습니다.', tone: 'success' });
       }
     } else {
       onSaveBankAccount({
@@ -139,6 +165,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         balanceAsOf: accBalanceAsOf,
         memo: accMemo,
       });
+      showToast({ message: `'${accName}' 계좌를 추가했습니다.`, tone: 'success' });
     }
     setIsAccountModalOpen(false);
   };
@@ -168,9 +195,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const handleSaveCardSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!cardName.trim()) {
-      alert('카드명을 입력해주세요.');
+      setCardError('카드명을 입력해 주세요.');
+      document.getElementById('card-name-input')?.focus();
       return;
     }
+    setCardError(null);
 
     if (editingCardId) {
       onUpdatePaymentCard(editingCardId, {
@@ -191,6 +220,10 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         memo: cardMemo,
       });
     }
+    showToast({
+      message: editingCardId ? '카드 정보를 저장했습니다.' : `'${cardName}' 카드를 추가했습니다.`,
+      tone: 'success',
+    });
     setIsCardModalOpen(false);
   };
 
@@ -199,9 +232,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const selectedMonthSettlement = useMemo(
     () => cardPaymentMonth === currentYM
       ? cardSettlementSummary
-      : calculateMonthlyCardSettlementSummary(cardPaymentMonth, transactions, paymentCards),
-    [cardPaymentMonth, currentYM, cardSettlementSummary, transactions, paymentCards],
+      : calculateMonthlyCardSettlementSummary(cardPaymentMonth, transactions, paymentCards, monthStartDay),
+    [cardPaymentMonth, currentYM, cardSettlementSummary, transactions, paymentCards, monthStartDay],
   );
+
+  // Follow the app-wide period selector; the card month can still be changed here.
+  useEffect(() => {
+    setCardPaymentMonth(currentYM);
+  }, [currentYM]);
 
   useEffect(() => {
     setMonthlyAmountDrafts(Object.fromEntries(selectedMonthSettlement.cards.map(card => [card.cardId, String(card.amount)])));
@@ -219,7 +257,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const saveMonthlyCardAmount = (card: PaymentCard) => {
     const amount = Math.round(Number(monthlyAmountDrafts[card.id]));
     if (!Number.isFinite(amount) || amount < 0) {
-      alert('월 카드 결제금액은 0원 이상으로 입력해 주세요.');
+      showToast({
+        message: '월 카드 결제금액을 확인해 주세요.',
+        description: '0원 이상의 숫자만 입력할 수 있습니다.',
+        tone: 'error',
+      });
       return;
     }
     onUpdatePaymentCard(card.id, {
@@ -227,6 +269,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         ...(card.monthlyPaymentAmounts || {}),
         [cardPaymentMonth]: amount,
       },
+    });
+    showToast({
+      message: `${card.cardName} ${cardPaymentMonth} 결제금액을 저장했습니다.`,
+      description: formatKRW(amount),
+      tone: 'success',
     });
   };
 
@@ -239,10 +286,15 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const copyText = async (text: string, message: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopyToast(message);
-      window.setTimeout(() => setCopyToast(''), 2200);
+      showToast({ message, tone: 'success', durationMs: 2200 });
     } catch {
-      window.prompt('아래 내용을 직접 복사해 주세요.', text);
+      // Clipboard access can be blocked; show the value so it can be copied by hand.
+      showToast({
+        message: '자동 복사를 사용할 수 없습니다.',
+        description: `아래 내용을 길게 눌러 직접 복사해 주세요: ${text}`,
+        tone: 'warning',
+        durationMs: 12000,
+      });
     }
   };
 
@@ -298,11 +350,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           />
         </label>
         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <div className="text-[10px] text-slate-500">연결 계좌 고정 출금</div>
+          <div className="text-xs text-slate-400">연결 계좌 고정 출금</div>
           <div className="mt-1 text-base font-bold text-rose-300">{formatKRW(selectedMonthSettlement.linkedAccountTotal)}</div>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-          <div className="text-[10px] text-slate-500">출금 계좌 미연결</div>
+          <div className="text-xs text-slate-400">출금 계좌 미연결</div>
           <div className={`mt-1 text-base font-bold ${selectedMonthSettlement.unlinkedAmount > 0 ? 'text-amber-300' : 'text-slate-300'}`}>
             {formatKRW(selectedMonthSettlement.unlinkedAmount)}
           </div>
@@ -320,7 +372,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </div>
             <button
               onClick={() => handleOpenAccountModal()}
-              className="w-full xs:w-auto flex items-center justify-center gap-1.5 bg-rose-500 hover:bg-rose-600 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-rose-950/30 transition-all"
+              className="w-full xs:w-auto flex items-center justify-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-rose-950/30 transition-all"
             >
               <Plus className="w-4 h-4" />
               새 계좌 등록
@@ -330,11 +382,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           {/* List of Accounts */}
           {bankAccounts.length === 0 ? (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-8 text-center space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-500">
+              <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
                 <Wallet className="w-6 h-6" />
               </div>
               <p className="text-sm text-slate-300 font-medium">등록된 은행 계좌가 없습니다.</p>
-              <p className="text-xs text-slate-500 max-w-xs mx-auto">
+              <p className="text-xs text-slate-400 max-w-xs mx-auto">
                 급여 통장, 생활비 계좌 등을 등록해 지출 시 선택하거나 카드의 출금 계좌로 연동해 보세요.
               </p>
               <button
@@ -360,7 +412,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-sm text-white">{acc.accountName}</span>
-                          <span className="text-[10px] font-semibold bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
+                          <span className="text-xs font-semibold bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md border border-slate-700">
                             {acc.bankName}
                           </span>
                         </div>
@@ -378,19 +430,29 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={() => handleOpenAccountModal(acc)}
-                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
                         title="수정"
+                        aria-label={`${acc.accountName} 계좌 수정`}
                       >
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => {
-                          if (confirm(`'${acc.accountName}' 계좌를 삭제하시겠습니까?`)) {
-                            onDeleteBankAccount(acc.id);
-                          }
+                        onClick={async () => {
+                          const accepted = await confirm({
+                            title: '이 계좌를 삭제할까요?',
+                            description: '카드, 정기 항목, 거래에서 사용 중이면 삭제되지 않습니다.',
+                            details: [
+                              { label: '계좌', value: `${acc.bankName} ${acc.accountName}` },
+                              { label: '잔액', value: formatKRW(acc.balance || 0) },
+                            ],
+                            confirmLabel: '삭제',
+                            tone: 'danger',
+                          });
+                          if (accepted) onDeleteBankAccount(acc.id);
                         }}
-                        className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
+                        className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
                         title="삭제"
+                        aria-label={`${acc.accountName} 계좌 삭제`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -399,7 +461,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
                   {acc.memo && (
                     <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 text-xs text-slate-400 flex items-start gap-1.5">
-                      <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
+                      <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
                       <span>{acc.memo}</span>
                     </div>
                   )}
@@ -407,7 +469,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => copyText(acc.accountNumber, `${acc.bankName} ${acc.accountName} 계좌번호를 복사했습니다.`)}
-                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg py-2 text-[11px] font-bold flex items-center justify-center gap-1.5"
+                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg py-2 text-xs font-bold flex items-center justify-center gap-1.5"
                     >
                       <Copy className="w-3.5 h-3.5" /> 계좌번호만 복사
                     </button>
@@ -416,7 +478,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                         `${acc.bankName} ${acc.accountNumber}${acc.accountHolder ? ` ${acc.accountHolder}` : ''}`,
                         `${acc.accountName} 송금정보를 복사했습니다.`,
                       )}
-                      className="bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 rounded-lg py-2 text-[11px] font-bold flex items-center justify-center gap-1.5"
+                      className="bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 rounded-lg py-2 text-xs font-bold flex items-center justify-center gap-1.5"
                     >
                       <Copy className="w-3.5 h-3.5" /> 송금정보 복사
                     </button>
@@ -430,7 +492,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           -{formatKRW(settlementAmountByAccount.get(acc.id) || 0)}
                         </span>
                       </div>
-                      <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+                      <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
                         <span>출금 후 예상잔액</span>
                         <span>{formatKRW((acc.balance || 0) - (settlementAmountByAccount.get(acc.id) || 0))}</span>
                       </div>
@@ -438,9 +500,9 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   )}
 
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                    <span className="text-slate-500">
+                    <span className="text-slate-400">
                       직접 입력 잔액
-                      <span className="block text-[10px] mt-0.5">기준 {acc.balanceAsOf || '미지정'}</span>
+                      <span className="block text-xs mt-0.5">기준 {acc.balanceAsOf || '미지정'}</span>
                     </span>
                     <button
                       onClick={() => handleOpenAccountModal(acc)}
@@ -457,27 +519,6 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         </div>
       )}
 
-      {copyToast && (
-        <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[70] bg-emerald-500 text-slate-950 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2">
-          <Check className="w-4 h-4" /> {copyToast}
-        </div>
-      )}
-
-      {balanceUndo && (
-        <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[70] bg-slate-800 border border-slate-700 text-slate-100 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-3">
-          <span>수동 잔액을 변경했습니다.</span>
-          <button
-            onClick={() => {
-              onUpdateBankAccount(balanceUndo.id, { balance: balanceUndo.balance, balanceAsOf: balanceUndo.balanceAsOf });
-              setBalanceUndo(null);
-            }}
-            className="text-emerald-300 hover:text-emerald-200"
-          >
-            실행 취소
-          </button>
-        </div>
-      )}
-
       {/* CARDS TAB */}
       {activeTab === 'cards' && (
         <div className="space-y-4">
@@ -488,7 +529,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             </div>
             <button
               onClick={() => handleOpenCardModal()}
-              className="w-full xs:w-auto flex items-center justify-center gap-1.5 bg-rose-500 hover:bg-rose-600 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-rose-950/30 transition-all"
+              className="w-full xs:w-auto flex items-center justify-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-rose-950/30 transition-all"
             >
               <Plus className="w-4 h-4" />
               새 카드 등록
@@ -497,11 +538,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
           {paymentCards.length === 0 ? (
             <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-8 text-center space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-500">
+              <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
                 <CreditCard className="w-6 h-6" />
               </div>
               <p className="text-sm text-slate-300 font-medium">등록된 신용/체크카드가 없습니다.</p>
-              <p className="text-xs text-slate-500 max-w-xs mx-auto">
+              <p className="text-xs text-slate-400 max-w-xs mx-auto">
                 자주 사용하는 카드와 출금 연결 계좌를 등록해 납부 및 지출 기록 시 편리하게 관리하세요.
               </p>
               <button
@@ -532,7 +573,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-sm text-white">{card.cardName}</span>
                             <span
-                              className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
+                              className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${
                                 card.cardType === 'credit'
                                   ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
                                   : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
@@ -550,19 +591,29 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => handleOpenCardModal(card)}
-                          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                          className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
                           title="수정"
+                          aria-label={`${card.cardName} 카드 수정`}
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => {
-                            if (confirm(`'${card.cardName}' 카드를 삭제하시겠습니까?`)) {
-                              onDeletePaymentCard(card.id);
-                            }
+                          onClick={async () => {
+                            const accepted = await confirm({
+                              title: '이 카드를 삭제할까요?',
+                              description: '정기 항목이나 거래에서 사용 중이면 삭제되지 않습니다.',
+                              details: [
+                                { label: '카드', value: `${card.cardCompany} ${card.cardName}` },
+                                { label: '유형', value: card.cardType === 'credit' ? '신용카드' : '체크카드' },
+                              ],
+                              confirmLabel: '삭제',
+                              tone: 'danger',
+                            });
+                            if (accepted) onDeletePaymentCard(card.id);
                           }}
-                          className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
+                          className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
                           title="삭제"
+                          aria-label={`${card.cardName} 카드 삭제`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -580,7 +631,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           {linkedAccount.bankName} ({linkedAccount.accountName})
                         </span>
                       ) : (
-                        <span className="text-slate-500 italic">미지정</span>
+                        <span className="text-slate-400 italic">미지정</span>
                       )}
                     </div>
 
@@ -589,11 +640,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                         <div className="flex items-center justify-between gap-2">
                           <div>
                             <div className="font-bold text-slate-200">{cardPaymentMonth} 카드대금</div>
-                            <div className="mt-0.5 text-[10px] text-slate-500">
+                            <div className="mt-0.5 text-xs text-slate-400">
                               {monthlySettlement.paymentDate || '결제일 미지정'} · 전월 사용 추정 {formatKRW(monthlySettlement.estimatedAmount)}
                             </div>
                           </div>
-                          <span className={`rounded-md border px-2 py-1 text-[10px] font-bold ${
+                          <span className={`rounded-md border px-2 py-1 text-xs font-bold ${
                             monthlySettlement.source === 'confirmed'
                               ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
                               : 'border-amber-500/30 bg-amber-500/15 text-amber-300'
@@ -602,15 +653,19 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           </span>
                         </div>
                         <div className="flex flex-col gap-2 sm:flex-row">
-                          <input
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={monthlyAmountDrafts[card.id] ?? ''}
-                            onChange={event => setMonthlyAmountDrafts(current => ({ ...current, [card.id]: event.target.value }))}
-                            className="min-w-0 flex-1 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 font-bold text-slate-100 focus:border-indigo-500 focus:outline-none"
-                            aria-label={`${card.cardName} ${cardPaymentMonth} 결제금액`}
-                          />
+                          <div className="min-w-0 flex-1">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={formatAmountInput(monthlyAmountDrafts[card.id] ?? '')}
+                              onChange={event => setMonthlyAmountDrafts(current => ({
+                                ...current,
+                                [card.id]: String(parseAmountInput(event.target.value)),
+                              }))}
+                              className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-right font-bold text-slate-100 focus:border-indigo-500 focus:outline-none"
+                              aria-label={`${card.cardName} ${cardPaymentMonth} 결제금액`}
+                            />
+                          </div>
                           <button
                             type="button"
                             onClick={() => saveMonthlyCardAmount(card)}
@@ -623,7 +678,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           <button
                             type="button"
                             onClick={() => useEstimatedMonthlyCardAmount(card)}
-                            className="text-[10px] font-semibold text-slate-400 hover:text-amber-300"
+                            className="text-xs font-semibold text-slate-400 hover:text-amber-300"
                           >
                             저장 금액 삭제하고 전월 사용액 자동 추정 사용
                           </button>
@@ -643,23 +698,34 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       )}
 
       {/* ACCOUNT MODAL */}
-      {isAccountModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 text-slate-100 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+      <Modal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        labelledById="account-modal-title"
+        panelClassName="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 space-y-4 text-slate-100 shadow-2xl"
+      >
+        <>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-bold text-base text-white flex items-center gap-2">
+              <h3 id="account-modal-title" className="font-bold text-base text-white flex items-center gap-2">
                 <Wallet className="w-5 h-5 text-rose-400" />
                 {editingAccountId ? '은행 계좌 정보 수정' : '새 은행 계좌 등록'}
               </h3>
               <button
                 onClick={() => setIsAccountModalOpen(false)}
+                aria-label="계좌 창 닫기"
                 className="text-slate-400 hover:text-white p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveAccountSubmit} className="space-y-3 text-xs">
+            {accountError && (
+              <p role="alert" className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300">
+                {accountError}
+              </p>
+            )}
+
+            <form onSubmit={handleSaveAccountSubmit} className="space-y-3 text-xs" noValidate>
               <div>
                 <label className="block font-medium text-slate-300 mb-1">은행 선택</label>
                 <select
@@ -680,11 +746,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   계좌 별칭 / 이름 <span className="text-rose-400">*</span>
                 </label>
                 <input
+                  id="account-name-input"
                   type="text"
                   placeholder="예: 월급 통장, 주거래 계좌"
                   value={accName}
-                  onChange={(e) => setAccName(e.target.value)}
-                  required
+                  onChange={(e) => {
+                    setAccountError(null);
+                    setAccName(e.target.value);
+                  }}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500"
                 />
               </div>
@@ -694,11 +763,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   계좌번호 <span className="text-rose-400">*</span>
                 </label>
                 <input
+                  id="account-number-input"
                   type="text"
                   placeholder="예: 110-123-456789"
                   value={accNumber}
-                  onChange={(e) => setAccNumber(e.target.value)}
-                  required
+                  onChange={(e) => {
+                    setAccountError(null);
+                    setAccNumber(e.target.value);
+                  }}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 font-mono"
                 />
               </div>
@@ -717,15 +789,12 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-slate-300 mb-1">직접 입력 잔액 (KRW)</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
+                  <AmountInput
+                    value={accBalance || 0}
+                    onChange={setAccBalance}
                     placeholder="0"
-                    value={accBalance || ''}
-                    onChange={(e) => setAccBalance(Number(e.target.value))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-emerald-300 font-bold placeholder-slate-600 focus:outline-none focus:border-rose-500"
+                    className="text-emerald-300"
                   />
-                  <p className="text-[10px] text-slate-500 mt-1">{formatKRW(accBalance || 0)}</p>
                   <div className="grid grid-cols-4 gap-1 mt-2">
                     {[
                       { label: '-5만', value: -50000 },
@@ -737,7 +806,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                         key={adjustment.label}
                         type="button"
                         onClick={() => setAccBalance(current => current + adjustment.value)}
-                        className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-[10px] font-bold text-slate-300"
+                        className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-xs font-bold text-slate-300"
                       >
                         {adjustment.label}
                       </button>
@@ -776,44 +845,57 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="bg-rose-500 hover:bg-rose-600 text-white font-bold px-4 py-2 rounded-xl shadow-lg transition-colors"
+                  className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-4 py-2 rounded-xl shadow-lg transition-colors"
                 >
                   저장
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+        </>
+      </Modal>
 
       {/* CARD MODAL */}
-      {isCardModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 text-slate-100 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+      <Modal
+        isOpen={isCardModalOpen}
+        onClose={() => setIsCardModalOpen(false)}
+        labelledById="card-modal-title"
+        panelClassName="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 space-y-4 text-slate-100 shadow-2xl"
+      >
+        <>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-bold text-base text-white flex items-center gap-2">
+              <h3 id="card-modal-title" className="font-bold text-base text-white flex items-center gap-2">
                 <CreditCard className="w-5 h-5 text-indigo-400" />
                 {editingCardId ? '카드 정보 수정' : '새 카드 등록'}
               </h3>
               <button
                 onClick={() => setIsCardModalOpen(false)}
+                aria-label="카드 창 닫기"
                 className="text-slate-400 hover:text-white p-1 rounded-lg"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveCardSubmit} className="space-y-3 text-xs">
+            {cardError && (
+              <p role="alert" className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300">
+                {cardError}
+              </p>
+            )}
+
+            <form onSubmit={handleSaveCardSubmit} className="space-y-3 text-xs" noValidate>
               <div>
-                <label className="block font-medium text-slate-300 mb-1">
+                <label htmlFor="card-name-input" className="block font-medium text-slate-300 mb-1">
                   카드명 <span className="text-rose-400">*</span>
                 </label>
                 <input
+                  id="card-name-input"
                   type="text"
                   placeholder="예: 신한 딥드림 카드, 삼성 iD 카드"
                   value={cardName}
-                  onChange={(e) => setCardName(e.target.value)}
-                  required
+                  onChange={(e) => {
+                    setCardError(null);
+                    setCardName(e.target.value);
+                  }}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                 />
               </div>
@@ -864,7 +946,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   ))}
                 </select>
                 {bankAccounts.length === 0 && (
-                  <p className="text-[11px] text-amber-400/90 mt-1 flex items-center gap-1">
+                  <p className="text-xs text-amber-400/90 mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3 h-3" />
                     등록된 계좌가 없습니다. 은행 계좌 메뉴에서 먼저 계좌를 등록해 주세요.
                   </p>
@@ -914,9 +996,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+        </>
+      </Modal>
     </div>
   );
 };

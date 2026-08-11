@@ -13,6 +13,7 @@ import {
   Lock,
   Sparkles,
   CreditCard,
+  HelpCircle,
 } from 'lucide-react';
 import { MonthSummary, formatKRW } from '../utils/calculations';
 import { RecurringOccurrence, Category, BankAccount } from '../types';
@@ -29,7 +30,9 @@ interface DashboardViewProps {
   onOpenAddModal: () => void;
   onNavigateTab: (tab: 'history' | 'analytics' | 'management' | 'accounts', subTab?: string) => void;
   onConfirmOccurrence: (occId: string) => void;
-  onApplyPresetOnboarding: () => void;
+  /** Only shown until the user finishes or skips setup. */
+  showSetupPrompt: boolean;
+  onStartSetup: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -43,7 +46,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenAddModal,
   onNavigateTab,
   onConfirmOccurrence,
-  onApplyPresetOnboarding,
+  showSetupPrompt,
+  onStartSetup,
 }) => {
   const getAlertBadgeProps = () => {
     switch (summary.alertLevel) {
@@ -129,7 +133,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <Zap className="w-4 h-4 text-amber-400" />
               오늘 안전 용돈
             </span>
-            <span className="text-[11px] text-slate-500">(남은 용돈 / 남은 {summary.daysRemaining}일)</span>
+            <span className="text-xs text-slate-400">(남은 용돈 / 남은 {summary.daysRemaining}일)</span>
           </div>
           <div className="flex items-baseline justify-between">
             <div className="text-3xl font-extrabold text-white tracking-tight">
@@ -137,7 +141,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
             <button
               onClick={onOpenAddModal}
-              className="bg-rose-500 hover:bg-rose-600 text-white font-semibold text-xs px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1 shadow-md shadow-rose-950/30"
+              className="bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1 shadow-md shadow-rose-950/30"
             >
               + 지출 기록
             </button>
@@ -154,19 +158,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-slate-400">이번 달 용돈 사용</span>
             <div className="text-slate-200 font-semibold">
               <span className="text-white font-bold">{formatKRW(summary.confirmedVariableExpenses)}</span>
-              <span className="text-slate-500"> / 용돈 {formatKRW(summary.allowanceLimit)}</span>
+              <span className="text-slate-400"> / 용돈 {formatKRW(summary.allowanceLimit)}</span>
               <span className="ml-2 font-bold text-rose-400">({summary.budgetUsagePercent}%)</span>
             </div>
           </div>
 
-          <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-800">
+          <div
+            role="progressbar"
+            aria-valuenow={summary.budgetUsagePercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`이번 달 용돈 사용률 ${summary.budgetUsagePercent}%`}
+            className="w-full h-3 bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-800"
+          >
             <div
               className={`h-full rounded-full transition-all duration-500 ${badgeProps.barBg}`}
               style={{ width: `${Math.min(100, summary.budgetUsagePercent)}%` }}
             />
           </div>
 
-          <p className="text-[11px] text-slate-400 flex items-center justify-between">
+          <p className="text-xs text-slate-400 flex items-center justify-between">
             <span>남은 용돈: {formatKRW(summary.remainingAllowance)}</span>
             <span>{badgeProps.desc}</span>
           </p>
@@ -180,7 +191,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
             </div>
             <div className="font-bold text-sm text-emerald-400">{formatKRW(summary.totalIncome)}</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-xs text-slate-400 mt-0.5">
               입금 {formatKRW(summary.confirmedIncome)} | 정기 등록 {formatKRW(summary.scheduledIncome)}
             </div>
           </div>
@@ -193,7 +204,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="font-bold text-sm text-indigo-300">
               {formatKRW(summary.totalExpectedFixedExpenses)}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-xs text-slate-400 mt-0.5">
               납부 {formatKRW(summary.confirmedFixedExpenses)} | 예정 {formatKRW(summary.remainingScheduledExpenses)}
             </div>
           </div>
@@ -210,7 +221,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className={`font-bold text-sm ${summary.plannedSavings >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
               {formatKRW(summary.plannedSavings >= 0 ? summary.plannedSavings : summary.allowanceOverCapacity)}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
+            <div className="text-xs text-slate-400 mt-0.5">
               수입 - 고정비 - 용돈 한도
             </div>
           </div>
@@ -227,12 +238,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
               <div>
                 <h3 className="text-sm font-bold text-slate-100">카드 사용과 다음 결제</h3>
-                <p className="text-[10px] text-slate-500">구매 시 소비 반영 · 결제일에는 계좌 정산</p>
+                <p className="text-xs text-slate-400">구매 시 소비 반영 · 결제일에는 계좌 정산</p>
               </div>
             </div>
             <button
               onClick={() => onNavigateTab('accounts')}
-              className="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200"
+              className="text-xs font-semibold text-indigo-300 hover:text-indigo-200"
             >
               카드 설정
             </button>
@@ -240,25 +251,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3">
-              <div className="text-[10px] text-slate-500">이번 달 계좌 고정 출금</div>
+              <div className="text-xs text-slate-400">이번 달 계좌 고정 출금</div>
               <div className="mt-1 text-base font-bold text-rose-300">
                 {formatKRW(cardSettlementSummary.linkedAccountTotal)}
               </div>
-              <div className="mt-0.5 text-[10px] text-slate-500">신용카드 결제계좌 자동 반영</div>
+              <div className="mt-0.5 text-xs text-slate-400">신용카드 결제계좌 자동 반영</div>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-              <div className="text-[10px] text-slate-500">이번 달 전체 카드 사용</div>
+              <div className="text-xs text-slate-400">이번 달 전체 카드 사용</div>
               <div className="mt-1 text-base font-bold text-slate-100">{formatKRW(cardPaymentSummary.totalCardUsage)}</div>
-              <div className="mt-0.5 text-[10px] text-slate-500">
+              <div className="mt-0.5 text-xs text-slate-400">
                 체크카드 {formatKRW(cardPaymentSummary.debitCardUsage)} 포함
               </div>
             </div>
             <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
-              <div className="text-[10px] text-slate-500">다음 달 신용카드 결제 추정</div>
+              <div className="text-xs text-slate-400">다음 달 신용카드 결제 추정</div>
               <div className="mt-1 text-base font-bold text-indigo-300">
                 {formatKRW(cardPaymentSummary.estimatedNextPaymentTotal)}
               </div>
-              <div className="mt-0.5 text-[10px] text-slate-500">이번 달 사용분 기준</div>
+              <div className="mt-0.5 text-xs text-slate-400">이번 달 사용분 기준</div>
             </div>
           </div>
 
@@ -271,14 +282,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="font-bold text-slate-200">{card.cardName}</div>
-                        <div className="mt-0.5 text-[10px] text-slate-500">
+                        <div className="mt-0.5 text-xs text-slate-400">
                           {card.estimatedPaymentDate ? `${card.estimatedPaymentDate} 결제 추정` : '결제일 설정 필요'}
                           {linkedAccount ? ` · ${linkedAccount.accountName} 출금` : ' · 출금 계좌 미지정'}
                         </div>
                       </div>
                       <div className="font-bold text-indigo-300">{formatKRW(card.totalAmount)}</div>
                     </div>
-                    <div className="mt-2 flex items-center justify-between border-t border-slate-800/70 pt-2 text-[10px] text-slate-500">
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-800/70 pt-2 text-xs text-slate-400">
                       <span>용돈 사용 {formatKRW(card.allowanceAmount)}</span>
                       <span>카드 결제 고정비 {formatKRW(card.fixedAmount)}</span>
                     </div>
@@ -287,8 +298,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               })}
             </div>
           ) : (
-            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-center text-[11px] text-slate-500">
-              이번 달 등록된 신용카드 사용이 없습니다.
+            <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-center text-xs text-slate-400">
+              <p>이번 기간에 등록된 신용카드 사용이 없습니다.</p>
+              <button
+                onClick={() => onNavigateTab('accounts')}
+                className="min-h-9 rounded-lg border border-slate-700 bg-slate-900 px-3 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                카드 등록하기
+              </button>
             </div>
           )}
 
@@ -304,14 +321,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {formatKRW(projectedLinkedAccountBalance)}
                 </span>
               </div>
-              <div className="mt-1 text-[10px] text-slate-500">
+              <div className="mt-1 text-xs text-slate-400">
                 입력된 수동잔액 {formatKRW(linkedAccountBalance)} - 결제 추정 {formatKRW(linkedCardPaymentTotal)}
               </div>
             </div>
           )}
 
           {(cardPaymentSummary.unassignedCardUsage > 0 || unlinkedCreditPayment > 0) && (
-            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5 text-[10px] leading-relaxed text-amber-200">
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs leading-relaxed text-amber-200">
               {cardPaymentSummary.unassignedCardUsage > 0 && (
                 <span>카드 미지정 거래 {formatKRW(cardPaymentSummary.unassignedCardUsage)}은 신용·체크 구분과 결제일을 확인할 수 없습니다. </span>
               )}
@@ -321,10 +338,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           )}
 
-          <p className="text-[10px] leading-relaxed text-slate-500">
-            카드 이용기간 마감일 정보가 없어 이번 달 사용분이 다음 달 결제된다고 가정한 추정치입니다.
-            월별 카드대금은 연결 계좌의 고정 출금에는 반영하지만, 구매 금액이 이미 지출에 포함되어 있어 지출 총액에는 다시 합산하지 않습니다.
-          </p>
+          {/* Long explanation folds away: it matters once, not on every visit. */}
+          <details className="group rounded-xl border border-slate-800 bg-slate-950/40">
+            <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-300 marker:content-['']">
+              <HelpCircle className="h-3.5 w-3.5 text-slate-400" />
+              <span>이 금액은 어떻게 계산하나요?</span>
+            </summary>
+            <p className="border-t border-slate-800 px-3 py-2 text-xs leading-relaxed text-slate-400">
+              카드 이용기간 마감일 정보가 없어 이번 달 사용분이 다음 달 결제된다고 가정한 추정치입니다.
+              월별 카드대금은 연결 계좌의 고정 출금에는 반영하지만, 구매 금액이 이미 지출에 포함되어 있어 지출 총액에는 다시 합산하지 않습니다.
+            </p>
+          </details>
         </div>
       )}
 
@@ -343,7 +367,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 : `현재 설정이면 ${formatKRW(summary.allowanceOverCapacity)} 부족`}
           </div>
           {summary.forecastVariableSpend !== null && (
-            <p className="text-[11px] text-slate-400 mt-0.5">
+            <p className="text-xs text-slate-400 mt-0.5">
               용돈 한도 대비{' '}
               {summary.forecastVariableSpend > summary.allowanceLimit ? (
                 <span className="text-rose-400 font-semibold">
@@ -420,8 +444,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {upcomingOccurrences.length === 0 ? (
-          <div className="text-center py-6 text-xs text-slate-500 bg-slate-950/40 rounded-lg border border-slate-800/60">
-            이번 달 남은 정기 지출 및 수입 일정이 없습니다.
+          <div className="space-y-2 rounded-lg border border-slate-800/60 bg-slate-950/40 py-6 text-center text-xs text-slate-400">
+            <p>이 기간에 남은 정기 지출 및 수입 일정이 없습니다.</p>
+            <button
+              onClick={() => onNavigateTab('management', 'recurring')}
+              className="min-h-9 rounded-lg border border-slate-700 bg-slate-900 px-3 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+            >
+              정기 항목 추가
+            </button>
           </div>
         ) : (
           <div className="space-y-2">
@@ -433,7 +463,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-slate-200">{occ.scheduledDate}</span>
-                    <span className="text-[10px] font-semibold bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700">
+                    <span className="text-xs font-semibold bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700">
                       {occ.status === 'needs_confirmation' ? '확인 필요' : '예정'}
                     </span>
                   </div>
@@ -453,25 +483,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         )}
       </div>
 
-      {/* 5. Salaried Worker Onboarding Helper */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border border-slate-700/60 rounded-xl p-4 flex items-center justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-1.5 text-amber-300 text-xs font-bold">
-            <Sparkles className="w-4 h-4" />
-            <span>월급 생활자 추천 초기 설정</span>
+      {/* 5. First-run setup. Hidden once recurring items exist or setup is dismissed. */}
+      {showSetupPrompt && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-700/60 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+              <Sparkles className="h-4 w-4" />
+              <span>초기 설정이 아직 없습니다</span>
+            </div>
+            <p className="text-xs text-slate-300">
+              월 수입, 고정비, 용돈 한도만 입력하면 오늘 안전 용돈이 바로 계산됩니다.
+            </p>
           </div>
-          <p className="text-xs text-slate-300">
-            월급(350만) + 배우자 생활비(120만) + 주거관리비(38만) 예시 구성을 1초 만에 불러옵니다.
-          </p>
-        </div>
 
-        <button
-          onClick={onApplyPresetOnboarding}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs px-3.5 py-2.5 rounded-lg whitespace-nowrap transition-colors shadow-md shadow-amber-950/20"
-        >
-          예시 적용하기
-        </button>
-      </div>
+          <button
+            onClick={onStartSetup}
+            className="min-h-11 whitespace-nowrap rounded-lg bg-amber-500 px-3.5 text-xs font-bold text-slate-950 shadow-md shadow-amber-950/20 transition-colors hover:bg-amber-600"
+          >
+            설정 시작
+          </button>
+        </div>
+      )}
     </div>
   );
 };

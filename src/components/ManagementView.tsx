@@ -23,6 +23,7 @@ import {
   Wallet,
   CheckCheck,
   ArrowRight,
+  CalendarRange,
 } from 'lucide-react';
 import {
   RecurringTemplate,
@@ -35,9 +36,21 @@ import {
   PaymentCard,
   PaymentMethodType,
 } from '../types';
-import { formatKRW, MonthSummary } from '../utils/calculations';
+import {
+  formatKRW,
+  getAccountingPeriod,
+  getCurrentYearMonth,
+  MonthSummary,
+  normalizeMonthStartDay,
+} from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
+import { useConfirm, useToast } from './ui/FeedbackProvider';
+import { Modal } from './ui/Modal';
+import { AmountInput } from './ui/AmountInput';
+import { parseAmountInput } from '../utils/amount';
+import { IDLE_LOCK_OPTIONS, describeIdleLockMinutes, normalizeIdleLockMinutes } from '../utils/lockPolicy';
+import { InstallAppCard } from './InstallAppCard';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -117,6 +130,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   onResetData,
   onRepairClassificationIssues,
 }) => {
+  const { showToast } = useToast();
+  const confirm = useConfirm();
   const [subTab, setSubTab] = useState<'recurring' | 'budget' | 'category' | 'settings'>(
     (initialSubTab as any) || 'recurring'
   );
@@ -147,7 +162,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   const [recCardId, setRecCardId] = useState<string>('');
 
   // Toast notification for copy action
-  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [recurringError, setRecurringError] = useState<string | null>(null);
 
   // Modal State for Budget Edit
   const [tempTotalBudget, setTempTotalBudget] = useState(budget.totalLimit.toString());
@@ -168,12 +183,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   const [aiCatSuggestions, setAiCatSuggestions] = useState<any[]>([]);
   const [isAiCatLoading, setIsAiCatLoading] = useState(false);
 
-  const triggerToast = (msg: string) => {
-    setCopyToast(msg);
-    setTimeout(() => {
-      setCopyToast(null);
-    }, 2500);
-  };
+  const triggerToast = (msg: string) => showToast({ message: msg, tone: 'success' });
+
+  const activeMonthStartDay = normalizeMonthStartDay(userProfile.monthStartDay);
+  const currentPeriodPreview = getAccountingPeriod(
+    getCurrentYearMonth(activeMonthStartDay),
+    activeMonthStartDay,
+  );
 
   const copyToClipboard = (text: string, toastMessage: string) => {
     navigator.clipboard.writeText(text);
@@ -244,14 +260,23 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     const dayNum = parseInt(recDay, 10);
 
     const selectedCategory = categories.find(category => category.id === recCategoryId);
-    if (!recName || isNaN(amountNum) || amountNum <= 0 || isNaN(dayNum) || dayNum < 1 || dayNum > 31) {
-      alert('올바른 명칭, 금액, 날짜를 입력해주세요.');
+    if (!recName.trim()) {
+      setRecurringError('항목 명칭을 입력해 주세요.');
+      return;
+    }
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setRecurringError('1원 이상의 정수 금액을 입력해 주세요.');
+      return;
+    }
+    if (isNaN(dayNum) || dayNum < 1 || dayNum > 31) {
+      setRecurringError('결제일은 1일부터 31일 사이로 입력해 주세요.');
       return;
     }
     if (!selectedCategory || selectedCategory.type !== recType) {
-      alert(`${recType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      setRecurringError(`${recType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
+    setRecurringError(null);
 
     const payload = {
       type: recType,
@@ -278,20 +303,36 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
     if (editingTemplateId && onUpdateRecurringTemplate) {
       onUpdateRecurringTemplate(editingTemplateId, payload);
+      triggerToast(`'${recName}' 정기 항목을 수정했습니다.`);
     } else {
       onSaveRecurringTemplate(payload);
+      triggerToast(`'${recName}' 정기 항목을 등록했습니다.`);
     }
 
     setIsAddRecurringOpen(false);
     setEditingTemplateId(null);
   };
 
-  const handleDeleteTemplate = (id: string, name: string) => {
-    if (confirm(`'${name}' 정기 항목을 삭제하시겠습니까?`)) {
-      if (onDeleteRecurringTemplate) {
-        onDeleteRecurringTemplate(id);
-      }
-    }
+  const handleDeleteTemplate = async (id: string, name: string) => {
+    const template = recurringTemplates.find(item => item.id === id);
+    const accepted = await confirm({
+      title: '이 정기 항목을 삭제할까요?',
+      description: '아직 처리하지 않은 이번 달 발생 건은 건너뜀으로 정리됩니다. 이미 확정된 거래는 그대로 남습니다.',
+      details: [
+        { label: '항목', value: name },
+        ...(template
+          ? [
+              { label: '금액', value: formatKRW(template.defaultAmount) },
+              { label: '주기', value: `매월 ${template.dayOfMonth}일` },
+            ]
+          : []),
+      ],
+      confirmLabel: '삭제',
+      tone: 'danger',
+    });
+    if (!accepted) return;
+    onDeleteRecurringTemplate?.(id);
+    showToast({ message: `'${name}' 정기 항목을 삭제했습니다.`, tone: 'info' });
   };
 
   const handleSaveBudgetLimit = async () => {
@@ -305,7 +346,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       });
       triggerToast('월 용돈 한도를 DB에 저장했습니다.');
     } catch (error) {
-      alert(error instanceof Error ? error.message : '월 용돈 한도를 DB에 저장하지 못했습니다.');
+      showToast({
+        message: '월 용돈 한도를 DB에 저장하지 못했습니다.',
+        description: error instanceof Error ? error.message : undefined,
+        tone: 'error',
+      });
     } finally {
       setIsBudgetSaving(false);
     }
@@ -421,14 +466,6 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   return (
     <div className="space-y-5 pb-24 relative">
-      {/* Toast Notification Banner */}
-      {copyToast && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-full shadow-lg shadow-emerald-900/40 text-xs flex items-center gap-2 animate-bounce">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{copyToast}</span>
-        </div>
-      )}
-
       {/* Top Sub-Navigation Bar */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-1.5 flex items-center justify-between text-xs">
         <button
@@ -502,22 +539,22 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-center">
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-0.5">이번 달 고정 수입</span>
+                <span className="text-slate-400 text-xs block mb-0.5">이번 달 고정 수입</span>
                 <span className="font-extrabold text-emerald-400">{formatKRW(monthlyFixedIncome)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-0.5">정기 고정지출</span>
+                <span className="text-slate-400 text-xs block mb-0.5">정기 고정지출</span>
                 <span className="font-extrabold text-rose-400">{formatKRW(monthlyFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-indigo-500/20">
-                <span className="text-slate-400 text-[11px] block mb-0.5">카드 계좌 고정 출금</span>
+                <span className="text-slate-400 text-xs block mb-0.5">카드 계좌 고정 출금</span>
                 <span className="font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.linkedAccountTotal)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-0.5">총 고정 출금</span>
+                <span className="text-slate-400 text-xs block mb-0.5">총 고정 출금</span>
                 <span className="font-extrabold text-rose-300">{formatKRW(totalFixedOutflow)}</span>
               </div>
             </div>
@@ -562,13 +599,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     </div>
                     <div>
                       <span className="text-xs font-bold text-emerald-300 block">이달 계좌 이체 예정 합계</span>
-                      <span className="text-slate-400 text-[11px]">
+                      <span className="text-slate-400 text-xs">
                         등록된 은행 계좌 {accountGroups.length}곳 / 총 {formatKRW(totalTransferNeeded)}
                       </span>
                     </div>
                   </div>
 
-                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[11px] font-extrabold px-2.5 py-1 rounded-lg">
+                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-extrabold px-2.5 py-1 rounded-lg">
                     원클릭 복사 지원
                   </span>
                 </div>
@@ -604,7 +641,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                         </div>
 
                         <div className="text-right">
-                          <span className="text-[10px] text-slate-400 block">이체 필요 합계</span>
+                          <span className="text-xs text-slate-400 block">이체 필요 합계</span>
                           <span className="text-base font-black text-emerald-400">
                             {formatKRW(group.totalExpectedAmount)}
                           </span>
@@ -623,12 +660,12 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                               className="bg-slate-950 border border-slate-800/80 rounded-xl p-2.5 flex items-center justify-between text-xs"
                             >
                               <div className="flex items-center gap-2.5">
-                                <span className="bg-slate-800 text-slate-300 text-[10px] px-2 py-0.5 rounded font-bold">
+                                <span className="bg-slate-800 text-slate-300 text-xs px-2 py-0.5 rounded font-bold">
                                   매월 {tmpl.dayOfMonth}일
                                 </span>
                                 <div>
                                   <span className="font-bold text-slate-200 block">{tmpl.name}</span>
-                                  <span className="text-[10px] text-slate-400">
+                                  <span className="text-xs text-slate-400">
                                     {tmpl.postingMode === 'auto' ? '자동이체/출금' : '확인후 이체'}
                                   </span>
                                 </div>
@@ -642,13 +679,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                                 {occ && occ.status !== 'posted' ? (
                                   <button
                                     onClick={() => onPostOccurrence(occ.id)}
-                                    className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 font-bold text-[11px] px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1"
+                                    className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 font-bold text-xs px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1"
                                   >
                                     <Check className="w-3.5 h-3.5" />
                                     <span>이체완료</span>
                                   </button>
                                 ) : (
-                                  <span className="text-emerald-400 font-extrabold text-[11px] flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                  <span className="text-emerald-400 font-extrabold text-xs flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                                     <CheckCircle2 className="w-3.5 h-3.5" />
                                     <span>완료</span>
                                   </span>
@@ -727,7 +764,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                   <span>등록된 정기 고정 항목 관리 ({recurringTemplates.length}건)</span>
                   <button
                     onClick={openNewRecurringModal}
-                    className="text-emerald-400 text-[11px] hover:underline font-bold flex items-center gap-1"
+                    className="text-emerald-400 text-xs hover:underline font-bold flex items-center gap-1"
                   >
                     <Plus className="w-3.5 h-3.5" /> 항목 추가
                   </button>
@@ -745,7 +782,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
                             <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded font-extrabold ${
+                              className={`text-xs px-1.5 py-0.5 rounded font-extrabold ${
                                 tmpl.type === 'income'
                                   ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                   : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
@@ -756,12 +793,12 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
                             <span className="font-bold text-slate-100">{tmpl.name}</span>
 
-                            <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">
+                            <span className="text-xs bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">
                               매월 {tmpl.dayOfMonth}일
                             </span>
                           </div>
 
-                          <div className="text-slate-400 text-[11px] flex items-center gap-2">
+                          <div className="text-slate-400 text-xs flex items-center gap-2">
                             <span>카테고리: {cat?.name || '미지정'}</span>
                             {tmpl.bankName && tmpl.accountNumber && (
                               <span className="text-emerald-400 font-medium">
@@ -816,33 +853,35 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
             <div className="space-y-2 pt-2">
               <label className="text-slate-300 font-semibold block">이번 달 내 용돈 한도 (KRW)</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={tempTotalBudget}
-                  onChange={e => setTempTotalBudget(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-base font-extrabold text-rose-400"
-                />
+              <div className="flex items-start gap-2">
+                <div className="flex-1">
+                  <AmountInput
+                    value={parseAmountInput(tempTotalBudget)}
+                    onChange={next => setTempTotalBudget(next ? String(next) : '')}
+                    showQuickAdd
+                    className="text-base text-rose-400"
+                  />
+                </div>
                 <button
                   onClick={handleSaveBudgetLimit}
                   disabled={isBudgetSaving}
-                  className="bg-rose-500 hover:bg-rose-600 disabled:cursor-wait disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-lg transition-colors"
+                  className="bg-rose-600 hover:bg-rose-700 disabled:cursor-wait disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-lg transition-colors"
                 >
                   {isBudgetSaving ? 'DB 저장 중...' : '저장'}
                 </button>
               </div>
             </div>
-            <p className="text-[10px] leading-relaxed text-slate-500">
+            <p className="text-xs leading-relaxed text-slate-400">
               카드대금은 연결 계좌의 월 고정 출금으로 표시되며, 카드 구매 시 이미 반영된 지출과 중복 합산하지 않습니다.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
               <div className="rounded-lg border border-slate-800 bg-slate-950 p-2.5">
-                <div className="text-[10px] text-slate-500">수입 - 이번 달 고정지출</div>
+                <div className="text-xs text-slate-400">수입 - 이번 달 고정지출</div>
                 <div className="mt-1 font-bold text-slate-200">{formatKRW(summary.disposableAfterFixed)}</div>
               </div>
               <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-2.5">
-                <div className="text-[10px] text-slate-500">설정할 용돈</div>
+                <div className="text-xs text-slate-400">설정할 용돈</div>
                 <div className="mt-1 font-bold text-rose-300">{formatKRW(tempAllowanceLimit)}</div>
               </div>
               <div className={`rounded-lg border p-2.5 ${
@@ -850,7 +889,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                   ? 'border-emerald-500/20 bg-emerald-500/5'
                   : 'border-amber-500/30 bg-amber-500/5'
               }`}>
-                <div className="text-[10px] text-slate-500">
+                <div className="text-xs text-slate-400">
                   {tempPlannedSavings >= 0 ? '저축 예정액' : '가용자금 초과'}
                 </div>
                 <div className={`mt-1 font-bold ${tempPlannedSavings >= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
@@ -860,7 +899,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             </div>
 
             {tempPlannedSavings < 0 && (
-              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-200">
                 이번 달 수입과 고정비 기준으로 용돈 한도가 {formatKRW(-tempPlannedSavings)} 높습니다. 저장은 가능하지만 저축 예정액이 부족해집니다.
               </p>
             )}
@@ -894,8 +933,18 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </div>
               {classificationIssues.transactionCount + classificationIssues.templateCount > 0 && onRepairClassificationIssues && (
                 <button
-                  onClick={() => {
-                    if (!confirm('금액과 수입·지출 유형은 유지하고, 맞지 않는 카테고리만 유형별 기타 카테고리로 변경할까요?')) return;
+                  onClick={async () => {
+                    const accepted = await confirm({
+                      title: '분류를 정리할까요?',
+                      description: '금액과 수입·지출 유형은 그대로 두고, 유형과 맞지 않는 카테고리만 유형별 기타 카테고리로 바꿉니다.',
+                      details: [
+                        { label: '대상 거래', value: `${classificationIssues.transactionCount}건 (${formatKRW(classificationIssues.transactionAmount)})` },
+                        { label: '대상 정기 항목', value: `${classificationIssues.templateCount}건` },
+                      ],
+                      confirmLabel: '정리 실행',
+                      tone: 'danger',
+                    });
+                    if (!accepted) return;
                     const result = onRepairClassificationIssues();
                     triggerToast(`거래 ${result.repairedTransactions}건, 정기 항목 ${result.repairedTemplates}건의 분류를 정리했습니다.`);
                   }}
@@ -906,7 +955,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               )}
             </div>
             {classificationIssues.orphanOccurrenceCount > 0 && (
-              <p className="text-[11px] text-amber-200/80 mt-2">고아 예정 건은 금액 계산에서 제외되며 원본 확인 후 별도로 정리해야 합니다.</p>
+              <p className="text-xs text-amber-200/80 mt-2">고아 예정 건은 금액 계산에서 제외되며 원본 확인 후 별도로 정리해야 합니다.</p>
             )}
           </div>
 
@@ -944,7 +993,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                   <div key={idx} className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between">
                     <div>
                       <div className="font-bold text-amber-300">{sug.suggestedName}</div>
-                      <div className="text-[11px] text-slate-400">{sug.description}</div>
+                      <div className="text-xs text-slate-400">{sug.description}</div>
                     </div>
                     <button
                       onClick={() => {
@@ -956,9 +1005,9 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                           active: true,
                           isCustom: true,
                         });
-                        alert(`'${sug.suggestedName}' 카테고리가 추가되었습니다.`);
+                        triggerToast(`'${sug.suggestedName}' 카테고리를 추가했습니다.`);
                       }}
-                      className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded"
+                      className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded"
                     >
                       추가
                     </button>
@@ -991,7 +1040,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 required
               />
 
-              <button type="submit" className="bg-rose-500 hover:bg-rose-600 text-white font-bold px-4 rounded-lg">
+              <button type="submit" className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-4 rounded-lg">
                 추가
               </button>
             </div>
@@ -1005,10 +1054,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 <div key={c.id} className="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full" style={{ backgroundColor: c.color }} />
-                    <span className={`font-semibold ${c.active ? 'text-slate-100' : 'text-slate-500 line-through'}`}>
+                    <span className={`font-semibold ${c.active ? 'text-slate-100' : 'text-slate-400 line-through'}`}>
                       {c.name}
                     </span>
-                    <span className="text-[10px] text-slate-500">({c.type === 'income' ? '수입' : '지출'})</span>
+                    <span className="text-xs text-slate-400">({c.type === 'income' ? '수입' : '지출'})</span>
                   </div>
 
                   <button
@@ -1029,6 +1078,63 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       {/* SUBTAB 4: 설정 & AI (SETTINGS & AI) */}
       {subTab === 'settings' && (
         <div className="space-y-4 text-xs">
+          {/* Accounting cycle */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <CalendarRange className="w-4 h-4 text-rose-300" />
+              <span>예산 주기 (월 시작일)</span>
+            </h3>
+            <p className="text-xs leading-relaxed text-slate-400">
+              급여일에 맞춰 예산 주기를 옮길 수 있습니다. 예를 들어 25일로 설정하면 한 기간이 25일부터 다음 달 24일까지입니다.
+              요약, 분석, 카드 정산, CSV 내보내기가 모두 이 주기를 따릅니다.
+            </p>
+
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <span className="font-bold text-slate-200">매월 시작일</span>
+              <select
+                value={normalizeMonthStartDay(userProfile.monthStartDay)}
+                onChange={async event => {
+                  const nextStartDay = normalizeMonthStartDay(Number(event.target.value));
+                  if (nextStartDay === normalizeMonthStartDay(userProfile.monthStartDay)) return;
+                  const preview = getAccountingPeriod(
+                    getCurrentYearMonth(nextStartDay),
+                    nextStartDay,
+                  );
+                  const accepted = await confirm({
+                    title: '예산 주기를 바꿀까요?',
+                    description: '기록된 거래는 바뀌지 않지만, 각 기간에 어떤 거래가 포함되는지가 달라집니다.',
+                    details: [
+                      { label: '새 시작일', value: `매월 ${nextStartDay}일` },
+                      { label: '현재 기간', value: `${preview.startDate} ~ ${preview.endDate}` },
+                      { label: '영향 범위', value: '홈 요약 · 분석 · 카드 정산 · CSV' },
+                    ],
+                    confirmLabel: '주기 변경',
+                  });
+                  if (!accepted) return;
+                  onUpdateUserProfile({ monthStartDay: nextStartDay });
+                  triggerToast(`예산 주기를 매월 ${nextStartDay}일 시작으로 변경했습니다.`);
+                }}
+                className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 font-bold text-slate-100 focus:border-rose-500 focus:outline-none"
+              >
+                {Array.from({ length: 28 }, (_, index) => index + 1).map(day => (
+                  <option key={day} value={day}>{day}일</option>
+                ))}
+              </select>
+            </label>
+
+            <p className="text-xs text-slate-400">
+              현재 기간: <span className="font-semibold text-slate-200">
+                {currentPeriodPreview.startDate} ~ {currentPeriodPreview.endDate}
+              </span>
+              {normalizeMonthStartDay(userProfile.monthStartDay) === 1 && ' (달력 월과 동일)'}
+            </p>
+            <p className="text-xs text-slate-400">
+              매월 29~31일은 없는 달이 있어 시작일은 28일까지만 선택할 수 있습니다.
+            </p>
+          </div>
+
+          <InstallAppCard />
+
           {/* AI Settings Toggles */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -1040,14 +1146,21 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               <label className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer">
                 <div>
                   <span className="font-bold text-slate-200 block">AI 자연어 거래 자동분류</span>
-                  <span className="text-[11px] text-slate-400">문장 입력을 분석해 유형, 금액, 카테고리를 자동 추출합니다.</span>
+                  <span className="text-xs text-slate-400">문장 입력을 분석해 유형, 금액, 카테고리를 자동 추출합니다.</span>
                 </div>
                 <input
                   type="checkbox"
                   checked={userProfile.aiClassificationEnabled}
-                  onChange={e => {
+                  onChange={async e => {
                     const enabled = e.target.checked;
-                    if (enabled && !userProfile.aiConsentAt && !confirm('입력 문장과 카테고리 목록이 Gemini API로 전송됩니다. AI 자동분류를 사용할까요?')) return;
+                    if (enabled && !userProfile.aiConsentAt) {
+                      const accepted = await confirm({
+                        title: 'AI 자동분류를 사용할까요?',
+                        description: '입력한 문장과 카테고리 목록이 Gemini API로 전송됩니다. 금액과 사용처가 포함될 수 있습니다.',
+                        confirmLabel: '동의하고 사용',
+                      });
+                      if (!accepted) return;
+                    }
                     onUpdateUserProfile({
                       aiClassificationEnabled: enabled,
                       aiConsentAt: enabled ? (userProfile.aiConsentAt || new Date().toISOString()) : userProfile.aiConsentAt,
@@ -1060,14 +1173,21 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               <label className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800 cursor-pointer">
                 <div>
                   <span className="font-bold text-slate-200 block">AI 월간 맞춤 피드백 리포트</span>
-                  <span className="text-[11px] text-slate-400">집계 수치를 바탕으로 실행 가능한 절약 행동 팁을 제공합니다.</span>
+                  <span className="text-xs text-slate-400">집계 수치를 바탕으로 실행 가능한 절약 행동 팁을 제공합니다.</span>
                 </div>
                 <input
                   type="checkbox"
                   checked={userProfile.aiInsightsEnabled}
-                  onChange={e => {
+                  onChange={async e => {
                     const enabled = e.target.checked;
-                    if (enabled && !userProfile.aiConsentAt && !confirm('월별 수입·지출 집계와 카테고리 요약이 Gemini API로 전송됩니다. AI 리포트를 사용할까요?')) return;
+                    if (enabled && !userProfile.aiConsentAt) {
+                      const accepted = await confirm({
+                        title: 'AI 리포트를 사용할까요?',
+                        description: '월별 수입·지출 집계와 카테고리 요약이 Gemini API로 전송됩니다.',
+                        confirmLabel: '동의하고 사용',
+                      });
+                      if (!accepted) return;
+                    }
                     onUpdateUserProfile({
                       aiInsightsEnabled: enabled,
                       aiConsentAt: enabled ? (userProfile.aiConsentAt || new Date().toISOString()) : userProfile.aiConsentAt,
@@ -1086,16 +1206,42 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 <Lock className="w-4 h-4 text-emerald-400" />
                 <span>PIN 로그인 보안</span>
               </h3>
-              <span className="text-[10px] font-extrabold px-2 py-0.5 rounded border bg-emerald-500/20 text-emerald-300 border-emerald-500/40">
+              <span className="text-xs font-extrabold px-2 py-0.5 rounded border bg-emerald-500/20 text-emerald-300 border-emerald-500/40">
                 활성화됨
               </span>
             </div>
 
-            <p className="text-[11px] text-slate-400 leading-relaxed">
+            <p className="text-xs text-slate-400 leading-relaxed">
               PIN 확인 후 고정 소유자 세션을 발급하며, 확인 전에는 Firestore 데이터와 Gemini API를 불러오지 않습니다.
             </p>
 
-            <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <span className="min-w-0">
+                <span className="block font-bold text-slate-200">자동 잠금 시간</span>
+                <span className="block text-xs text-slate-400">
+                  아무 조작이 없을 때 잠깁니다. 잠기기 1분 전에 알려드립니다.
+                </span>
+              </span>
+              <select
+                value={normalizeIdleLockMinutes(userProfile.idleLockMinutes)}
+                onChange={event => {
+                  const minutes = normalizeIdleLockMinutes(Number(event.target.value));
+                  onUpdateUserProfile({ idleLockMinutes: minutes });
+                  triggerToast(
+                    minutes === 0
+                      ? '자동 잠금을 사용하지 않습니다.'
+                      : `자동 잠금 시간을 ${describeIdleLockMinutes(minutes)}으로 변경했습니다.`,
+                  );
+                }}
+                className="shrink-0 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 font-bold text-slate-100 focus:border-emerald-500 focus:outline-none"
+              >
+                {IDLE_LOCK_OPTIONS.map(minutes => (
+                  <option key={minutes} value={minutes}>{describeIdleLockMinutes(minutes)}</option>
+                ))}
+              </select>
+            </label>
+
+            <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-xs text-slate-400 space-y-1">
               <span className="font-bold text-emerald-300 block">PIN 변경 방법</span>
               <p className="leading-normal">
                 PIN은 앱 데이터에 저장되지 않습니다. 새 PIN hash를 생성한 뒤 배포 환경의 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">APP_PIN_HASH</code> secret을 교체하세요.
@@ -1106,7 +1252,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           {/* AI Merchant Rules List */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
             <h4 className="font-bold text-slate-200">학습된 개인 가맹점 분류 규칙 목록</h4>
-            <p className="text-slate-400 text-[11px]">
+            <p className="text-slate-400 text-xs">
               동일한 패턴은 AI를 호출하지 않고 규칙을 우선 적용해 속도를 높이고 API 비용을 절감합니다.
             </p>
 
@@ -1138,11 +1284,16 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
               <button
                 onClick={async () => {
-                  const confirmation = prompt('운영 데이터 전체 초기화는 되돌리기 어렵습니다. 계속하려면 "전체 초기화"를 입력하세요.');
-                  if (confirmation === '전체 초기화') {
-                    await onResetData();
-                    triggerToast('데이터 초기화가 완료되었습니다.');
-                  }
+                  const accepted = await confirm({
+                    title: '운영 데이터를 전체 초기화할까요?',
+                    description: '거래, 정기 항목, 계좌, 카드, 카테고리가 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.',
+                    confirmLabel: '전체 초기화',
+                    tone: 'danger',
+                    requireText: '전체 초기화',
+                  });
+                  if (!accepted) return;
+                  await onResetData();
+                  showToast({ message: '데이터 초기화가 완료되었습니다.', tone: 'info' });
                 }}
                 className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-4 py-2.5 rounded-xl transition-colors"
               >
@@ -1154,19 +1305,33 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       )}
 
       {/* Modal for Adding / Editing Recurring Template */}
-      {isAddRecurringOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+      <Modal
+        isOpen={isAddRecurringOpen}
+        onClose={() => setIsAddRecurringOpen(false)}
+        labelledById="recurring-modal-title"
+        panelClassName="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto"
+      >
+        <>
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-white">
+              <h3 id="recurring-modal-title" className="text-sm font-bold text-white">
                 {editingTemplateId ? '정기 항목 및 은행 계좌 수정' : '신규 정기 항목 & 계좌 등록'}
               </h3>
-              <button onClick={() => setIsAddRecurringOpen(false)} className="text-slate-400 hover:text-white">
+              <button
+                onClick={() => setIsAddRecurringOpen(false)}
+                aria-label="정기 항목 창 닫기"
+                className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveRecurringSubmit} className="space-y-3 text-xs">
+            {recurringError && (
+              <p role="alert" className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300">
+                {recurringError}
+              </p>
+            )}
+
+            <form onSubmit={handleSaveRecurringSubmit} className="space-y-3 text-xs" noValidate>
               <div>
                 <label className="text-slate-400 block mb-1">유형</label>
                 <select
@@ -1198,22 +1363,26 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 <input
                   type="text"
                   value={recName}
-                  onChange={e => setRecName(e.target.value)}
+                  onChange={e => {
+                    setRecurringError(null);
+                    setRecName(e.target.value);
+                  }}
                   placeholder="예: 배우자 생활비, 아파트 관리비, 월급"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100"
-                  required
                 />
               </div>
 
               <div>
                 <label className="text-slate-400 block mb-1">기본 예상 금액 (KRW)</label>
-                <input
-                  type="number"
-                  value={recAmount}
-                  onChange={e => setRecAmount(e.target.value)}
-                  placeholder="예: 1200000"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100 font-bold"
-                  required
+                <AmountInput
+                  value={parseAmountInput(recAmount)}
+                  onChange={next => {
+                    setRecurringError(null);
+                    setRecAmount(next ? String(next) : '');
+                  }}
+                  placeholder="예: 1,200,000"
+                  showQuickAdd
+                  invalid={Boolean(recurringError)}
                 />
               </div>
 
@@ -1225,9 +1394,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     min="1"
                     max="31"
                     value={recDay}
-                    onChange={e => setRecDay(e.target.value)}
+                    onChange={e => {
+                      setRecurringError(null);
+                      setRecDay(e.target.value);
+                    }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-100"
-                    required
                   />
                 </div>
 
@@ -1255,7 +1426,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     <span>이체용 은행 / 계좌 / 카드 선택</span>
                   </span>
                   {(bankAccounts.length > 0 || paymentCards.length > 0) && (
-                    <span className="text-[10px] text-slate-400 font-medium">
+                    <span className="text-xs text-slate-400 font-medium">
                       등록 계좌 {bankAccounts.length}개 / 카드 {paymentCards.length}개
                     </span>
                   )}
@@ -1511,9 +1682,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+        </>
+      </Modal>
     </div>
   );
 };

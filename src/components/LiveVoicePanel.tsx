@@ -43,6 +43,8 @@ interface LiveVoicePanelProps {
   budget: Budget;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
+  /** Accounting cycle start day, so the assistant reports the same period as the UI. */
+  monthStartDay?: number;
   onDraftReady: (result: VoiceAnalysisResult, durationMs: number, mimeType: string) => void;
   onUseQuickVoice: () => void;
 }
@@ -73,6 +75,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
   budget,
   recurringOccurrences,
   recurringTemplates,
+  monthStartDay,
   onDraftReady,
   onUseQuickVoice,
 }) => {
@@ -118,7 +121,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
     if (!messageId) {
       messageId = uniqueId('assistant');
       activeAssistantMessageRef.current = messageId;
-      setMessages(previous => [...previous, { id: messageId!, role: 'assistant', text: delta }].slice(-8));
+      setMessages(previous => [...previous, { id: messageId!, role: 'assistant' as const, text: delta }].slice(-8));
       return;
     }
     setMessages(previous => previous.map(message => (
@@ -135,7 +138,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
     } else if (transcript && !activeId) {
       setMessages(previous => [...previous, {
         id: uniqueId('assistant'),
-        role: 'assistant',
+        role: 'assistant' as const,
         text: transcript,
       }].slice(-8));
     }
@@ -176,6 +179,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         budget,
         recurringOccurrences,
         recurringTemplates,
+        monthStartDay,
       }));
       return;
     }
@@ -251,7 +255,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
           latestUserTranscriptRef.current = transcript;
           setMessages(previous => [...previous, {
             id: uniqueId('user'),
-            role: 'user',
+            role: 'user' as const,
             text: transcript,
           }].slice(-8));
         }
@@ -484,7 +488,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-[11px] text-slate-400">
+      <div className="flex items-start gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-slate-400">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
         <p className="leading-relaxed">
           음성은 실시간 대화를 위해 OpenAI로 전송됩니다. 앱은 음성 원본을 저장하지 않으며,
@@ -502,7 +506,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
       <div className="relative overflow-hidden rounded-3xl border border-cyan-500/20 bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.14),_rgba(15,23,42,0.96)_58%)] px-5 py-7 text-center">
         <div className="pointer-events-none absolute inset-x-12 top-8 h-28 rounded-full bg-violet-500/10 blur-3xl" />
         <div className="relative space-y-4">
-          <div className="flex items-center justify-center gap-2 text-[10px] font-bold tracking-[0.22em] text-cyan-300 uppercase">
+          <div className="flex items-center justify-center gap-2 text-xs font-bold tracking-[0.22em] text-cyan-300 uppercase">
             <Sparkles className="h-3.5 w-3.5" />
             <span>{REALTIME_MODEL}</span>
           </div>
@@ -580,7 +584,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         </div>
       ) : (
         <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
+          <p className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
             <MessageCircle className="h-3.5 w-3.5 text-violet-300" />
             이렇게 말해보세요
           </p>
@@ -589,7 +593,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
             '이번 달 지출이 지난달보다 많이 늘었어?',
             '월급날까지 하루에 얼마 써도 돼?',
           ].map(example => (
-            <p key={example} className="rounded-xl bg-slate-900 px-3 py-2 text-[11px] text-slate-300">
+            <p key={example} className="rounded-xl bg-slate-900 px-3 py-2 text-xs text-slate-300">
               “{example}”
             </p>
           ))}
