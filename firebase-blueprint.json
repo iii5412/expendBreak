@@ -126,6 +126,7 @@
         "cardType": { "type": "string" },
         "linkedAccountId": { "type": "string" },
         "billingDay": { "type": "number" },
+        "monthlyPaymentAmounts": { "type": "object" },
         "memo": { "type": "string" }
       },
       "required": ["cardName", "cardCompany", "cardType"]

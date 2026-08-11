@@ -1,24 +1,27 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   Search,
-  Filter,
   Trash2,
   Edit2,
   Sparkles,
   AlertCircle,
   TrendingUp,
   TrendingDown,
-  Calendar,
   X,
   Check,
   ReceiptText,
   Tags,
   Mic,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { Transaction, Category } from '../types';
-import { formatKRW } from '../utils/calculations';
+import { formatKRW, getLocalDateString } from '../utils/calculations';
 import { normalizeTags } from '../utils/receipt';
 import { ReceiptDetailsModal } from './ReceiptDetailsModal';
+import { HistoryPeriod, isTransactionInPeriod, sortTransactionsNewestFirst } from '../utils/history';
+
+const HISTORY_PAGE_SIZES = [10, 20, 50];
 
 interface HistoryViewProps {
   transactions: Transaction[];
@@ -38,6 +41,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [aiOnlyFilter, setAiOnlyFilter] = useState(false);
   const [receiptOnlyFilter, setReceiptOnlyFilter] = useState(false);
+  const [periodFilter, setPeriodFilter] = useState<HistoryPeriod>('30days');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(HISTORY_PAGE_SIZES[0]);
 
   // Edit State
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -48,7 +54,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   }, [categories]);
 
   const filteredTransactions = useMemo(() => {
-    return transactions.filter(t => {
+    const filtered = transactions.filter(t => {
+      if (!isTransactionInPeriod(t, periodFilter)) return false;
       if (typeFilter !== 'all' && t.type !== typeFilter) return false;
       if (selectedCategory !== 'all' && t.categoryId !== selectedCategory) return false;
       if (aiOnlyFilter && t.source === 'manual') return false;
@@ -67,7 +74,21 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       }
       return true;
     });
-  }, [transactions, typeFilter, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap]);
+    return sortTransactionsNewestFirst(filtered);
+  }, [transactions, periodFilter, typeFilter, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
+  const pageStart = (currentPage - 1) * pageSize;
+  const paginatedTransactions = filteredTransactions.slice(pageStart, pageStart + pageSize);
+  const todayText = getLocalDateString();
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [periodFilter, typeFilter, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage(page => Math.min(page, totalPages));
+  }, [totalPages]);
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,6 +131,29 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               <X className="w-4 h-4" />
             </button>
           )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="mr-1 text-slate-500">조회 기간</span>
+          {([
+            ['today', '오늘'],
+            ['7days', '최근 7일'],
+            ['30days', '최근 30일'],
+            ['all', '전체 기간'],
+          ] as Array<[HistoryPeriod, string]>).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setPeriodFilter(value)}
+              className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
+                periodFilter === value
+                  ? 'border-rose-500/40 bg-rose-500/15 font-bold text-rose-300'
+                  : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* Filter Pills */}
@@ -186,8 +230,20 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       {/* Transaction List */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-          <span>총 {filteredTransactions.length}건의 거래</span>
-          <span>최신순 정렬</span>
+          <span>
+            총 {filteredTransactions.length}건
+            {filteredTransactions.length > 0 && ` · ${pageStart + 1}-${Math.min(pageStart + pageSize, filteredTransactions.length)}건 표시`}
+          </span>
+          <label className="flex items-center gap-1.5">
+            <span>페이지당</span>
+            <select
+              value={pageSize}
+              onChange={event => setPageSize(Number(event.target.value))}
+              className="rounded-md border border-slate-800 bg-slate-950 px-1.5 py-1 text-slate-300 focus:outline-none focus:border-rose-500"
+            >
+              {HISTORY_PAGE_SIZES.map(size => <option key={size} value={size}>{size}건</option>)}
+            </select>
+          </label>
         </div>
 
         {filteredTransactions.length === 0 ? (
@@ -195,15 +251,21 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             조건에 해당하는 거래 내역이 없습니다.
           </div>
         ) : (
-          filteredTransactions.map(t => {
+          paginatedTransactions.map((t, index) => {
             const cat = categoryMap.get(t.categoryId);
             const isLowConfidence = t.source === 'ai' && t.aiConfidence && t.aiConfidence < 0.8;
+            const startsNewDate = index === 0 || paginatedTransactions[index - 1].localDate !== t.localDate;
 
             return (
-              <div
-                key={t.id}
-                className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-3.5 transition-colors flex items-center justify-between gap-3 text-xs"
-              >
+              <React.Fragment key={t.id}>
+                {startsNewDate && (
+                  <div className="flex items-center gap-2 px-1 pt-2 text-[11px] font-bold text-slate-400">
+                    <span>{t.localDate === todayText ? '오늘' : t.localDate}</span>
+                    {t.localDate === todayText && <span className="font-normal text-slate-600">{t.localDate}</span>}
+                    <span className="h-px flex-1 bg-slate-800" />
+                  </div>
+                )}
+                <div className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-3.5 transition-colors flex items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-3">
                   {/* Category color indicator */}
                   <div
@@ -280,9 +342,32 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </button>
                   </div>
                 </div>
-              </div>
+                </div>
+              </React.Fragment>
             );
           })
+        )}
+
+        {filteredTransactions.length > 0 && totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 pt-3 text-xs">
+            <button
+              type="button"
+              onClick={() => setCurrentPage(page => Math.max(1, page - 1))}
+              disabled={currentPage === 1}
+              className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-300 transition-colors hover:border-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" /> 이전
+            </button>
+            <span className="min-w-16 text-center font-semibold text-slate-300">{currentPage} / {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage(page => Math.min(totalPages, page + 1))}
+              disabled={currentPage === totalPages}
+              className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-300 transition-colors hover:border-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              다음 <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
         )}
       </div>
 

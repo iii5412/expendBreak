@@ -12,7 +12,7 @@ import {
   VoiceAnalysisResult,
 } from '../types';
 import { calculateMonthSummary, getLocalDateString, getYearMonthString } from './calculations';
-import { calculateCardPaymentSummary } from './cardPayments';
+import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 
 export interface LiveTransactionToolArguments {
   type?: string;
@@ -180,6 +180,7 @@ export function createAssistantFinancialSnapshot(args: {
   );
   const categoryMap = new Map(args.categories.map(category => [category.id, category.name]));
   const cardSummary = calculateCardPaymentSummary(yearMonth, args.transactions, args.paymentCards || []);
+  const cardSettlementSummary = calculateMonthlyCardSettlementSummary(yearMonth, args.transactions, args.paymentCards || []);
   const expenseByCategory = new Map<string, number>();
   args.transactions
     .filter(transaction => transaction.type === 'expense'
@@ -195,11 +196,11 @@ export function createAssistantFinancialSnapshot(args: {
   return {
     기준월: yearMonth,
     확정수입: summary.confirmedIncome,
-    예상총수입: summary.totalIncome,
+    이번달수입: summary.totalIncome,
     확정전체지출: summary.confirmedExpenses,
     확정고정비: summary.confirmedFixedExpenses,
     예정고정비: summary.remainingScheduledExpenses,
-    전체고정비: summary.totalExpectedFixedExpenses,
+    이번달고정지출: summary.totalExpectedFixedExpenses,
     사용한용돈: summary.confirmedVariableExpenses,
     순현금흐름: summary.netCashFlow,
     월용돈한도: summary.allowanceLimit,
@@ -210,6 +211,7 @@ export function createAssistantFinancialSnapshot(args: {
     월말예상저축: summary.forecastSavings,
     이번달전체카드사용: cardSummary.totalCardUsage,
     다음달신용카드결제추정: cardSummary.estimatedNextPaymentTotal,
+    이번달카드계좌고정출금: cardSettlementSummary.linkedAccountTotal,
     카드미지정사용: cardSummary.unassignedCardUsage,
     신용카드별결제추정: cardSummary.creditCards
       .filter(card => card.totalAmount > 0)

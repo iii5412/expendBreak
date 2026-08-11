@@ -22,6 +22,25 @@ export interface CardPaymentSummary {
   creditCards: CreditCardPaymentEstimate[];
 }
 
+export interface MonthlyCardSettlement {
+  cardId: string;
+  cardName: string;
+  cardCompany: string;
+  linkedAccountId: string | null;
+  paymentDate: string | null;
+  amount: number;
+  estimatedAmount: number;
+  source: 'confirmed' | 'estimated';
+}
+
+export interface MonthlyCardSettlementSummary {
+  yearMonth: string;
+  totalAmount: number;
+  linkedAccountTotal: number;
+  unlinkedAmount: number;
+  cards: MonthlyCardSettlement[];
+}
+
 function getEstimatedPaymentDate(yearMonth: string, billingDay?: number | null): string | null {
   if (!billingDay) return null;
   const [yearText, monthText] = yearMonth.split('-');
@@ -40,6 +59,12 @@ function getEstimatedPaymentDate(yearMonth: string, billingDay?: number | null):
     String(paymentDate.getMonth() + 1).padStart(2, '0'),
     String(paymentDate.getDate()).padStart(2, '0'),
   ].join('-');
+}
+
+function getPreviousYearMonth(yearMonth: string): string {
+  const [yearText, monthText] = yearMonth.split('-');
+  const date = new Date(Number(yearText), Number(monthText) - 2, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
 export function calculateCardPaymentSummary(
@@ -106,5 +131,57 @@ export function calculateCardPaymentSummary(
     unassignedCardUsage,
     estimatedNextPaymentTotal: creditCardUsage,
     creditCards: estimates,
+  };
+}
+
+/**
+ * Card settlement is an account cash outflow, not a second expense.
+ * When a month has no confirmed amount, the previous calendar month's card usage is used.
+ */
+export function calculateMonthlyCardSettlementSummary(
+  paymentYearMonth: string,
+  transactions: Transaction[],
+  paymentCards: PaymentCard[],
+): MonthlyCardSettlementSummary {
+  const previousMonthUsage = calculateCardPaymentSummary(
+    getPreviousYearMonth(paymentYearMonth),
+    transactions,
+    paymentCards,
+  );
+  const estimateMap = new Map(previousMonthUsage.creditCards.map(card => [card.cardId, card]));
+
+  const cards = paymentCards
+    .filter(card => card.cardType === 'credit')
+    .map(card => {
+      const estimate = estimateMap.get(card.id);
+      const confirmedAmount = card.monthlyPaymentAmounts?.[paymentYearMonth];
+      const hasConfirmedAmount = Number.isFinite(confirmedAmount) && Number(confirmedAmount) >= 0;
+      const estimatedAmount = Math.round(estimate?.totalAmount || 0);
+      const amount = hasConfirmedAmount ? Math.round(Number(confirmedAmount)) : estimatedAmount;
+
+      return {
+        cardId: card.id,
+        cardName: card.cardName,
+        cardCompany: card.cardCompany,
+        linkedAccountId: card.linkedAccountId ?? null,
+        paymentDate: estimate?.estimatedPaymentDate ?? null,
+        amount,
+        estimatedAmount,
+        source: hasConfirmedAmount ? 'confirmed' as const : 'estimated' as const,
+      };
+    })
+    .sort((left, right) => right.amount - left.amount);
+
+  const totalAmount = cards.reduce((sum, card) => sum + card.amount, 0);
+  const linkedAccountTotal = cards
+    .filter(card => card.linkedAccountId)
+    .reduce((sum, card) => sum + card.amount, 0);
+
+  return {
+    yearMonth: paymentYearMonth,
+    totalAmount,
+    linkedAccountTotal,
+    unlinkedAmount: totalAmount - linkedAccountTotal,
+    cards,
   };
 }

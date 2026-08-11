@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CreditCard,
   Building2,
@@ -14,12 +14,16 @@ import {
   FileText,
   Copy
 } from 'lucide-react';
-import { BankAccount, PaymentCard } from '../types';
+import { BankAccount, PaymentCard, Transaction } from '../types';
 import { formatKRW } from '../utils/calculations';
+import { calculateMonthlyCardSettlementSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 
 interface AccountsViewProps {
+  currentYM: string;
+  transactions: Transaction[];
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
+  cardSettlementSummary: MonthlyCardSettlementSummary;
   onSaveBankAccount: (acc: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onUpdateBankAccount: (id: string, updates: Partial<BankAccount>) => void;
   onDeleteBankAccount: (id: string) => void;
@@ -40,8 +44,11 @@ const CARD_COMPANIES = [
 ];
 
 export const AccountsView: React.FC<AccountsViewProps> = ({
+  currentYM,
+  transactions,
   bankAccounts,
   paymentCards,
+  cardSettlementSummary,
   onSaveBankAccount,
   onUpdateBankAccount,
   onDeleteBankAccount,
@@ -73,6 +80,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [cardLinkedAccountId, setCardLinkedAccountId] = useState<string>('');
   const [cardBillingDay, setCardBillingDay] = useState<number>(25);
   const [cardMemo, setCardMemo] = useState('');
+  const [cardPaymentMonth, setCardPaymentMonth] = useState(currentYM);
+  const [monthlyAmountDrafts, setMonthlyAmountDrafts] = useState<Record<string, string>>({});
 
   // Handle Account Form Submit
   const handleOpenAccountModal = (acc?: BankAccount) => {
@@ -187,6 +196,45 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
   // Total balance sum
   const totalAccountBalance = bankAccounts.reduce((sum, a) => sum + (a.balance || 0), 0);
+  const selectedMonthSettlement = useMemo(
+    () => cardPaymentMonth === currentYM
+      ? cardSettlementSummary
+      : calculateMonthlyCardSettlementSummary(cardPaymentMonth, transactions, paymentCards),
+    [cardPaymentMonth, currentYM, cardSettlementSummary, transactions, paymentCards],
+  );
+
+  useEffect(() => {
+    setMonthlyAmountDrafts(Object.fromEntries(selectedMonthSettlement.cards.map(card => [card.cardId, String(card.amount)])));
+  }, [selectedMonthSettlement]);
+
+  const settlementAmountByAccount = useMemo(() => {
+    const amounts = new Map<string, number>();
+    selectedMonthSettlement.cards.forEach(card => {
+      if (!card.linkedAccountId) return;
+      amounts.set(card.linkedAccountId, (amounts.get(card.linkedAccountId) || 0) + card.amount);
+    });
+    return amounts;
+  }, [selectedMonthSettlement]);
+
+  const saveMonthlyCardAmount = (card: PaymentCard) => {
+    const amount = Math.round(Number(monthlyAmountDrafts[card.id]));
+    if (!Number.isFinite(amount) || amount < 0) {
+      alert('월 카드 결제금액은 0원 이상으로 입력해 주세요.');
+      return;
+    }
+    onUpdatePaymentCard(card.id, {
+      monthlyPaymentAmounts: {
+        ...(card.monthlyPaymentAmounts || {}),
+        [cardPaymentMonth]: amount,
+      },
+    });
+  };
+
+  const useEstimatedMonthlyCardAmount = (card: PaymentCard) => {
+    const monthlyPaymentAmounts = { ...(card.monthlyPaymentAmounts || {}) };
+    delete monthlyPaymentAmounts[cardPaymentMonth];
+    onUpdatePaymentCard(card.id, { monthlyPaymentAmounts });
+  };
 
   const copyText = async (text: string, message: string) => {
     try {
@@ -236,6 +284,28 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             <CreditCard className="w-4 h-4" />
             신용/체크카드 ({paymentCards.length})
           </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4 sm:grid-cols-3">
+        <label className="text-xs text-slate-400">
+          <span className="mb-1 block font-medium">카드대금 관리 월</span>
+          <input
+            type="month"
+            value={cardPaymentMonth}
+            onChange={event => setCardPaymentMonth(event.target.value || currentYM)}
+            className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 font-bold text-slate-100 focus:border-indigo-500 focus:outline-none"
+          />
+        </label>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+          <div className="text-[10px] text-slate-500">연결 계좌 고정 출금</div>
+          <div className="mt-1 text-base font-bold text-rose-300">{formatKRW(selectedMonthSettlement.linkedAccountTotal)}</div>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+          <div className="text-[10px] text-slate-500">출금 계좌 미연결</div>
+          <div className={`mt-1 text-base font-bold ${selectedMonthSettlement.unlinkedAmount > 0 ? 'text-amber-300' : 'text-slate-300'}`}>
+            {formatKRW(selectedMonthSettlement.unlinkedAmount)}
+          </div>
         </div>
       </div>
 
@@ -352,6 +422,21 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     </button>
                   </div>
 
+                  {(settlementAmountByAccount.get(acc.id) || 0) > 0 && (
+                    <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-2.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-400">{cardPaymentMonth} 카드 고정 출금</span>
+                        <span className="font-bold text-rose-300">
+                          -{formatKRW(settlementAmountByAccount.get(acc.id) || 0)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+                        <span>출금 후 예상잔액</span>
+                        <span>{formatKRW((acc.balance || 0) - (settlementAmountByAccount.get(acc.id) || 0))}</span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
                     <span className="text-slate-500">
                       직접 입력 잔액
@@ -431,6 +516,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               {paymentCards.map((card) => {
                 const linkedAccount = bankAccounts.find((a) => a.id === card.linkedAccountId);
+                const monthlySettlement = selectedMonthSettlement.cards.find(item => item.cardId === card.id);
 
                 return (
                   <div
@@ -497,6 +583,53 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                         <span className="text-slate-500 italic">미지정</span>
                       )}
                     </div>
+
+                    {card.cardType === 'credit' && monthlySettlement && (
+                      <div className="space-y-2 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="font-bold text-slate-200">{cardPaymentMonth} 카드대금</div>
+                            <div className="mt-0.5 text-[10px] text-slate-500">
+                              {monthlySettlement.paymentDate || '결제일 미지정'} · 전월 사용 추정 {formatKRW(monthlySettlement.estimatedAmount)}
+                            </div>
+                          </div>
+                          <span className={`rounded-md border px-2 py-1 text-[10px] font-bold ${
+                            monthlySettlement.source === 'confirmed'
+                              ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                              : 'border-amber-500/30 bg-amber-500/15 text-amber-300'
+                          }`}>
+                            {monthlySettlement.source === 'confirmed' ? '확정 금액' : '자동 추정'}
+                          </span>
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={monthlyAmountDrafts[card.id] ?? ''}
+                            onChange={event => setMonthlyAmountDrafts(current => ({ ...current, [card.id]: event.target.value }))}
+                            className="min-w-0 flex-1 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 font-bold text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            aria-label={`${card.cardName} ${cardPaymentMonth} 결제금액`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => saveMonthlyCardAmount(card)}
+                            className="rounded-lg bg-indigo-500 px-3 py-2 font-bold text-white hover:bg-indigo-600"
+                          >
+                            월 금액 저장
+                          </button>
+                        </div>
+                        {monthlySettlement.source === 'confirmed' && (
+                          <button
+                            type="button"
+                            onClick={() => useEstimatedMonthlyCardAmount(card)}
+                            className="text-[10px] font-semibold text-slate-400 hover:text-amber-300"
+                          >
+                            저장 금액 삭제하고 전월 사용액 자동 추정 사용
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {card.memo && (
                       <p className="text-xs text-slate-400 px-1">{card.memo}</p>

@@ -156,7 +156,7 @@ export function shutdownStorage() {
  */
 function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemplate[]) {
   const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  let added = false;
+  let changed = false;
 
   const toLocalDate = (date: Date) => {
     const year = date.getFullYear();
@@ -207,7 +207,8 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
 
     for (const scheduledDate of scheduledDatesFor(tmpl)) {
       const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
-      if (!occurrences.some(o => o.occurrenceKey === occurrenceKey)) {
+      const existingOccurrence = occurrences.find(o => o.occurrenceKey === occurrenceKey);
+      if (!existingOccurrence) {
         const now = new Date().toISOString();
         occurrences.push({
           id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
@@ -223,13 +224,28 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
           createdAt: now,
           updatedAt: now,
         });
-        added = true;
+        changed = true;
+      } else if (
+        (existingOccurrence.status === 'scheduled'
+          || existingOccurrence.status === 'needs_confirmation'
+          || existingOccurrence.status === 'overdue')
+        && existingOccurrence.templateRevision !== tmpl.updatedAt
+      ) {
+        existingOccurrence.expectedAmount = tmpl.defaultAmount;
+        existingOccurrence.typeSnapshot = tmpl.type;
+        existingOccurrence.categoryIdSnapshot = tmpl.categoryId;
+        existingOccurrence.paymentMethodType = tmpl.paymentMethodType;
+        existingOccurrence.accountId = tmpl.accountId;
+        existingOccurrence.cardId = tmpl.cardId;
+        existingOccurrence.templateRevision = tmpl.updatedAt;
+        existingOccurrence.updatedAt = new Date().toISOString();
+        changed = true;
       }
     }
   }
 
   localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-  if (added && storageReady) syncRecurringOccurrencesToFirestore(occurrences);
+  if (changed && storageReady) syncRecurringOccurrencesToFirestore(occurrences);
 }
 
 /**

@@ -52,6 +52,7 @@ export interface PaymentCard {
   cardType: 'credit' | 'debit'; // 신용카드 / 체크카드
   linkedAccountId?: string | null; // 출금 계좌 ID (BankAccount ID)
   billingDay?: number | null; // 결제일 (1~31)
+  monthlyPaymentAmounts?: Record<string, number>; // 결제월(YYYY-MM)별 확정 카드대금
   memo?: string; // 비고
   createdAt: string;
   updatedAt: string;

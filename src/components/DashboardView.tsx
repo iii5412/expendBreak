@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { MonthSummary, formatKRW } from '../utils/calculations';
 import { RecurringOccurrence, Category, BankAccount } from '../types';
-import { CardPaymentSummary } from '../utils/cardPayments';
+import { CardPaymentSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 
 interface DashboardViewProps {
   summary: MonthSummary;
@@ -24,6 +24,7 @@ interface DashboardViewProps {
   categories: Category[];
   categoryBreakdown: { categoryId: string; categoryName: string; amount: number; percent: number; color: string }[];
   cardPaymentSummary: CardPaymentSummary;
+  cardSettlementSummary: MonthlyCardSettlementSummary;
   bankAccounts: BankAccount[];
   onOpenAddModal: () => void;
   onNavigateTab: (tab: 'history' | 'analytics' | 'management' | 'accounts', subTab?: string) => void;
@@ -37,6 +38,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   categories,
   categoryBreakdown,
   cardPaymentSummary,
+  cardSettlementSummary,
   bankAccounts,
   onOpenAddModal,
   onNavigateTab,
@@ -174,18 +176,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-800 text-xs">
           <div className="bg-slate-950/40 rounded-xl p-3 border border-slate-800/60">
             <div className="text-slate-400 mb-1 flex items-center justify-between">
-              <span>이번 달 예상 수입</span>
+              <span>이번 달 수입</span>
               <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
             </div>
             <div className="font-bold text-sm text-emerald-400">{formatKRW(summary.totalIncome)}</div>
             <div className="text-[10px] text-slate-500 mt-0.5">
-              확정 {formatKRW(summary.confirmedIncome)} | 예정 {formatKRW(summary.scheduledIncome)}
+              입금 {formatKRW(summary.confirmedIncome)} | 정기 등록 {formatKRW(summary.scheduledIncome)}
             </div>
           </div>
 
           <div className="bg-slate-950/40 rounded-xl p-3 border border-slate-800/60">
             <div className="text-slate-400 mb-1 flex items-center justify-between">
-              <span>전체 고정비</span>
+              <span>이번 달 고정지출</span>
               <Lock className="w-3.5 h-3.5 text-indigo-400" />
             </div>
             <div className="font-bold text-sm text-indigo-300">
@@ -236,7 +238,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-3">
+              <div className="text-[10px] text-slate-500">이번 달 계좌 고정 출금</div>
+              <div className="mt-1 text-base font-bold text-rose-300">
+                {formatKRW(cardSettlementSummary.linkedAccountTotal)}
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-500">신용카드 결제계좌 자동 반영</div>
+            </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
               <div className="text-[10px] text-slate-500">이번 달 전체 카드 사용</div>
               <div className="mt-1 text-base font-bold text-slate-100">{formatKRW(cardPaymentSummary.totalCardUsage)}</div>
@@ -314,7 +323,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <p className="text-[10px] leading-relaxed text-slate-500">
             카드 이용기간 마감일 정보가 없어 이번 달 사용분이 다음 달 결제된다고 가정한 추정치입니다.
-            구매 금액은 이미 이번 달 용돈 또는 고정비에 반영되며, 결제 예정액을 다음 달 지출로 다시 합산하지 않습니다.
+            월별 카드대금은 연결 계좌의 고정 출금에는 반영하지만, 구매 금액이 이미 지출에 포함되어 있어 지출 총액에는 다시 합산하지 않습니다.
           </p>
         </div>
       )}

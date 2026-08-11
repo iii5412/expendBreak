@@ -8,7 +8,9 @@ export interface MonthSummary {
   
   // Income
   confirmedIncome: number;
+  confirmedRecurringIncome: number;
   scheduledIncome: number;
+  totalExpectedRecurringIncome: number;
   totalIncome: number;
   
   // Expenses
@@ -113,6 +115,10 @@ export function calculateMonthSummary(
     .filter(t => t.type === 'income')
     .reduce((sum, t) => sum + Math.round(t.amount), 0);
 
+  const confirmedRecurringIncome = monthTxs
+    .filter(t => t.type === 'income' && t.recurringTemplateId)
+    .reduce((sum, t) => sum + Math.round(t.amount), 0);
+
   // Confirmed Expenses
   const confirmedExpenses = monthTxs
     .filter(t => t.type === 'expense')
@@ -150,6 +156,7 @@ export function calculateMonthSummary(
     .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
 
   const totalIncome = confirmedIncome + scheduledIncome;
+  const totalExpectedRecurringIncome = confirmedRecurringIncome + scheduledIncome;
   const totalExpectedFixedExpenses = confirmedFixedExpenses + remainingScheduledExpenses;
   
   // Cash flows
@@ -218,7 +225,9 @@ export function calculateMonthSummary(
     daysPassed,
     daysRemaining,
     confirmedIncome,
+    confirmedRecurringIncome,
     scheduledIncome,
+    totalExpectedRecurringIncome,
     totalIncome,
     confirmedExpenses,
     confirmedFixedExpenses,

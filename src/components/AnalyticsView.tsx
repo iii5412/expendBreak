@@ -41,8 +41,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   // 1. Income, fixed commitments, and allowance spending
   const incomeVsExpenseData = [
-    { name: '예상수입', amount: summary.totalIncome, fill: '#10B981' },
-    { name: '전체고정비', amount: summary.totalExpectedFixedExpenses, fill: '#6366F1' },
+    { name: '이번 달 수입', amount: summary.totalIncome, fill: '#10B981' },
+    { name: '이번 달 고정지출', amount: summary.totalExpectedFixedExpenses, fill: '#6366F1' },
     { name: '용돈사용', amount: summary.confirmedVariableExpenses, fill: '#F43F5E' },
   ];
 

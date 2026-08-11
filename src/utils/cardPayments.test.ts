@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PaymentCard, Transaction } from '../types';
-import { calculateCardPaymentSummary } from './cardPayments';
+import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 
 const now = '2026-08-11T00:00:00.000Z';
 const cards: PaymentCard[] = [
@@ -18,6 +18,38 @@ const transaction = (overrides: Partial<Transaction>): Transaction => ({
   id: 'tx', type: 'expense', amount: 100_000, occurredAt: now, localDate: '2026-08-11',
   categoryId: 'food', merchant: '상점', memo: '', source: 'manual', paymentMethodType: 'card',
   createdAt: now, updatedAt: now, ...overrides,
+});
+
+describe('calculateMonthlyCardSettlementSummary', () => {
+  it('uses previous-month usage as the account withdrawal estimate', () => {
+    const summary = calculateMonthlyCardSettlementSummary('2026-09', [
+      transaction({ cardId: 'credit', amount: 230_000 }),
+    ], cards);
+
+    expect(summary.totalAmount).toBe(230_000);
+    expect(summary.linkedAccountTotal).toBe(230_000);
+    expect(summary.cards[0]).toEqual(expect.objectContaining({
+      source: 'estimated',
+      paymentDate: '2026-09-30',
+    }));
+  });
+
+  it('prefers a confirmed month-specific amount without counting it as another transaction', () => {
+    const cardsWithConfirmedAmount: PaymentCard[] = [{
+      ...cards[0],
+      monthlyPaymentAmounts: { '2026-09': 310_000 },
+    }];
+    const summary = calculateMonthlyCardSettlementSummary('2026-09', [
+      transaction({ cardId: 'credit', amount: 230_000 }),
+    ], cardsWithConfirmedAmount);
+
+    expect(summary.totalAmount).toBe(310_000);
+    expect(summary.cards[0]).toEqual(expect.objectContaining({
+      amount: 310_000,
+      estimatedAmount: 230_000,
+      source: 'confirmed',
+    }));
+  });
 });
 
 describe('calculateCardPaymentSummary', () => {

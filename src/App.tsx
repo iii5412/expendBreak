@@ -55,7 +55,7 @@ import {
   getLocalDateString,
   formatKRW,
 } from './utils/calculations';
-import { calculateCardPaymentSummary } from './utils/cardPayments';
+import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
 import { BankAccount, Budget, Category, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
 import { logoutOwner, onSessionStateChanged } from './utils/auth';
@@ -176,6 +176,11 @@ export default function App() {
 
   const cardPaymentSummary = useMemo(
     () => calculateCardPaymentSummary(currentYM, transactions, paymentCards),
+    [currentYM, transactions, paymentCards],
+  );
+
+  const cardSettlementSummary = useMemo(
+    () => calculateMonthlyCardSettlementSummary(currentYM, transactions, paymentCards),
     [currentYM, transactions, paymentCards],
   );
 
@@ -308,6 +313,7 @@ export default function App() {
             categories={categories}
             categoryBreakdown={categoryBreakdown}
             cardPaymentSummary={cardPaymentSummary}
+            cardSettlementSummary={cardSettlementSummary}
             bankAccounts={bankAccounts}
             onOpenAddModal={() => setIsAddModalOpen(true)}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
@@ -339,8 +345,11 @@ export default function App() {
 
         {activeTab === 'accounts' && (
           <AccountsView
+            currentYM={currentYM}
+            transactions={transactions}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
+            cardSettlementSummary={cardSettlementSummary}
             onSaveBankAccount={(acc) => {
               saveBankAccount(acc);
               refreshAppData();
@@ -403,6 +412,7 @@ export default function App() {
             merchantRules={merchantRules}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
+            cardSettlementSummary={cardSettlementSummary}
             onSaveRecurringTemplate={saveRecurringTemplate}
             onUpdateRecurringTemplate={updateRecurringTemplate}
             onDeleteRecurringTemplate={deleteRecurringTemplate}

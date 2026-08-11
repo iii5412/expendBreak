@@ -37,6 +37,7 @@ import {
 } from '../types';
 import { formatKRW, MonthSummary } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
+import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -66,6 +67,7 @@ interface ManagementViewProps {
   merchantRules: MerchantRule[];
   bankAccounts?: BankAccount[];
   paymentCards?: PaymentCard[];
+  cardSettlementSummary: MonthlyCardSettlementSummary;
   classificationIssues?: {
     transactionCount: number;
     transactionAmount: number;
@@ -99,6 +101,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   merchantRules,
   bankAccounts = [],
   paymentCards = [],
+  cardSettlementSummary,
   classificationIssues = { transactionCount: 0, transactionAmount: 0, templateCount: 0, orphanOccurrenceCount: 0, totalCount: 0 },
   onSaveRecurringTemplate,
   onUpdateRecurringTemplate,
@@ -334,15 +337,12 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   };
 
   // Calculate Fixed Summary
-  const monthlyFixedIncome = recurringTemplates
-    .filter(t => t.active && t.type === 'income')
-    .reduce((sum, t) => sum + t.defaultAmount, 0);
+  // Keep this summary on the same current-month basis as the dashboard:
+  // posted recurring transactions + remaining recurring occurrences.
+  const monthlyFixedIncome = summary.totalExpectedRecurringIncome;
+  const monthlyFixedExpense = summary.totalExpectedFixedExpenses;
 
-  const monthlyFixedExpense = recurringTemplates
-    .filter(t => t.active && t.type === 'expense')
-    .reduce((sum, t) => sum + t.defaultAmount, 0);
-
-  const netAfterFixed = monthlyFixedIncome - monthlyFixedExpense;
+  const totalFixedOutflow = monthlyFixedExpense + cardSettlementSummary.linkedAccountTotal;
 
   // Grouping Recurring Items by Bank & Account Number for Transfer Assistance
   const accountGroups = React.useMemo(() => {
@@ -488,20 +488,25 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 text-xs text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-center">
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-0.5">월 고정 수입</span>
+                <span className="text-slate-400 text-[11px] block mb-0.5">이번 달 고정 수입</span>
                 <span className="font-extrabold text-emerald-400">{formatKRW(monthlyFixedIncome)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-0.5">월 고정 지출</span>
+                <span className="text-slate-400 text-[11px] block mb-0.5">정기 고정지출</span>
                 <span className="font-extrabold text-rose-400">{formatKRW(monthlyFixedExpense)}</span>
               </div>
 
+              <div className="bg-slate-950 p-2.5 rounded-xl border border-indigo-500/20">
+                <span className="text-slate-400 text-[11px] block mb-0.5">카드 계좌 고정 출금</span>
+                <span className="font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.linkedAccountTotal)}</span>
+              </div>
+
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[11px] block mb-0.5">고정비 차감후</span>
-                <span className="font-extrabold text-indigo-300">{formatKRW(netAfterFixed)}</span>
+                <span className="text-slate-400 text-[11px] block mb-0.5">총 고정 출금</span>
+                <span className="font-extrabold text-rose-300">{formatKRW(totalFixedOutflow)}</span>
               </div>
             </div>
           </div>
@@ -814,10 +819,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 </button>
               </div>
             </div>
+            <p className="text-[10px] leading-relaxed text-slate-500">
+              카드대금은 연결 계좌의 월 고정 출금으로 표시되며, 카드 구매 시 이미 반영된 지출과 중복 합산하지 않습니다.
+            </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
               <div className="rounded-lg border border-slate-800 bg-slate-950 p-2.5">
-                <div className="text-[10px] text-slate-500">수입 - 전체 고정비</div>
+                <div className="text-[10px] text-slate-500">수입 - 이번 달 고정지출</div>
                 <div className="mt-1 font-bold text-slate-200">{formatKRW(summary.disposableAfterFixed)}</div>
               </div>
               <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-2.5">
@@ -840,7 +848,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
             {tempPlannedSavings < 0 && (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
-                현재 예상 수입과 고정비 기준으로 용돈 한도가 {formatKRW(-tempPlannedSavings)} 높습니다. 저장은 가능하지만 저축 예정액이 부족해집니다.
+                이번 달 수입과 고정비 기준으로 용돈 한도가 {formatKRW(-tempPlannedSavings)} 높습니다. 저장은 가능하지만 저축 예정액이 부족해집니다.
               </p>
             )}
           </div>
