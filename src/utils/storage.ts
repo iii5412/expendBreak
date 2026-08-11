@@ -40,7 +40,7 @@ import {
 } from './firestoreSync';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch } from './auth';
-import { getDefaultCategoryIdForType } from './categoryIntegrity';
+import { findDuplicateCategory, getDefaultCategoryIdForType, validateCategoryRemoval } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 
 const STORAGE_KEYS = {
@@ -393,8 +393,13 @@ export function getCategories(): Category[] {
 
 export function saveCategory(cat: Omit<Category, 'id'>): Category {
   const cats = getCategories();
+  const name = String(cat.name || '').trim();
+  if (!name) throw new Error('카테고리 이름을 입력해주세요.');
+  const duplicate = findDuplicateCategory(cats, name);
+  if (duplicate) throw new Error(`이미 '${duplicate.name}' 카테고리가 있습니다.`);
   const newCat: Category = {
     ...cat,
+    name,
     id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   };
   cats.push(newCat);
@@ -417,19 +422,26 @@ export function toggleCategoryActive(id: string): boolean {
   return false;
 }
 
-export function mergeAndRemoveCategory(removeId: string, replaceWithId: string): boolean {
+export function mergeAndRemoveCategory(removeId: string, replaceWithId?: string): boolean {
   const categoryList = getCategories();
-  const removeCategory = categoryList.find(category => category.id === removeId);
-  const replacementCategory = categoryList.find(category => category.id === replaceWithId);
-  if (!removeCategory || !replacementCategory || removeCategory.type !== replacementCategory.type) {
-    throw new Error('같은 유형의 카테고리끼리만 병합할 수 있습니다.');
-  }
-  // Move all transactions using removeId to replaceWithId
   const txs = getTransactions();
+  const templates = getRecurringTemplates();
+  const rules = getMerchantRules();
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const budgetMap = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {});
+  const isInUse = txs.some(transaction => transaction.categoryId === removeId)
+    || templates.some(template => template.categoryId === removeId)
+    || rules.some(rule => rule.categoryId === removeId)
+    || occurrences.some(occurrence => occurrence.categoryIdSnapshot === removeId)
+    || Object.values(budgetMap).some(item => Object.prototype.hasOwnProperty.call(item.categoryLimits, removeId));
+
+  const { replacementCategory } = validateCategoryRemoval(categoryList, removeId, replaceWithId, isInUse);
+
+  // Move all transactions using removeId to replaceWithId
   let modified = false;
   for (const t of txs) {
-    if (t.categoryId === removeId) {
-      t.categoryId = replaceWithId;
+    if (t.categoryId === removeId && replacementCategory) {
+      t.categoryId = replacementCategory.id;
       syncTransactionToFirestore(t);
       modified = true;
     }
@@ -438,38 +450,54 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
   }
 
-  const templates = getRecurringTemplates();
   let templatesModified = false;
   templates.forEach(template => {
-    if (template.categoryId !== removeId) return;
-    template.categoryId = replaceWithId;
+    if (template.categoryId !== removeId || !replacementCategory) return;
+    template.categoryId = replacementCategory.id;
     template.updatedAt = new Date().toISOString();
     syncRecurringTemplateToFirestore(template);
     templatesModified = true;
   });
   if (templatesModified) localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
 
-  const rules = getMerchantRules();
   let rulesModified = false;
   rules.forEach(rule => {
-    if (rule.categoryId !== removeId) return;
-    rule.categoryId = replaceWithId;
+    if (rule.categoryId !== removeId || !replacementCategory) return;
+    rule.categoryId = replacementCategory.id;
     syncMerchantRuleToFirestore(rule);
     rulesModified = true;
   });
   if (rulesModified) localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
 
-  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   let occurrencesModified = false;
   occurrences.forEach(occurrence => {
-    if (occurrence.categoryIdSnapshot !== removeId) return;
-    occurrence.categoryIdSnapshot = replaceWithId;
+    if (occurrence.categoryIdSnapshot !== removeId || !replacementCategory) return;
+    occurrence.categoryIdSnapshot = replacementCategory.id;
     occurrence.updatedAt = new Date().toISOString();
     occurrencesModified = true;
   });
   if (occurrencesModified) {
     localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
     syncRecurringOccurrencesToFirestore(occurrences);
+  }
+
+  let budgetsModified = false;
+  Object.values(budgetMap).forEach(item => {
+    if (!Object.prototype.hasOwnProperty.call(item.categoryLimits, removeId)) return;
+    const removedLimit = Math.max(0, Math.round(Number(item.categoryLimits[removeId]) || 0));
+    if (replacementCategory) {
+      item.categoryLimits[replacementCategory.id] = Math.max(
+        0,
+        Math.round(Number(item.categoryLimits[replacementCategory.id]) || 0),
+      ) + removedLimit;
+    }
+    delete item.categoryLimits[removeId];
+    item.updatedAt = new Date().toISOString();
+    syncBudgetToFirestore(item);
+    budgetsModified = true;
+  });
+  if (budgetsModified) {
+    localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
   }
 
   // Remove category
