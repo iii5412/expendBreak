@@ -63,7 +63,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   onSaveTransaction,
   onSaveMerchantRule,
 }) => {
-  const [activeMode, setActiveMode] = useState<'receipt' | 'voice' | 'ai' | 'manual'>('receipt');
+  const [activeMode, setActiveMode] = useState<'receipt' | 'voice' | 'ai' | 'manual'>('voice');
   const [voiceInputKind, setVoiceInputKind] = useState<'live' | 'quick'>('live');
 
   // Manual Form State
@@ -109,6 +109,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   useEffect(() => {
     if (!aiClassificationEnabled) setActiveMode('manual');
   }, [aiClassificationEnabled]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveMode(aiClassificationEnabled ? 'voice' : 'manual');
+      setVoiceInputKind('live');
+      setVoiceResult(null);
+    }
+  }, [isOpen, aiClassificationEnabled]);
 
   const categoryForType = (nextType: 'income' | 'expense') =>
     categories.find((category) => category.id === (nextType === 'expense' ? 'etc_expense' : 'etc_income'))?.id
@@ -374,23 +382,6 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           {aiClassificationEnabled && (
             <button
               onClick={() => {
-                setActiveMode('receipt');
-                setVoiceResult(null);
-              }}
-              className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
-                activeMode === 'receipt'
-                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Camera className="w-4 h-4 shrink-0" />
-              <span>영수증</span>
-            </button>
-          )}
-
-          {aiClassificationEnabled && (
-            <button
-              onClick={() => {
                 setActiveMode('voice');
               }}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
@@ -418,6 +409,23 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             >
               <Sparkles className="w-4 h-4 shrink-0 text-amber-300" />
               <span>AI 문장</span>
+            </button>
+          )}
+
+          {aiClassificationEnabled && (
+            <button
+              onClick={() => {
+                setActiveMode('receipt');
+                setVoiceResult(null);
+              }}
+              className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
+                activeMode === 'receipt'
+                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Camera className="w-4 h-4 shrink-0" />
+              <span>영수증</span>
             </button>
           )}
 

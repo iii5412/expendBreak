@@ -7,6 +7,7 @@ import { applicationDefault, getApps as getAdminApps, initializeApp as initializ
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json';
 import { shouldTriggerVoiceFallback, sanitizeVoiceResult } from './src/utils/voice';
+import { createRealtimeSessionForm } from './src/utils/realtimeSession';
 
 dotenv.config();
 
@@ -184,8 +185,8 @@ app.post(
         return res.status(400).json({ message: '올바른 WebRTC 연결 정보가 필요합니다.' });
       }
 
-      const model = process.env.OPENAI_REALTIME_MODEL?.trim() || 'gpt-4o-mini-realtime-preview';
-      const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || 'alloy';
+      const model = process.env.OPENAI_REALTIME_MODEL?.trim() || 'gpt-realtime-2.1-mini';
+      const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || 'marin';
       const sessionConfig = JSON.stringify({
         type: 'realtime',
         model,
@@ -195,12 +196,7 @@ app.post(
         },
       });
 
-      const sdpBlob = new Blob([sdp], { type: 'application/sdp' });
-      const sessionBlob = new Blob([sessionConfig], { type: 'application/json' });
-
-      const formData = new FormData();
-      formData.append('sdp', sdpBlob, 'sdp.txt');
-      formData.append('session', sessionBlob, 'session.json');
+      const formData = createRealtimeSessionForm(sdp, sessionConfig);
 
       const safetyIdentifier = createHmac('sha256', SESSION_SECRET)
         .update(String(res.locals.ownerUid))

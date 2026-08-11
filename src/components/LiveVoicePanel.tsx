@@ -47,7 +47,7 @@ interface LiveVoicePanelProps {
   onUseQuickVoice: () => void;
 }
 
-const REALTIME_MODEL = 'gpt-4o-mini-realtime-preview';
+const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
 const LIVE_ASSISTANT_PROMPT = `
 당신은 1인 사용자를 위한 한국어 수입·지출 비서다.
 돈에 관해 말하면 정확히 이해하고 거래 초안을 만들며, 개인 재무 질문에는 도구로 조회한 계산 결과만 근거로 답한다.
@@ -311,7 +311,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         audio: {
           input: {
             transcription: {
-              model: 'whisper-1',
+              model: 'gpt-4o-mini-transcribe',
               language: 'ko',
             },
             turn_detection: {
@@ -321,7 +321,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
               interrupt_response: true,
             },
           },
-          output: { voice: 'alloy' },
+          output: { voice: 'marin' },
         },
         tools: [
           {
