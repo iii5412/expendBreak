@@ -32,6 +32,99 @@ const COLLECTION_RECURRING_OCCURRENCES = 'recurringOccurrences';
 const COLLECTION_MERCHANT_RULES = 'merchantRules';
 const COLLECTION_BANK_ACCOUNTS = 'bankAccounts';
 const COLLECTION_PAYMENT_CARDS = 'paymentCards';
+const FIRESTORE_OUTBOX_KEY = 'brake_firestore_outbox';
+
+interface PendingFirestoreWrite {
+  id: string;
+  operation: 'set' | 'delete';
+  collectionName: string;
+  documentId: string;
+  data?: Record<string, unknown>;
+  merge?: boolean;
+  queuedAt: string;
+}
+
+let persistenceChain: Promise<void> = Promise.resolve();
+
+function readFirestoreOutbox(): PendingFirestoreWrite[] {
+  try {
+    const raw = localStorage.getItem(FIRESTORE_OUTBOX_KEY);
+    return raw ? JSON.parse(raw) as PendingFirestoreWrite[] : [];
+  } catch (error) {
+    console.error('Failed to read Firestore persistence outbox:', error);
+    return [];
+  }
+}
+
+function writeFirestoreOutbox(entries: PendingFirestoreWrite[]) {
+  if (entries.length === 0) {
+    localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
+    return;
+  }
+  localStorage.setItem(FIRESTORE_OUTBOX_KEY, JSON.stringify(entries));
+}
+
+function enqueueFirestoreWrite(entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>): PendingFirestoreWrite {
+  const queued: PendingFirestoreWrite = {
+    ...entry,
+    id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    queuedAt: new Date().toISOString(),
+  };
+  writeFirestoreOutbox([...readFirestoreOutbox(), queued]);
+  return queued;
+}
+
+function removeFirestoreWrite(id: string) {
+  writeFirestoreOutbox(readFirestoreOutbox().filter(entry => entry.id !== id));
+}
+
+async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
+  const reference = scopedDoc(entry.collectionName, entry.documentId);
+  if (entry.operation === 'delete') {
+    await deleteDoc(reference);
+    return;
+  }
+  if (entry.merge) {
+    await setDoc(reference, entry.data || {}, { merge: true });
+    return;
+  }
+  await setDoc(reference, entry.data || {});
+}
+
+function persistFirestoreWrite(
+  entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>,
+  errorLabel: string,
+): Promise<boolean> {
+  const queued = enqueueFirestoreWrite(entry);
+  const operation = persistenceChain.then(async () => {
+    await executeFirestoreWrite(queued);
+    removeFirestoreWrite(queued.id);
+  });
+  persistenceChain = operation.catch(() => undefined);
+  return operation.then(() => true).catch(error => {
+    console.error(`${errorLabel}:`, error);
+    return false;
+  });
+}
+
+export function flushFirestoreOutbox(): Promise<boolean> {
+  const operation = persistenceChain.then(async () => {
+    const pending = readFirestoreOutbox().sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
+    for (const entry of pending) {
+      await executeFirestoreWrite(entry);
+      removeFirestoreWrite(entry.id);
+    }
+  });
+  persistenceChain = operation.catch(() => undefined);
+  return operation.then(() => true).catch(error => {
+    console.error('Failed to flush Firestore persistence outbox:', error);
+    return false;
+  });
+}
+
+export function clearFirestoreOutbox() {
+  localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
+}
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'brake_transactions',
@@ -75,6 +168,11 @@ function snapshotError(error: unknown) {
   console.error('Firestore realtime sync error:', error);
 }
 
+function normalizeBudget(budget: Budget & { categoryLimits?: Record<string, number> }): Budget {
+  const { categoryLimits: _legacyCategoryLimits, ...normalized } = budget;
+  return normalized;
+}
+
 async function readCollection<T>(collectionName: string): Promise<T[]> {
   const snapshot = await getDocs(scopedCollection(collectionName));
   return snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
@@ -105,7 +203,9 @@ export async function hydrateFirestoreFromCloud() {
   ]);
 
   transactions.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
-  const budgetMap = Object.fromEntries(budgets.filter(budget => budget.yearMonth).map(budget => [budget.yearMonth, budget]));
+  const budgetMap = Object.fromEntries(
+    budgets.filter(budget => budget.yearMonth).map(budget => [budget.yearMonth, normalizeBudget(budget)]),
+  );
 
   localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
   localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
@@ -161,7 +261,7 @@ export function initFirestoreSync(onNotify: SyncNotifyCallback) {
       const budgetMap: Record<string, Budget> = {};
       snapshot.docs.forEach(document => {
         const budget = { id: document.id, ...document.data() } as Budget & { id?: string };
-        budgetMap[budget.yearMonth || document.id] = budget;
+        budgetMap[budget.yearMonth || document.id] = normalizeBudget(budget);
       });
       localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
       onNotify();
@@ -183,12 +283,13 @@ export function stopFirestoreSync() {
 /* Helper functions to save / update / delete items in Firestore */
 
 export async function syncUserProfileToFirestore(profile: UserProfile) {
-  try {
-    const settingsDocRef = scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS);
-    await setDoc(settingsDocRef, profile, { merge: true });
-  } catch (err) {
-    console.error('Failed to sync user profile to Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'set',
+    collectionName: COLLECTION_APP_SETTINGS,
+    documentId: DOC_GLOBAL_SETTINGS,
+    data: profile as unknown as Record<string, unknown>,
+    merge: true,
+  }, 'Failed to sync user profile to Firestore');
 }
 
 export async function fetchUserProfileFromFirestore(): Promise<UserProfile | null> {
@@ -205,79 +306,59 @@ export async function fetchUserProfileFromFirestore(): Promise<UserProfile | nul
 }
 
 export async function syncTransactionToFirestore(tx: Transaction) {
-  try {
-    await setDoc(scopedDoc(COLLECTION_TRANSACTIONS, tx.id), tx);
-  } catch (err) {
-    console.error('Failed to sync transaction to Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_TRANSACTIONS, documentId: tx.id,
+    data: tx as unknown as Record<string, unknown>,
+  }, 'Failed to sync transaction to Firestore');
 }
 
 export async function deleteTransactionFromFirestore(id: string) {
-  try {
-    await deleteDoc(scopedDoc(COLLECTION_TRANSACTIONS, id));
-  } catch (err) {
-    console.error('Failed to delete transaction from Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_TRANSACTIONS, documentId: id,
+  }, 'Failed to delete transaction from Firestore');
 }
 
 export async function syncCategoriesToFirestore(categories: Category[]) {
-  try {
-    for (let offset = 0; offset < categories.length; offset += 400) {
-      const batch = writeBatch(db);
-      categories.slice(offset, offset + 400).forEach(cat => {
-        batch.set(scopedDoc(COLLECTION_CATEGORIES, cat.id), cat);
-      });
-      await batch.commit();
-    }
-  } catch (err) {
-    console.error('Failed to sync categories to Firestore:', err);
-  }
+  const results = await Promise.all(categories.map(category => persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_CATEGORIES, documentId: category.id,
+    data: category as unknown as Record<string, unknown>,
+  }, 'Failed to sync category to Firestore')));
+  return results.every(Boolean);
 }
 
 export async function deleteCategoryFromFirestore(id: string) {
-  try {
-    await deleteDoc(scopedDoc(COLLECTION_CATEGORIES, id));
-  } catch (err) {
-    console.error('Failed to delete category from Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_CATEGORIES, documentId: id,
+  }, 'Failed to delete category from Firestore');
 }
 
 export async function syncBudgetToFirestore(budget: Budget) {
-  try {
-    await setDoc(scopedDoc(COLLECTION_BUDGETS, budget.yearMonth), budget);
-  } catch (err) {
-    console.error('Failed to sync budget to Firestore:', err);
-  }
+  const normalizedBudget = normalizeBudget(budget);
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_BUDGETS, documentId: normalizedBudget.yearMonth,
+    data: normalizedBudget as unknown as Record<string, unknown>,
+  }, 'Failed to sync budget to Firestore');
 }
 
 export async function syncRecurringTemplateToFirestore(tmpl: RecurringTemplate) {
-  try {
-    await setDoc(scopedDoc(COLLECTION_RECURRING_TEMPLATES, tmpl.id), tmpl);
-  } catch (err) {
-    console.error('Failed to sync recurring template to Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_RECURRING_TEMPLATES, documentId: tmpl.id,
+    data: tmpl as unknown as Record<string, unknown>,
+  }, 'Failed to sync recurring template to Firestore');
 }
 
 export async function deleteRecurringTemplateFromFirestore(id: string) {
-  try {
-    await deleteDoc(scopedDoc(COLLECTION_RECURRING_TEMPLATES, id));
-  } catch (err) {
-    console.error('Failed to delete recurring template from Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_RECURRING_TEMPLATES, documentId: id,
+  }, 'Failed to delete recurring template from Firestore');
 }
 
 export async function syncRecurringOccurrencesToFirestore(occs: RecurringOccurrence[]) {
-  try {
-    for (let offset = 0; offset < occs.length; offset += 400) {
-      const batch = writeBatch(db);
-      occs.slice(offset, offset + 400).forEach(occ => {
-        batch.set(scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occ.id), occ);
-      });
-      await batch.commit();
-    }
-  } catch (err) {
-    console.error('Failed to sync recurring occurrences to Firestore:', err);
-  }
+  const results = await Promise.all(occs.map(occurrence => persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_RECURRING_OCCURRENCES, documentId: occurrence.id,
+    data: occurrence as unknown as Record<string, unknown>,
+  }, 'Failed to sync recurring occurrence to Firestore')));
+  return results.every(Boolean);
 }
 
 export async function commitRecurringPosting(tx: Transaction, occurrence: RecurringOccurrence) {
@@ -295,43 +376,36 @@ export async function commitRecurringPosting(tx: Transaction, occurrence: Recurr
 }
 
 export async function syncMerchantRuleToFirestore(rule: MerchantRule) {
-  try {
-    await setDoc(scopedDoc(COLLECTION_MERCHANT_RULES, rule.id), rule);
-  } catch (err) {
-    console.error('Failed to sync merchant rule to Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_MERCHANT_RULES, documentId: rule.id,
+    data: rule as unknown as Record<string, unknown>,
+  }, 'Failed to sync merchant rule to Firestore');
 }
 
 export async function syncBankAccountToFirestore(account: BankAccount) {
-  try {
-    await setDoc(scopedDoc(COLLECTION_BANK_ACCOUNTS, account.id), account);
-  } catch (err) {
-    console.error('Failed to sync bank account to Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_BANK_ACCOUNTS, documentId: account.id,
+    data: account as unknown as Record<string, unknown>,
+  }, 'Failed to sync bank account to Firestore');
 }
 
 export async function deleteBankAccountFromFirestore(id: string) {
-  try {
-    await deleteDoc(scopedDoc(COLLECTION_BANK_ACCOUNTS, id));
-  } catch (err) {
-    console.error('Failed to delete bank account from Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_BANK_ACCOUNTS, documentId: id,
+  }, 'Failed to delete bank account from Firestore');
 }
 
 export async function syncPaymentCardToFirestore(card: PaymentCard) {
-  try {
-    await setDoc(scopedDoc(COLLECTION_PAYMENT_CARDS, card.id), card);
-  } catch (err) {
-    console.error('Failed to sync payment card to Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_PAYMENT_CARDS, documentId: card.id,
+    data: card as unknown as Record<string, unknown>,
+  }, 'Failed to sync payment card to Firestore');
 }
 
 export async function deletePaymentCardFromFirestore(id: string) {
-  try {
-    await deleteDoc(scopedDoc(COLLECTION_PAYMENT_CARDS, id));
-  } catch (err) {
-    console.error('Failed to delete payment card from Firestore:', err);
-  }
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_PAYMENT_CARDS, documentId: id,
+  }, 'Failed to delete payment card from Firestore');
 }
 
 export async function clearFirestoreAllData() {

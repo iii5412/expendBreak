@@ -15,7 +15,7 @@ import {
 } from 'recharts';
 import { Sparkles, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-react';
 import { MonthSummary, formatKRW } from '../utils/calculations';
-import { Transaction, Category, Budget, AIFeedbackResult } from '../types';
+import { Transaction, Category, AIFeedbackResult } from '../types';
 import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
 
@@ -23,7 +23,6 @@ interface AnalyticsViewProps {
   summary: MonthSummary;
   transactions: Transaction[];
   categories: Category[];
-  budget: Budget;
   aiInsightsEnabled?: boolean;
 }
 
@@ -31,7 +30,6 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   summary,
   transactions,
   categories,
-  budget,
   aiInsightsEnabled = true,
 }) => {
   const [feedback, setFeedback] = useState<AIFeedbackResult | null>(null);
@@ -83,17 +81,6 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       limit: summary.allowanceLimit,
     });
   }
-
-  // 4. Category Budget vs Actual Bar Chart
-  const categoryBudgetBarData = Object.entries(budget.categoryLimits || {}).map(([catId, limit]) => {
-    const actual = categoryMap[catId] || 0;
-    const cat = catMap.get(catId);
-    return {
-      name: cat?.name || '기타',
-      actual,
-      limit,
-    };
-  });
 
   // Fetch AI Feedback
   const fetchAiFeedback = async (force = false) => {

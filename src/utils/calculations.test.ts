@@ -6,7 +6,6 @@ const now = new Date(2026, 7, 10);
 const budget: Budget = {
   yearMonth: '2026-08',
   totalLimit: 1_000_000,
-  categoryLimits: {},
   thresholds: [0.5, 0.75, 0.9],
   createdAt: now.toISOString(),
   updatedAt: now.toISOString(),

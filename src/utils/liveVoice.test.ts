@@ -94,7 +94,6 @@ describe('GPT live finance helpers', () => {
     const budget: Budget = {
       yearMonth: '2026-08',
       totalLimit: 1_000_000,
-      categoryLimits: {},
       thresholds: [0.7, 0.85, 1],
       createdAt: '2026-08-01',
       updatedAt: '2026-08-01',

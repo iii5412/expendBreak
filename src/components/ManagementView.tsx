@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Calendar,
   DollarSign,
@@ -80,7 +80,7 @@ interface ManagementViewProps {
   onDeleteRecurringTemplate?: (id: string) => void;
   onPostOccurrence: (occId: string, customAmount?: number) => void;
   onUpdateOccurrenceStatus: (occId: string, status: RecurringOccurrence['status']) => void;
-  onUpdateBudget: (budget: Budget) => void;
+  onUpdateBudget: (budget: Budget) => Promise<Budget>;
   onSaveCategory: (cat: Omit<Category, 'id'>) => void;
   onToggleCategoryActive: (id: string) => void;
   onMergeCategory: (removeId: string, replaceId: string) => void;
@@ -151,8 +151,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   // Modal State for Budget Edit
   const [tempTotalBudget, setTempTotalBudget] = useState(budget.totalLimit.toString());
+  const [isBudgetSaving, setIsBudgetSaving] = useState(false);
   const tempAllowanceLimit = Math.max(0, Number.parseInt(tempTotalBudget, 10) || 0);
   const tempPlannedSavings = summary.disposableAfterFixed - tempAllowanceLimit;
+
+  useEffect(() => {
+    setTempTotalBudget(budget.totalLimit.toString());
+  }, [budget.yearMonth, budget.totalLimit]);
 
   // Category Creator
   const [newCatName, setNewCatName] = useState('');
@@ -289,14 +294,21 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
   };
 
-  const handleSaveBudgetLimit = () => {
+  const handleSaveBudgetLimit = async () => {
     const val = parseInt(tempTotalBudget, 10);
     if (isNaN(val) || val < 0) return;
-    onUpdateBudget({
-      ...budget,
-      totalLimit: val,
-    });
-    alert('월 용돈 한도가 수정되었습니다.');
+    setIsBudgetSaving(true);
+    try {
+      await onUpdateBudget({
+        ...budget,
+        totalLimit: val,
+      });
+      triggerToast('월 용돈 한도를 DB에 저장했습니다.');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '월 용돈 한도를 DB에 저장하지 못했습니다.');
+    } finally {
+      setIsBudgetSaving(false);
+    }
   };
 
   const handleCreateCategory = (e: React.FormEvent) => {
@@ -813,9 +825,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 />
                 <button
                   onClick={handleSaveBudgetLimit}
-                  className="bg-rose-500 hover:bg-rose-600 text-white font-bold px-4 py-2.5 rounded-lg transition-colors"
+                  disabled={isBudgetSaving}
+                  className="bg-rose-500 hover:bg-rose-600 disabled:cursor-wait disabled:opacity-60 text-white font-bold px-4 py-2.5 rounded-lg transition-colors"
                 >
-                  저장
+                  {isBudgetSaving ? 'DB 저장 중...' : '저장'}
                 </button>
               </div>
             </div>
@@ -853,41 +866,6 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             )}
           </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-            <h4 className="font-bold text-slate-200">용돈 카테고리별 개별 한도 설정</h4>
-            <div className="space-y-2">
-              {categories
-                .filter(c => c.type === 'expense')
-                .map(c => {
-                  const currentLimit = budget.categoryLimits[c.id] || 0;
-                  return (
-                    <div key={c.id} className="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                      <span className="font-semibold text-slate-200">{c.name}</span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          defaultValue={currentLimit}
-                          onBlur={e => {
-                            const val = parseInt(e.target.value, 10);
-                            if (!isNaN(val)) {
-                              onUpdateBudget({
-                                ...budget,
-                                categoryLimits: {
-                                  ...budget.categoryLimits,
-                                  [c.id]: val,
-                                },
-                              });
-                            }
-                          }}
-                          className="w-28 bg-slate-900 border border-slate-800 rounded p-1 text-right text-slate-100 font-bold"
-                        />
-                        <span className="text-slate-500">원</span>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
         </div>
       )}
 

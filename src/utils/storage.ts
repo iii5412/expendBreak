@@ -37,6 +37,8 @@ import {
   clearFirestoreAllData,
   hydrateFirestoreFromCloud,
   stopFirestoreSync,
+  flushFirestoreOutbox,
+  clearFirestoreOutbox,
 } from './firestoreSync';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch } from './auth';
@@ -103,6 +105,11 @@ export function initializeStorageAfterLogin() {
       throw new Error(payload.message || '기존 운영 데이터 확인에 실패했습니다.');
     }
 
+    const pendingWritesSaved = await flushFirestoreOutbox();
+    if (!pendingWritesSaved) {
+      throw new Error('이전에 저장하지 못한 변경사항을 DB에 반영하지 못했습니다. 네트워크 연결 후 다시 시도해 주세요.');
+    }
+
     const { hasCloudData } = await hydrateFirestoreFromCloud();
     if (!hasCloudData) {
       const currentYM = getYearMonthString();
@@ -120,12 +127,15 @@ export function initializeStorageAfterLogin() {
       localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
       localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
 
-      await Promise.all([
+      const initializationWrites = await Promise.all([
         syncCategoriesToFirestore(categories),
         syncUserProfileToFirestore(INITIAL_USER_PROFILE),
         syncBudgetToFirestore(budget),
         ...DEFAULT_MERCHANT_RULES.map(rule => syncMerchantRuleToFirestore(rule)),
       ]);
+      if (initializationWrites.some(result => !result)) {
+        throw new Error('초기 설정을 DB에 저장하지 못했습니다. 네트워크 연결 후 다시 시도해 주세요.');
+      }
     }
 
     storageReady = true;
@@ -508,16 +518,24 @@ export function getBudget(yearMonth: string): Budget {
   return map[yearMonth];
 }
 
-export function updateBudget(budget: Budget): void {
+export async function updateBudget(budget: Budget): Promise<Budget> {
   const raw = localStorage.getItem(STORAGE_KEYS.BUDGETS);
   const map: Record<string, Budget> = raw ? JSON.parse(raw) : {};
-  map[budget.yearMonth] = {
-    ...budget,
+  const { categoryLimits: _legacyCategoryLimits, ...normalizedBudget } = budget as Budget & {
+    categoryLimits?: Record<string, number>;
+  };
+  const updatedBudget = {
+    ...normalizedBudget,
     updatedAt: new Date().toISOString(),
   };
+  map[budget.yearMonth] = updatedBudget;
   localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
-  syncBudgetToFirestore(map[budget.yearMonth]);
   notifyListeners();
+  const saved = await syncBudgetToFirestore(updatedBudget);
+  if (!saved) {
+    throw new Error('월 용돈 한도를 로컬에 보관했지만 DB 저장은 완료하지 못했습니다. 새로고침 시 자동으로 다시 저장합니다.');
+  }
+  return updatedBudget;
 }
 
 export function getRecurringTemplates(): RecurringTemplate[] {
@@ -915,8 +933,10 @@ export function deletePaymentCard(id: string): boolean {
 
 export async function resetAllData(): Promise<void> {
   stopFirestoreSync();
+  await flushFirestoreOutbox();
   await clearAllReceiptImages();
   await clearFirestoreAllData();
+  clearFirestoreOutbox();
   clearLocalAppData();
   storageReady = false;
   await initializeStorageAfterLogin();

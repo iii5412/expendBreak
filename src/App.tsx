@@ -395,7 +395,6 @@ export default function App() {
             summary={summary}
             transactions={transactions}
             categories={categories}
-            budget={budget}
             aiInsightsEnabled={userProfile.aiInsightsEnabled}
           />
         )}

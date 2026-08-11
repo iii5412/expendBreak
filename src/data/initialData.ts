@@ -57,14 +57,6 @@ export function getSampleBudget(yearMonth: string): Budget {
   return {
     yearMonth,
     totalLimit: 1800000, // Monthly allowance limit (field name retained for stored-data compatibility)
-    categoryLimits: {
-      delivery_food: 250000,
-      dining_out: 300000,
-      groceries: 400000,
-      child_education: 350000,
-      transportation: 150000,
-      shopping: 200000,
-    },
     thresholds: [0.70, 0.85, 1.00],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
