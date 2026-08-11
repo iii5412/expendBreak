@@ -55,6 +55,7 @@ import {
   getLocalDateString,
   formatKRW,
 } from './utils/calculations';
+import { calculateCardPaymentSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
 import { BankAccount, Budget, Category, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
 import { logoutOwner, onSessionStateChanged } from './utils/auth';
@@ -170,8 +171,13 @@ export default function App() {
   }, [categories]);
 
   const categoryBreakdown = useMemo(() => {
-    return getCategoryBreakdown(currentYM, transactions, categoryMap);
+    return getCategoryBreakdown(currentYM, transactions, categoryMap, { variableOnly: true });
   }, [currentYM, transactions, categoryMap]);
+
+  const cardPaymentSummary = useMemo(
+    () => calculateCardPaymentSummary(currentYM, transactions, paymentCards),
+    [currentYM, transactions, paymentCards],
+  );
 
   const classificationIssues = useMemo(
     () => getClassificationIssueSummary(),
@@ -301,6 +307,8 @@ export default function App() {
             upcomingOccurrences={recurringOccurrences}
             categories={categories}
             categoryBreakdown={categoryBreakdown}
+            cardPaymentSummary={cardPaymentSummary}
+            bankAccounts={bankAccounts}
             onOpenAddModal={() => setIsAddModalOpen(true)}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}
@@ -389,6 +397,7 @@ export default function App() {
             recurringTemplates={recurringTemplates}
             recurringOccurrences={recurringOccurrences}
             budget={budget}
+            summary={summary}
             categories={categories}
             userProfile={userProfile}
             merchantRules={merchantRules}

@@ -104,7 +104,7 @@ export interface Transaction {
 
 export interface Budget {
   yearMonth: string; // YYYY-MM
-  totalLimit: number;
+  totalLimit: number; // Persisted legacy field used as the user-set monthly allowance limit
   categoryLimits: Record<string, number>; // categoryId -> amount
   thresholds: number[]; // e.g. [0.70, 0.85, 1.00]
   createdAt: string;

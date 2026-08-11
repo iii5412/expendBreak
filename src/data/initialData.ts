@@ -56,7 +56,7 @@ export function getSampleRecurringTemplates(): RecurringTemplate[] {
 export function getSampleBudget(yearMonth: string): Budget {
   return {
     yearMonth,
-    totalLimit: 1800000, // Monthly spending limit
+    totalLimit: 1800000, // Monthly allowance limit (field name retained for stored-data compatibility)
     categoryLimits: {
       delivery_food: 250000,
       dining_out: 300000,

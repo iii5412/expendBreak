@@ -12,17 +12,21 @@ import {
   CheckCircle2,
   Lock,
   Sparkles,
+  CreditCard,
 } from 'lucide-react';
 import { MonthSummary, formatKRW } from '../utils/calculations';
-import { RecurringOccurrence, Category } from '../types';
+import { RecurringOccurrence, Category, BankAccount } from '../types';
+import { CardPaymentSummary } from '../utils/cardPayments';
 
 interface DashboardViewProps {
   summary: MonthSummary;
   upcomingOccurrences: RecurringOccurrence[];
   categories: Category[];
   categoryBreakdown: { categoryId: string; categoryName: string; amount: number; percent: number; color: string }[];
+  cardPaymentSummary: CardPaymentSummary;
+  bankAccounts: BankAccount[];
   onOpenAddModal: () => void;
-  onNavigateTab: (tab: 'history' | 'analytics' | 'management', subTab?: string) => void;
+  onNavigateTab: (tab: 'history' | 'analytics' | 'management' | 'accounts', subTab?: string) => void;
   onConfirmOccurrence: (occId: string) => void;
   onApplyPresetOnboarding: () => void;
 }
@@ -32,6 +36,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   upcomingOccurrences,
   categories,
   categoryBreakdown,
+  cardPaymentSummary,
+  bankAccounts,
   onOpenAddModal,
   onNavigateTab,
   onConfirmOccurrence,
@@ -43,7 +49,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         return {
           bg: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
           text: '안정 (0~69%)',
-          desc: '안전한 지출 속도를 유지하고 있습니다.',
+          desc: '안전한 용돈 사용 속도를 유지하고 있습니다.',
           icon: ShieldCheck,
           barBg: 'bg-emerald-500',
         };
@@ -51,7 +57,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         return {
           bg: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
           text: '주의 (70~84%)',
-          desc: '월 한도의 70%를 넘었습니다. 잔여 한도를 확인하세요.',
+          desc: '월 용돈의 70%를 넘었습니다. 남은 용돈을 확인하세요.',
           icon: AlertTriangle,
           barBg: 'bg-amber-500',
         };
@@ -59,7 +65,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         return {
           bg: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
           text: '위험 (85~99%)',
-          desc: '한도가 얼마 남지 않았습니다! 필수 지출 외에는 동결을 권장합니다.',
+          desc: '용돈이 얼마 남지 않았습니다. 선택 지출을 줄여주세요.',
           icon: ShieldAlert,
           barBg: 'bg-orange-500',
         };
@@ -68,7 +74,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         return {
           bg: 'bg-rose-500/15 text-rose-400 border-rose-500/40',
           text: '한도 초과 (100%+)',
-          desc: '월 한도를 초과했습니다. 추가 지출 사유를 신중히 검토하세요.',
+          desc: '월 용돈을 초과했습니다. 추가 지출을 멈추고 기록만 유지하세요.',
           icon: ShieldAlert,
           barBg: 'bg-rose-500',
         };
@@ -79,10 +85,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const AlertIcon = badgeProps.icon;
 
   const topRisky = categoryBreakdown.slice(0, 3);
+  const linkedAccountIds = new Set(
+    cardPaymentSummary.creditCards
+      .map(card => card.linkedAccountId)
+      .filter((accountId): accountId is string => Boolean(accountId) && bankAccounts.some(account => account.id === accountId)),
+  );
+  const linkedAccounts = bankAccounts.filter(account => linkedAccountIds.has(account.id));
+  const linkedAccountBalance = linkedAccounts.reduce((sum, account) => sum + Math.round(account.balance || 0), 0);
+  const linkedCardPaymentTotal = cardPaymentSummary.creditCards
+    .filter(card => card.linkedAccountId && linkedAccountIds.has(card.linkedAccountId))
+    .reduce((sum, card) => sum + card.totalAmount, 0);
+  const projectedLinkedAccountBalance = linkedAccountBalance - linkedCardPaymentTotal;
+  const unlinkedCreditPayment = cardPaymentSummary.estimatedNextPaymentTotal - linkedCardPaymentTotal;
 
   return (
     <div className="space-y-6 pb-24">
-      {/* 1. Core Safety Spending Card */}
+      {/* 1. Core Allowance Control Card */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
         {/* Subtle Ambient Background Gradient */}
         <div className="absolute top-0 right-0 w-64 h-64 bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -102,14 +120,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Primary Focus: Today's Safe Spending Allowance */}
+        {/* Primary Focus: Today's Safe Allowance */}
         <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-4 mb-4">
           <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
             <span className="flex items-center gap-1.5 font-medium text-slate-300">
               <Zap className="w-4 h-4 text-amber-400" />
-              오늘 안전 사용 가능액
+              오늘 안전 용돈
             </span>
-            <span className="text-[11px] text-slate-500">(안전 잔액 / 남은 {summary.daysRemaining}일)</span>
+            <span className="text-[11px] text-slate-500">(남은 용돈 / 남은 {summary.daysRemaining}일)</span>
           </div>
           <div className="flex items-baseline justify-between">
             <div className="text-3xl font-extrabold text-white tracking-tight">
@@ -123,18 +141,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
           </div>
           <p className="text-xs text-slate-400 mt-2 border-t border-slate-800/60 pt-2 flex items-center justify-between">
-            <span>남은 예정 고정지출을 차감한 진짜 안전액</span>
-            <span className="font-semibold text-rose-300">안전잔액: {formatKRW(summary.safetyBalance)}</span>
+            <span>고정비와 분리해 설정한 용돈 안에서만 계산합니다</span>
+            <span className="font-semibold text-rose-300">남은 용돈: {formatKRW(summary.remainingAllowance)}</span>
           </p>
         </div>
 
         {/* Budget Usage Progress Bar */}
         <div className="space-y-2 mb-4">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400">이번 달 실제 지출</span>
+            <span className="text-slate-400">이번 달 용돈 사용</span>
             <div className="text-slate-200 font-semibold">
-              <span className="text-white font-bold">{formatKRW(summary.confirmedExpenses)}</span>
-              <span className="text-slate-500"> / 한도 {formatKRW(summary.monthlyBudgetLimit)}</span>
+              <span className="text-white font-bold">{formatKRW(summary.confirmedVariableExpenses)}</span>
+              <span className="text-slate-500"> / 용돈 {formatKRW(summary.allowanceLimit)}</span>
               <span className="ml-2 font-bold text-rose-400">({summary.budgetUsagePercent}%)</span>
             </div>
           </div>
@@ -147,16 +165,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <p className="text-[11px] text-slate-400 flex items-center justify-between">
-            <span>단순 남은 한도: {formatKRW(summary.simpleRemainingLimit)}</span>
+            <span>남은 용돈: {formatKRW(summary.remainingAllowance)}</span>
             <span>{badgeProps.desc}</span>
           </p>
         </div>
 
-        {/* 2-Column Cash Flow Overview */}
-        <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800 text-xs">
+        {/* Income, fixed commitments, and planned savings stay separate from allowance. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-800 text-xs">
           <div className="bg-slate-950/40 rounded-xl p-3 border border-slate-800/60">
             <div className="text-slate-400 mb-1 flex items-center justify-between">
-              <span>월 수입 현황</span>
+              <span>이번 달 예상 수입</span>
               <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
             </div>
             <div className="font-bold text-sm text-emerald-400">{formatKRW(summary.totalIncome)}</div>
@@ -167,41 +185,164 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="bg-slate-950/40 rounded-xl p-3 border border-slate-800/60">
             <div className="text-slate-400 mb-1 flex items-center justify-between">
-              <span>남은 고정지출</span>
+              <span>전체 고정비</span>
               <Lock className="w-3.5 h-3.5 text-indigo-400" />
             </div>
             <div className="font-bold text-sm text-indigo-300">
-              {formatKRW(summary.remainingScheduledExpenses)}
+              {formatKRW(summary.totalExpectedFixedExpenses)}
             </div>
             <div className="text-[10px] text-slate-500 mt-0.5">
-              확정 고정비 {formatKRW(summary.confirmedFixedExpenses)}
+              납부 {formatKRW(summary.confirmedFixedExpenses)} | 예정 {formatKRW(summary.remainingScheduledExpenses)}
+            </div>
+          </div>
+
+          <div className={`rounded-xl p-3 border ${
+            summary.plannedSavings >= 0
+              ? 'bg-emerald-500/5 border-emerald-500/20'
+              : 'bg-rose-500/5 border-rose-500/20'
+          }`}>
+            <div className="text-slate-400 mb-1 flex items-center justify-between">
+              <span>{summary.plannedSavings >= 0 ? '저축 예정액' : '용돈 한도 초과 설정'}</span>
+              <Sparkles className={`w-3.5 h-3.5 ${summary.plannedSavings >= 0 ? 'text-emerald-400' : 'text-rose-400'}`} />
+            </div>
+            <div className={`font-bold text-sm ${summary.plannedSavings >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {formatKRW(summary.plannedSavings >= 0 ? summary.plannedSavings : summary.allowanceOverCapacity)}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-0.5">
+              수입 - 고정비 - 용돈 한도
             </div>
           </div>
         </div>
       </div>
 
-      {/* 2. Month-End Forecast Card */}
+      {/* 2. Credit card usage and next settlement estimate */}
+      {(cardPaymentSummary.creditCards.length > 0 || cardPaymentSummary.totalCardUsage > 0) && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-md">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-indigo-500/15 border border-indigo-500/25 flex items-center justify-center">
+                <CreditCard className="w-4 h-4 text-indigo-300" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-100">카드 사용과 다음 결제</h3>
+                <p className="text-[10px] text-slate-500">구매 시 소비 반영 · 결제일에는 계좌 정산</p>
+              </div>
+            </div>
+            <button
+              onClick={() => onNavigateTab('accounts')}
+              className="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200"
+            >
+              카드 설정
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+              <div className="text-[10px] text-slate-500">이번 달 전체 카드 사용</div>
+              <div className="mt-1 text-base font-bold text-slate-100">{formatKRW(cardPaymentSummary.totalCardUsage)}</div>
+              <div className="mt-0.5 text-[10px] text-slate-500">
+                체크카드 {formatKRW(cardPaymentSummary.debitCardUsage)} 포함
+              </div>
+            </div>
+            <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
+              <div className="text-[10px] text-slate-500">다음 달 신용카드 결제 추정</div>
+              <div className="mt-1 text-base font-bold text-indigo-300">
+                {formatKRW(cardPaymentSummary.estimatedNextPaymentTotal)}
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-500">이번 달 사용분 기준</div>
+            </div>
+          </div>
+
+          {cardPaymentSummary.creditCards.some(card => card.totalAmount > 0) ? (
+            <div className="space-y-2">
+              {cardPaymentSummary.creditCards.filter(card => card.totalAmount > 0).slice(0, 4).map(card => {
+                const linkedAccount = bankAccounts.find(account => account.id === card.linkedAccountId);
+                return (
+                  <div key={card.cardId} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-bold text-slate-200">{card.cardName}</div>
+                        <div className="mt-0.5 text-[10px] text-slate-500">
+                          {card.estimatedPaymentDate ? `${card.estimatedPaymentDate} 결제 추정` : '결제일 설정 필요'}
+                          {linkedAccount ? ` · ${linkedAccount.accountName} 출금` : ' · 출금 계좌 미지정'}
+                        </div>
+                      </div>
+                      <div className="font-bold text-indigo-300">{formatKRW(card.totalAmount)}</div>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-800/70 pt-2 text-[10px] text-slate-500">
+                      <span>용돈 사용 {formatKRW(card.allowanceAmount)}</span>
+                      <span>카드 결제 고정비 {formatKRW(card.fixedAmount)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-center text-[11px] text-slate-500">
+              이번 달 등록된 신용카드 사용이 없습니다.
+            </div>
+          )}
+
+          {linkedAccounts.length > 0 && (
+            <div className={`rounded-xl border p-3 text-xs ${
+              projectedLinkedAccountBalance >= 0
+                ? 'border-emerald-500/20 bg-emerald-500/5'
+                : 'border-rose-500/30 bg-rose-500/5'
+            }`}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-slate-400">카드대금 차감 후 연결계좌 예상잔액</span>
+                <span className={`font-bold ${projectedLinkedAccountBalance >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  {formatKRW(projectedLinkedAccountBalance)}
+                </span>
+              </div>
+              <div className="mt-1 text-[10px] text-slate-500">
+                입력된 수동잔액 {formatKRW(linkedAccountBalance)} - 결제 추정 {formatKRW(linkedCardPaymentTotal)}
+              </div>
+            </div>
+          )}
+
+          {(cardPaymentSummary.unassignedCardUsage > 0 || unlinkedCreditPayment > 0) && (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5 text-[10px] leading-relaxed text-amber-200">
+              {cardPaymentSummary.unassignedCardUsage > 0 && (
+                <span>카드 미지정 거래 {formatKRW(cardPaymentSummary.unassignedCardUsage)}은 신용·체크 구분과 결제일을 확인할 수 없습니다. </span>
+              )}
+              {unlinkedCreditPayment > 0 && (
+                <span>출금 계좌가 연결되지 않은 신용카드 결제 추정액은 {formatKRW(unlinkedCreditPayment)}입니다.</span>
+              )}
+            </div>
+          )}
+
+          <p className="text-[10px] leading-relaxed text-slate-500">
+            카드 이용기간 마감일 정보가 없어 이번 달 사용분이 다음 달 결제된다고 가정한 추정치입니다.
+            구매 금액은 이미 이번 달 용돈 또는 고정비에 반영되며, 결제 예정액을 다음 달 지출로 다시 합산하지 않습니다.
+          </p>
+        </div>
+      )}
+
+      {/* 3. Month-End Forecast Card */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-md flex items-center justify-between">
         <div>
           <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-1">
             <Clock className="w-3.5 h-3.5 text-amber-400" />
-            <span>현재 지출 속도 기준 월말 예상 지출</span>
+            <span>현재 용돈 사용 속도 기준 월말 예상 저축</span>
           </div>
           <div className="text-xl font-bold text-slate-100">
-            {summary.forecastMonthEndSpend !== null
-              ? formatKRW(summary.forecastMonthEndSpend)
-              : '데이터 축적 중 (3일 이상 필요)'}
+            {summary.forecastSavings !== null
+              ? formatKRW(summary.forecastSavings)
+              : summary.plannedSavings >= 0
+                ? `용돈 한도를 지키면 ${formatKRW(summary.plannedSavings)} 저축 예정`
+                : `현재 설정이면 ${formatKRW(summary.allowanceOverCapacity)} 부족`}
           </div>
-          {summary.forecastMonthEndSpend !== null && (
+          {summary.forecastVariableSpend !== null && (
             <p className="text-[11px] text-slate-400 mt-0.5">
-              월 한도 대비{' '}
-              {summary.forecastMonthEndSpend > summary.monthlyBudgetLimit ? (
+              용돈 한도 대비{' '}
+              {summary.forecastVariableSpend > summary.allowanceLimit ? (
                 <span className="text-rose-400 font-semibold">
-                  +{formatKRW(summary.forecastMonthEndSpend - summary.monthlyBudgetLimit)} 초과 예상
+                  +{formatKRW(summary.forecastVariableSpend - summary.allowanceLimit)} 초과 예상
                 </span>
               ) : (
                 <span className="text-emerald-400 font-semibold">
-                  {formatKRW(summary.monthlyBudgetLimit - summary.forecastMonthEndSpend)} 안전 세이브 예상
+                  {formatKRW(summary.allowanceLimit - summary.forecastVariableSpend)} 남길 예상
                 </span>
               )}
             </p>
@@ -223,7 +364,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-400" />
-              <span>주의가 필요한 주요 지출 카테고리</span>
+              <span>주의가 필요한 주요 용돈 지출</span>
             </h3>
             <button
               onClick={() => onNavigateTab('analytics')}

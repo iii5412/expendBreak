@@ -35,7 +35,7 @@ import {
   PaymentCard,
   PaymentMethodType,
 } from '../types';
-import { formatKRW } from '../utils/calculations';
+import { formatKRW, MonthSummary } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
 
 const POPULAR_KOREAN_BANKS = [
@@ -60,6 +60,7 @@ interface ManagementViewProps {
   recurringTemplates: RecurringTemplate[];
   recurringOccurrences: RecurringOccurrence[];
   budget: Budget;
+  summary: MonthSummary;
   categories: Category[];
   userProfile: UserProfile;
   merchantRules: MerchantRule[];
@@ -92,6 +93,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   recurringTemplates,
   recurringOccurrences,
   budget,
+  summary,
   categories,
   userProfile,
   merchantRules,
@@ -146,6 +148,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   // Modal State for Budget Edit
   const [tempTotalBudget, setTempTotalBudget] = useState(budget.totalLimit.toString());
+  const tempAllowanceLimit = Math.max(0, Number.parseInt(tempTotalBudget, 10) || 0);
+  const tempPlannedSavings = summary.disposableAfterFixed - tempAllowanceLimit;
 
   // Category Creator
   const [newCatName, setNewCatName] = useState('');
@@ -289,7 +293,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       ...budget,
       totalLimit: val,
     });
-    alert('월 지출 한도가 수정되었습니다.');
+    alert('월 용돈 한도가 수정되었습니다.');
   };
 
   const handleCreateCategory = (e: React.FormEvent) => {
@@ -786,15 +790,15 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <DollarSign className="w-4 h-4 text-rose-400" />
-              <span>월 지출 한도 설정</span>
+              <span>월 용돈 한도 설정</span>
             </h3>
 
             <p className="text-slate-400 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-              💡 <span className="font-bold text-amber-300">핵심 원칙:</span> 지출 한도는 수입과 자동으로 연동되지 않으며, 사용자가 직접 설정한 한도를 기준으로 지출 한도 도달 위험을 감지합니다.
+              💡 <span className="font-bold text-amber-300">핵심 원칙:</span> 고정비는 용돈에서 차감하지 않습니다. 수입에서 고정비와 직접 정한 용돈 한도를 빼고 남는 금액을 저축 예정액으로 관리합니다.
             </p>
 
             <div className="space-y-2 pt-2">
-              <label className="text-slate-300 font-semibold block">이번 달 전체 지출 한도 (KRW)</label>
+              <label className="text-slate-300 font-semibold block">이번 달 내 용돈 한도 (KRW)</label>
               <div className="flex items-center gap-2">
                 <input
                   type="number"
@@ -810,10 +814,39 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 </button>
               </div>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-2.5">
+                <div className="text-[10px] text-slate-500">수입 - 전체 고정비</div>
+                <div className="mt-1 font-bold text-slate-200">{formatKRW(summary.disposableAfterFixed)}</div>
+              </div>
+              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-2.5">
+                <div className="text-[10px] text-slate-500">설정할 용돈</div>
+                <div className="mt-1 font-bold text-rose-300">{formatKRW(tempAllowanceLimit)}</div>
+              </div>
+              <div className={`rounded-lg border p-2.5 ${
+                tempPlannedSavings >= 0
+                  ? 'border-emerald-500/20 bg-emerald-500/5'
+                  : 'border-amber-500/30 bg-amber-500/5'
+              }`}>
+                <div className="text-[10px] text-slate-500">
+                  {tempPlannedSavings >= 0 ? '저축 예정액' : '가용자금 초과'}
+                </div>
+                <div className={`mt-1 font-bold ${tempPlannedSavings >= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                  {formatKRW(Math.abs(tempPlannedSavings))}
+                </div>
+              </div>
+            </div>
+
+            {tempPlannedSavings < 0 && (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
+                현재 예상 수입과 고정비 기준으로 용돈 한도가 {formatKRW(-tempPlannedSavings)} 높습니다. 저장은 가능하지만 저축 예정액이 부족해집니다.
+              </p>
+            )}
           </div>
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-            <h4 className="font-bold text-slate-200">카테고리별 개별 한도 설정</h4>
+            <h4 className="font-bold text-slate-200">용돈 카테고리별 개별 한도 설정</h4>
             <div className="space-y-2">
               {categories
                 .filter(c => c.type === 'expense')

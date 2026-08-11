@@ -118,6 +118,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     }
   }, [isOpen, aiClassificationEnabled]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const defaultCardId = paymentCards[0]?.id || '';
+    setSelectedCardId(current => paymentCards.some(card => card.id === current) ? current : defaultCardId);
+    setConfirmCardId(current => paymentCards.some(card => card.id === current) ? current : defaultCardId);
+  }, [isOpen, paymentCards]);
+
   const categoryForType = (nextType: 'income' | 'expense') =>
     categories.find((category) => category.id === (nextType === 'expense' ? 'etc_expense' : 'etc_income'))?.id
       || categories.find((category) => category.type === nextType && category.active)?.id
@@ -245,6 +252,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       alert(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
+    if (confirmPaymentMethodType === 'card' && paymentCards.length > 0 && !confirmCardId) {
+      alert('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
+      return;
+    }
 
     onSaveTransaction({
       type: confirmType,
@@ -314,6 +325,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     const selectedCategory = categories.find((category) => category.id === categoryId);
     if (!selectedCategory || selectedCategory.type !== type) {
       alert(`${type === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
+      return;
+    }
+    if (paymentMethodType === 'card' && paymentCards.length > 0 && !selectedCardId) {
+      alert('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
       return;
     }
 

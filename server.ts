@@ -7,7 +7,7 @@ import { applicationDefault, getApps as getAdminApps, initializeApp as initializ
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json';
 import { shouldTriggerVoiceFallback, sanitizeVoiceResult } from './src/utils/voice';
-import { createRealtimeSessionForm } from './src/utils/realtimeSession';
+import { createRealtimeSessionForm, parseRealtimeSdpBody } from './src/utils/realtimeSession';
 
 dotenv.config();
 
@@ -180,8 +180,8 @@ app.post(
         });
       }
 
-      const sdp = typeof req.body === 'string' ? req.body.trim() : '';
-      if (!sdp || sdp.length > 64 * 1024) {
+      const sdp = parseRealtimeSdpBody(req.body);
+      if (!sdp) {
         return res.status(400).json({ message: '올바른 WebRTC 연결 정보가 필요합니다.' });
       }
 
@@ -1073,9 +1073,9 @@ app.post('/api/ai/feedback', async (req, res) => {
 
     if (!ai) {
       return res.json({
-        oneLiner: '이번 달 예산 한도 내에서 비교적 안정적으로 지출을 관리하고 있습니다.',
-        positivePoint: '고정지출이 수입 대비 적절한 비율로 관리되고 있습니다.',
-        riskFactors: ['배달음식 카테고리가 예산 한도의 80% 이상 소진되었습니다.'],
+        oneLiner: '고정비와 용돈을 분리해 이번 달 저축 여력을 관리하고 있습니다.',
+        positivePoint: '정한 용돈 한도를 기준으로 선택 지출을 통제하고 있습니다.',
+        riskFactors: ['용돈 사용 속도가 빨라지면 저축 예정액이 줄어들 수 있습니다.'],
         weeklyActions: [
           { action: '주말 배달 2회를 집밥으로 변경하기', estimatedSavings: '약 30,000원 ~ 50,000원 절감' },
           { action: '택시 이용 줄이고 대중교통 이용하기', estimatedSavings: '약 15,000원 절감' },
@@ -1085,13 +1085,16 @@ app.post('/api/ai/feedback', async (req, res) => {
 
     const summaryPrompt = `Analyze these deterministic financial stats for a Korean household app:
 - Month: ${monthSummary.yearMonth}
-- Monthly Budget Limit: ${monthSummary.monthlyBudgetLimit} KRW
-- Confirmed Expenses: ${monthSummary.confirmedExpenses} KRW
-- Safety Balance: ${monthSummary.safetyBalance} KRW
-- Daily Safe Spending Allowance: ${monthSummary.dailySafeAllowance} KRW
-- Budget Usage: ${monthSummary.budgetUsagePercent}%
+- Expected Total Income: ${monthSummary.totalIncome} KRW
+- Total Expected Fixed Expenses: ${monthSummary.totalExpectedFixedExpenses} KRW
+- User-set Monthly Allowance Limit: ${monthSummary.allowanceLimit} KRW
+- Confirmed Allowance Spending: ${monthSummary.confirmedVariableExpenses} KRW
+- Remaining Allowance: ${monthSummary.remainingAllowance} KRW
+- Planned Savings (income - fixed expenses - allowance limit): ${monthSummary.plannedSavings} KRW
+- Daily Safe Allowance: ${monthSummary.dailySafeAllowance} KRW
+- Allowance Usage: ${monthSummary.budgetUsagePercent}%
 - Alert Level: ${monthSummary.alertLevel}
-- Top Category Breakdown: ${JSON.stringify(categoryBreakdown?.slice(0, 5) || [])}
+- Top Allowance Category Breakdown: ${JSON.stringify(categoryBreakdown?.slice(0, 5) || [])}
 
 Provide empathetic, actionable, non-shaming financial feedback strictly in Korean in JSON format.
 Rules:

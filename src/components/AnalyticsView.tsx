@@ -39,17 +39,17 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   const catMap = new Map<string, Category>(categories.map(c => [c.id, c]));
 
-  // 1. Income vs Expense
+  // 1. Income, fixed commitments, and allowance spending
   const incomeVsExpenseData = [
-    { name: '수입', amount: summary.totalIncome, fill: '#10B981' },
-    { name: '실제지출', amount: summary.confirmedExpenses, fill: '#F43F5E' },
-    { name: '고정지출예정', amount: summary.remainingScheduledExpenses, fill: '#6366F1' },
+    { name: '예상수입', amount: summary.totalIncome, fill: '#10B981' },
+    { name: '전체고정비', amount: summary.totalExpectedFixedExpenses, fill: '#6366F1' },
+    { name: '용돈사용', amount: summary.confirmedVariableExpenses, fill: '#F43F5E' },
   ];
 
-  // 2. Category Pie Breakdown
+  // 2. Allowance category breakdown (fixed recurring expenses stay separate)
   const categoryMap: Record<string, number> = {};
   transactions
-    .filter(t => t.type === 'expense' && t.localDate.startsWith(summary.yearMonth))
+    .filter(t => t.type === 'expense' && !t.recurringTemplateId && t.localDate.startsWith(summary.yearMonth))
     .forEach(t => {
       const categoryId = catMap.get(t.categoryId)?.type === 'expense' ? t.categoryId : '__needs_review_expense';
       categoryMap[categoryId] = (categoryMap[categoryId] || 0) + t.amount;
@@ -64,7 +64,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     };
   });
 
-  // 3. Cumulative Daily Spend vs Monthly Limit Line Chart
+  // 3. Cumulative daily allowance spend vs allowance limit
   const daysInMonth = summary.daysInMonth;
   const cumulativeData: { day: string; spend: number; limit: number }[] = [];
   let runningTotal = 0;
@@ -72,7 +72,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   for (let d = 1; d <= daysInMonth; d++) {
     const dayStr = `${summary.yearMonth}-${String(d).padStart(2, '0')}`;
     const daySpend = transactions
-      .filter(t => t.type === 'expense' && t.localDate === dayStr)
+      .filter(t => t.type === 'expense' && !t.recurringTemplateId && t.localDate === dayStr)
       .reduce((sum, t) => sum + t.amount, 0);
 
     runningTotal += daySpend;
@@ -80,7 +80,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     cumulativeData.push({
       day: `${d}일`,
       spend: runningTotal,
-      limit: summary.monthlyBudgetLimit,
+      limit: summary.allowanceLimit,
     });
   }
 
@@ -219,7 +219,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* 1. Income vs Expense Overview Chart */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">수입 vs 지출 구조</h3>
+        <h3 className="text-sm font-bold text-slate-200 mb-3">수입·고정비·용돈 구조</h3>
         <div className="h-52 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={incomeVsExpenseData}>
@@ -237,7 +237,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* 2. Donut Category Breakdown Chart */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 지출 비중</h3>
+        <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 용돈 사용 비중</h3>
         {categoryPieData.length === 0 ? (
           <div className="text-center py-10 text-xs text-slate-500">지출 기록이 없습니다.</div>
         ) : (
@@ -278,9 +278,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         )}
       </div>
 
-      {/* 3. Cumulative Daily Spend vs Monthly Limit Line Chart */}
+      {/* 3. Cumulative Daily Allowance Spend vs Allowance Limit */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">일별 누적 지출 vs 월 한도</h3>
+        <h3 className="text-sm font-bold text-slate-200 mb-3">일별 누적 용돈 사용 vs 월 용돈</h3>
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={cumulativeData}>
@@ -288,8 +288,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               <XAxis dataKey="day" stroke="#94A3B8" fontSize={10} />
               <YAxis stroke="#94A3B8" fontSize={10} tickFormatter={v => `${v / 10000}만`} />
               <Tooltip formatter={(val: any) => formatKRW(val)} />
-              <Line type="monotone" dataKey="spend" name="누적 지출" stroke="#F43F5E" strokeWidth={3} dot={false} />
-              <Line type="monotone" dataKey="limit" name="월 한도" stroke="#10B981" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+              <Line type="monotone" dataKey="spend" name="누적 용돈 사용" stroke="#F43F5E" strokeWidth={3} dot={false} />
+              <Line type="monotone" dataKey="limit" name="월 용돈" stroke="#10B981" strokeWidth={2} strokeDasharray="5 5" dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

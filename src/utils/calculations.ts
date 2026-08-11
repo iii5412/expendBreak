@@ -14,6 +14,7 @@ export interface MonthSummary {
   // Expenses
   confirmedExpenses: number;
   confirmedFixedExpenses: number;
+  confirmedVariableExpenses: number;
   remainingScheduledExpenses: number;
   totalExpectedFixedExpenses: number;
   
@@ -22,10 +23,15 @@ export interface MonthSummary {
   expectedEndMonthCashFlow: number;
   
   // Budget Control
-  monthlyBudgetLimit: number;
-  simpleRemainingLimit: number; // Budget Limit - Confirmed Expenses
-  safetyBalance: number; // Budget Limit - Confirmed Expenses - Remaining Scheduled Expenses
-  dailySafeAllowance: number; // max(0, Math.floor(Safety Balance / Days Remaining))
+  allowanceLimit: number;
+  remainingAllowance: number;
+  disposableAfterFixed: number;
+  plannedSavings: number;
+  allowanceOverCapacity: number;
+  monthlyBudgetLimit: number; // Backward-compatible alias for allowanceLimit
+  simpleRemainingLimit: number; // Backward-compatible alias for remainingAllowance
+  safetyBalance: number; // Backward-compatible alias for remainingAllowance
+  dailySafeAllowance: number; // max(0, Math.floor(Remaining Allowance / Days Remaining))
   
   // Progress & Status
   budgetUsagePercent: number;
@@ -33,6 +39,8 @@ export interface MonthSummary {
   
   // Month-end Forecast
   forecastMonthEndSpend: number | null; // null if insufficient data (< 3 days)
+  forecastVariableSpend: number | null;
+  forecastSavings: number | null;
   forecastAverageDailyVariable: number;
 }
 
@@ -115,6 +123,11 @@ export function calculateMonthSummary(
     .filter(t => t.type === 'expense' && t.recurringTemplateId)
     .reduce((sum, t) => sum + Math.round(t.amount), 0);
 
+  // Allowance spending excludes expenses already committed through recurring templates.
+  const confirmedVariableExpenses = monthTxs
+    .filter(t => t.type === 'expense' && !t.recurringTemplateId)
+    .reduce((sum, t) => sum + Math.round(t.amount), 0);
+
   // Filter pending occurrences for scheduled / needs_confirmation / overdue in this month
   const pendingOccurrences = occurrences.filter(
     o => o.scheduledDate.startsWith(yearMonth) && (o.status === 'scheduled' || o.status === 'needs_confirmation' || o.status === 'overdue')
@@ -142,17 +155,25 @@ export function calculateMonthSummary(
   // Cash flows
   const netCashFlow = confirmedIncome - confirmedExpenses;
   
-  // Budget Calculations
-  const monthlyBudgetLimit = Math.round(budget.totalLimit);
-  const simpleRemainingLimit = monthlyBudgetLimit - confirmedExpenses;
-  const safetyBalance = monthlyBudgetLimit - confirmedExpenses - remainingScheduledExpenses;
+  // Allowance control. Keep Budget.totalLimit persisted as-is and reinterpret it as
+  // the user-controlled allowance limit so existing records require no migration.
+  const allowanceLimit = Math.round(budget.totalLimit);
+  const remainingAllowance = allowanceLimit - confirmedVariableExpenses;
+  const disposableAfterFixed = totalIncome - totalExpectedFixedExpenses;
+  const plannedSavings = disposableAfterFixed - allowanceLimit;
+  const allowanceOverCapacity = Math.max(0, -plannedSavings);
+
+  // Backward-compatible aliases for existing API/AI consumers.
+  const monthlyBudgetLimit = allowanceLimit;
+  const simpleRemainingLimit = remainingAllowance;
+  const safetyBalance = remainingAllowance;
   
-  // Daily Safe Spending Allowance: max(0, floor(safetyBalance / daysRemaining))
-  const dailySafeAllowance = Math.max(0, Math.floor(safetyBalance / Math.max(1, daysRemaining)));
+  // Daily Safe Spending Allowance: max(0, floor(remainingAllowance / daysRemaining))
+  const dailySafeAllowance = Math.max(0, Math.floor(remainingAllowance / Math.max(1, daysRemaining)));
   
-  // Budget Usage %
-  const budgetUsagePercent = monthlyBudgetLimit > 0
-    ? Math.min(999, Math.round((confirmedExpenses / monthlyBudgetLimit) * 100))
+  // Allowance Usage %
+  const budgetUsagePercent = allowanceLimit > 0
+    ? Math.min(999, Math.round((confirmedVariableExpenses / allowanceLimit) * 100))
     : 0;
     
   // Alert Level
@@ -170,6 +191,7 @@ export function calculateMonthSummary(
   // Variable spend = non-fixed expense transactions
   const variableTxs = monthTxs.filter(t => t.type === 'expense' && !t.recurringTemplateId);
   let forecastMonthEndSpend: number | null = null;
+  let forecastVariableSpend: number | null = null;
   let forecastAverageDailyVariable = 0;
   
   if (daysPassed >= 3) {
@@ -183,11 +205,12 @@ export function calculateMonthSummary(
     const observedDays = endDay - startDay + 1;
     forecastAverageDailyVariable = Math.round(recentVariableSpend / observedDays);
     
-    // Month-End Forecast = Confirmed Expenses + Remaining Scheduled Expenses + (Daily Variable Avg * Days Remaining)
-    forecastMonthEndSpend = confirmedExpenses + remainingScheduledExpenses + Math.round(forecastAverageDailyVariable * (daysRemaining - 1));
+    forecastVariableSpend = confirmedVariableExpenses + Math.round(forecastAverageDailyVariable * (daysRemaining - 1));
+    forecastMonthEndSpend = totalExpectedFixedExpenses + forecastVariableSpend;
   }
   
-  const expectedEndMonthCashFlow = totalIncome - (forecastMonthEndSpend ?? (confirmedExpenses + remainingScheduledExpenses));
+  const forecastSavings = forecastMonthEndSpend === null ? null : totalIncome - forecastMonthEndSpend;
+  const expectedEndMonthCashFlow = forecastSavings ?? (totalIncome - totalExpectedFixedExpenses - confirmedVariableExpenses);
 
   return {
     yearMonth,
@@ -199,10 +222,16 @@ export function calculateMonthSummary(
     totalIncome,
     confirmedExpenses,
     confirmedFixedExpenses,
+    confirmedVariableExpenses,
     remainingScheduledExpenses,
     totalExpectedFixedExpenses,
     netCashFlow,
     expectedEndMonthCashFlow,
+    allowanceLimit,
+    remainingAllowance,
+    disposableAfterFixed,
+    plannedSavings,
+    allowanceOverCapacity,
     monthlyBudgetLimit,
     simpleRemainingLimit,
     safetyBalance,
@@ -210,6 +239,8 @@ export function calculateMonthSummary(
     budgetUsagePercent,
     alertLevel,
     forecastMonthEndSpend,
+    forecastVariableSpend,
+    forecastSavings,
     forecastAverageDailyVariable,
   };
 }
@@ -228,10 +259,13 @@ export function formatKRW(amount: number): string {
 export function getCategoryBreakdown(
   yearMonth: string,
   transactions: Transaction[],
-  categories: Record<string, { name: string; color: string; icon: string; type: Transaction['type'] }>
+  categories: Record<string, { name: string; color: string; icon: string; type: Transaction['type'] }>,
+  options: { variableOnly?: boolean } = {},
 ) {
   const expenses = transactions.filter(
-    t => t.type === 'expense' && t.localDate.startsWith(yearMonth)
+    t => t.type === 'expense'
+      && t.localDate.startsWith(yearMonth)
+      && (!options.variableOnly || !t.recurringTemplateId)
   );
   
   const map: Record<string, number> = {};

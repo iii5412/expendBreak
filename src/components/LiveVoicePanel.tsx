@@ -172,6 +172,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         transactions,
         categories,
         bankAccounts,
+        paymentCards,
         budget,
         recurringOccurrences,
         recurringTemplates,

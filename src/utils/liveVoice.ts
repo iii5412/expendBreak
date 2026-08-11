@@ -12,6 +12,7 @@ import {
   VoiceAnalysisResult,
 } from '../types';
 import { calculateMonthSummary, getLocalDateString, getYearMonthString } from './calculations';
+import { calculateCardPaymentSummary } from './cardPayments';
 
 export interface LiveTransactionToolArguments {
   type?: string;
@@ -161,6 +162,7 @@ export function createAssistantFinancialSnapshot(args: {
   transactions: Transaction[];
   categories: Category[];
   bankAccounts: BankAccount[];
+  paymentCards?: PaymentCard[];
   budget: Budget;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
@@ -177,9 +179,12 @@ export function createAssistantFinancialSnapshot(args: {
     now,
   );
   const categoryMap = new Map(args.categories.map(category => [category.id, category.name]));
+  const cardSummary = calculateCardPaymentSummary(yearMonth, args.transactions, args.paymentCards || []);
   const expenseByCategory = new Map<string, number>();
   args.transactions
-    .filter(transaction => transaction.type === 'expense' && transaction.localDate.startsWith(yearMonth))
+    .filter(transaction => transaction.type === 'expense'
+      && !transaction.recurringTemplateId
+      && transaction.localDate.startsWith(yearMonth))
     .forEach(transaction => {
       expenseByCategory.set(
         transaction.categoryId,
@@ -190,13 +195,29 @@ export function createAssistantFinancialSnapshot(args: {
   return {
     기준월: yearMonth,
     확정수입: summary.confirmedIncome,
-    확정지출: summary.confirmedExpenses,
+    예상총수입: summary.totalIncome,
+    확정전체지출: summary.confirmedExpenses,
+    확정고정비: summary.confirmedFixedExpenses,
+    예정고정비: summary.remainingScheduledExpenses,
+    전체고정비: summary.totalExpectedFixedExpenses,
+    사용한용돈: summary.confirmedVariableExpenses,
     순현금흐름: summary.netCashFlow,
-    월예산: summary.monthlyBudgetLimit,
-    남은예산: summary.simpleRemainingLimit,
-    예정고정지출: summary.remainingScheduledExpenses,
-    오늘안전사용가능액: summary.dailySafeAllowance,
+    월용돈한도: summary.allowanceLimit,
+    남은용돈: summary.remainingAllowance,
+    저축예정액: summary.plannedSavings,
+    오늘안전용돈: summary.dailySafeAllowance,
     월말예상지출: summary.forecastMonthEndSpend,
+    월말예상저축: summary.forecastSavings,
+    이번달전체카드사용: cardSummary.totalCardUsage,
+    다음달신용카드결제추정: cardSummary.estimatedNextPaymentTotal,
+    카드미지정사용: cardSummary.unassignedCardUsage,
+    신용카드별결제추정: cardSummary.creditCards
+      .filter(card => card.totalAmount > 0)
+      .map(card => ({
+        카드: `${card.cardCompany} ${card.cardName}`,
+        금액: card.totalAmount,
+        결제예정일: card.estimatedPaymentDate,
+      })),
     수동계좌잔액합계: args.bankAccounts.reduce((sum, account) => sum + Math.round(account.balance || 0), 0),
     계좌잔액: args.bankAccounts.map(account => ({
       은행: account.bankName,
@@ -204,7 +225,7 @@ export function createAssistantFinancialSnapshot(args: {
       잔액: Math.round(account.balance || 0),
       기준일: account.balanceAsOf || null,
     })),
-    지출상위카테고리: [...expenseByCategory.entries()]
+    용돈상위카테고리: [...expenseByCategory.entries()]
       .sort((left, right) => right[1] - left[1])
       .slice(0, 5)
       .map(([categoryId, amount]) => ({ 카테고리: categoryMap.get(categoryId) || '미분류', 금액: amount })),

@@ -110,8 +110,9 @@ describe('GPT live finance helpers', () => {
       now: new Date(2026, 7, 11),
     });
 
-    expect(snapshot.확정지출).toBe(52_000);
-    expect(snapshot.남은예산).toBe(948_000);
+    expect(snapshot.확정전체지출).toBe(52_000);
+    expect(snapshot.사용한용돈).toBe(52_000);
+    expect(snapshot.남은용돈).toBe(948_000);
     expect(snapshot.수동계좌잔액합계).toBe(1_200_000);
     expect(JSON.stringify(snapshot)).not.toContain('110-123-456789');
   });
