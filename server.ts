@@ -184,8 +184,8 @@ app.post(
         return res.status(400).json({ message: '올바른 WebRTC 연결 정보가 필요합니다.' });
       }
 
-      const model = process.env.OPENAI_REALTIME_MODEL?.trim() || 'gpt-realtime-2.1-mini';
-      const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || 'marin';
+      const model = process.env.OPENAI_REALTIME_MODEL?.trim() || 'gpt-4o-mini-realtime-preview';
+      const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || 'alloy';
       const sessionConfig = JSON.stringify({
         type: 'realtime',
         model,
@@ -195,9 +195,12 @@ app.post(
         },
       });
 
+      const sdpBlob = new Blob([sdp], { type: 'application/sdp' });
+      const sessionBlob = new Blob([sessionConfig], { type: 'application/json' });
+
       const formData = new FormData();
-      formData.set('sdp', sdp);
-      formData.set('session', sessionConfig);
+      formData.append('sdp', sdpBlob, 'sdp.txt');
+      formData.append('session', sessionBlob, 'session.json');
 
       const safetyIdentifier = createHmac('sha256', SESSION_SECRET)
         .update(String(res.locals.ownerUid))
@@ -215,8 +218,21 @@ app.post(
       const responseBody = await response.text();
       if (!response.ok) {
         console.error('OpenAI Realtime session error:', response.status, responseBody.slice(0, 500));
+        let errorDetails = 'GPT 라이브 음성 연결을 만들지 못했습니다.';
+        try {
+          const parsed = JSON.parse(responseBody);
+          if (parsed.error?.message) {
+            errorDetails = `OpenAI 오류: ${parsed.error.message}`;
+          } else if (parsed.message) {
+            errorDetails = parsed.message;
+          }
+        } catch {
+          if (responseBody.trim()) {
+            errorDetails = `OpenAI 연결 오류 (${response.status}): ${responseBody.slice(0, 150)}`;
+          }
+        }
         return res.status(response.status >= 500 ? 502 : response.status).json({
-          message: 'GPT 라이브 음성 연결을 만들지 못했습니다.',
+          message: errorDetails,
         });
       }
 

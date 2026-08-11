@@ -34,11 +34,9 @@ import {
   BankAccount,
   PaymentCard,
   PaymentMethodType,
-  Transaction,
 } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
-import { findDuplicateCategory } from '../utils/categoryIntegrity';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -63,7 +61,6 @@ interface ManagementViewProps {
   recurringOccurrences: RecurringOccurrence[];
   budget: Budget;
   categories: Category[];
-  transactions: Transaction[];
   userProfile: UserProfile;
   merchantRules: MerchantRule[];
   bankAccounts?: BankAccount[];
@@ -83,7 +80,7 @@ interface ManagementViewProps {
   onUpdateBudget: (budget: Budget) => void;
   onSaveCategory: (cat: Omit<Category, 'id'>) => void;
   onToggleCategoryActive: (id: string) => void;
-  onMergeCategory: (removeId: string, replaceId?: string) => void;
+  onMergeCategory: (removeId: string, replaceId: string) => void;
   onUpdateUserProfile: (updates: Partial<UserProfile>) => void;
   onExportCSV: () => void;
   onResetData: () => void | Promise<void>;
@@ -96,7 +93,6 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   recurringOccurrences,
   budget,
   categories,
-  transactions,
   userProfile,
   merchantRules,
   bankAccounts = [],
@@ -154,8 +150,6 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   // Category Creator
   const [newCatName, setNewCatName] = useState('');
   const [newCatType, setNewCatType] = useState<'income' | 'expense'>('expense');
-  const [deleteCategoryId, setDeleteCategoryId] = useState<string | null>(null);
-  const [replacementCategoryId, setReplacementCategoryId] = useState('');
 
   // AI Category Suggestion
   const [aiCatPrompt, setAiCatPrompt] = useState('');
@@ -301,76 +295,15 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   const handleCreateCategory = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
-    const duplicate = findDuplicateCategory(categories, newCatName);
-    if (duplicate) {
-      triggerToast(`이미 '${duplicate.name}' 카테고리가 있습니다.`);
-      return;
-    }
-    try {
-      onSaveCategory({
-        name: newCatName.trim(),
-        type: newCatType,
-        icon: 'Tag',
-        color: '#8B5CF6',
-        active: true,
-        isCustom: true,
-      });
-      setNewCatName('');
-      triggerToast('카테고리를 추가했습니다.');
-    } catch (error: any) {
-      triggerToast(error?.message || '카테고리를 추가하지 못했습니다.');
-    }
-  };
-
-  const selectedDeleteCategory = categories.find(category => category.id === deleteCategoryId) || null;
-  const deleteCategoryUsage = selectedDeleteCategory ? {
-    transactions: transactions.filter(transaction => transaction.categoryId === selectedDeleteCategory.id).length,
-    templates: recurringTemplates.filter(template => template.categoryId === selectedDeleteCategory.id).length,
-    rules: merchantRules.filter(rule => rule.categoryId === selectedDeleteCategory.id).length,
-    occurrences: recurringOccurrences.filter(occurrence => occurrence.categoryIdSnapshot === selectedDeleteCategory.id).length,
-    budgets: Object.prototype.hasOwnProperty.call(budget.categoryLimits, selectedDeleteCategory.id) ? 1 : 0,
-  } : { transactions: 0, templates: 0, rules: 0, occurrences: 0, budgets: 0 };
-  const deleteCategoryUsageTotal = Object.values(deleteCategoryUsage).reduce((sum, count) => sum + count, 0);
-  const replacementCategories = selectedDeleteCategory
-    ? categories.filter(category => (
-        category.id !== selectedDeleteCategory.id
-        && category.type === selectedDeleteCategory.type
-        && category.active !== false
-      ))
-    : [];
-
-  const openCategoryDelete = (category: Category) => {
-    if (category.isSystem) {
-      triggerToast('기본 카테고리는 삭제할 수 없습니다. 비활성화를 이용해주세요.');
-      return;
-    }
-    setDeleteCategoryId(category.id);
-    setReplacementCategoryId('');
-  };
-
-  const closeCategoryDelete = () => {
-    setDeleteCategoryId(null);
-    setReplacementCategoryId('');
-  };
-
-  const handleDeleteCategory = () => {
-    if (!selectedDeleteCategory) return;
-    if (deleteCategoryUsageTotal > 0 && !replacementCategoryId) {
-      triggerToast('연결된 내역을 전환할 카테고리를 선택해주세요.');
-      return;
-    }
-    const replacement = categories.find(category => category.id === replacementCategoryId);
-    const confirmationText = replacement
-      ? `'${selectedDeleteCategory.name}'의 연결 내역을 '${replacement.name}'으로 전환하고 삭제할까요?`
-      : `'${selectedDeleteCategory.name}' 카테고리를 삭제할까요?`;
-    if (!confirm(confirmationText)) return;
-    try {
-      onMergeCategory(selectedDeleteCategory.id, replacementCategoryId || undefined);
-      triggerToast(replacement ? `'${replacement.name}'으로 전환 후 삭제했습니다.` : '카테고리를 삭제했습니다.');
-      closeCategoryDelete();
-    } catch (error: any) {
-      triggerToast(error?.message || '카테고리를 삭제하지 못했습니다.');
-    }
+    onSaveCategory({
+      name: newCatName.trim(),
+      type: newCatType,
+      icon: 'Tag',
+      color: '#8B5CF6',
+      active: true,
+      isCustom: true,
+    });
+    setNewCatName('');
   };
 
   const handleRunAiCategorySuggest = async () => {
@@ -996,29 +929,19 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     </div>
                     <button
                       onClick={() => {
-                        const duplicate = findDuplicateCategory(categories, sug.suggestedName);
-                        if (duplicate) {
-                          triggerToast(`이미 '${duplicate.name}' 카테고리가 있습니다.`);
-                          return;
-                        }
-                        try {
-                          onSaveCategory({
-                            name: sug.suggestedName,
-                            type: 'expense',
-                            icon: 'Tag',
-                            color: '#A855F7',
-                            active: true,
-                            isCustom: true,
-                          });
-                          triggerToast(`'${sug.suggestedName}' 카테고리를 추가했습니다.`);
-                        } catch (error: any) {
-                          triggerToast(error?.message || '카테고리를 추가하지 못했습니다.');
-                        }
+                        onSaveCategory({
+                          name: sug.suggestedName,
+                          type: 'expense',
+                          icon: 'Tag',
+                          color: '#A855F7',
+                          active: true,
+                          isCustom: true,
+                        });
+                        alert(`'${sug.suggestedName}' 카테고리가 추가되었습니다.`);
                       }}
-                      disabled={Boolean(sug.existingMatchId || findDuplicateCategory(categories, sug.suggestedName))}
-                      className="text-[11px] bg-slate-800 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-slate-200 px-2.5 py-1 rounded"
+                      className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded"
                     >
-                      {sug.existingMatchId || findDuplicateCategory(categories, sug.suggestedName) ? '이미 있음' : '추가'}
+                      추가
                     </button>
                   </div>
                 ))}
@@ -1057,7 +980,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
           {/* Category List */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
-            <h4 className="font-bold text-slate-200 mb-2">카테고리 관리</h4>
+            <h4 className="font-bold text-slate-200 mb-2">카테고리 활성 / 비활성 관리</h4>
             <div className="space-y-1.5">
               {categories.map(c => (
                 <div key={c.id} className="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
@@ -1069,107 +992,18 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     <span className="text-[10px] text-slate-500">({c.type === 'income' ? '수입' : '지출'})</span>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => onToggleCategoryActive(c.id)}
-                      className={`text-xs px-2.5 py-1 rounded transition-colors ${
-                        c.active ? 'bg-slate-800 text-slate-300' : 'bg-rose-500/20 text-rose-300'
-                      }`}
-                    >
-                      {c.active ? '비활성화' : '다시 사용'}
-                    </button>
-                    {!c.isSystem && (
-                      <button
-                        type="button"
-                        onClick={() => openCategoryDelete(c)}
-                        className="rounded p-1.5 text-slate-500 transition-colors hover:bg-rose-500/10 hover:text-rose-300"
-                        title={`${c.name} 카테고리 삭제`}
-                        aria-label={`${c.name} 카테고리 삭제`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => onToggleCategoryActive(c.id)}
+                    className={`text-xs px-2.5 py-1 rounded transition-colors ${
+                      c.active ? 'bg-slate-800 text-slate-300' : 'bg-rose-500/20 text-rose-300'
+                    }`}
+                  >
+                    {c.active ? '비활성화' : '다시 사용'}
+                  </button>
                 </div>
               ))}
             </div>
           </div>
-
-          {selectedDeleteCategory && (
-            <div className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/85 p-0 backdrop-blur-sm sm:items-center sm:p-4">
-              <div className="w-full max-w-md space-y-4 rounded-t-3xl border border-slate-800 bg-slate-900 p-5 shadow-2xl sm:rounded-2xl">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="flex items-center gap-2 text-base font-bold text-white">
-                      <Trash2 className="h-4 w-4 text-rose-300" />
-                      카테고리 삭제
-                    </h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      ‘{selectedDeleteCategory.name}’ ({selectedDeleteCategory.type === 'income' ? '수입' : '지출'})
-                    </p>
-                  </div>
-                  <button type="button" onClick={closeCategoryDelete} className="rounded p-1 text-slate-400 hover:text-white">
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-
-                {deleteCategoryUsageTotal > 0 ? (
-                  <div className="space-y-3">
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-                      <p className="font-bold">이 카테고리는 사용 중이므로 바로 삭제할 수 없습니다.</p>
-                      <p className="mt-1 leading-relaxed text-amber-100/80">
-                        거래 {deleteCategoryUsage.transactions}건 · 고정지출/수입 {deleteCategoryUsage.templates}건 ·
-                        자동분류 규칙 {deleteCategoryUsage.rules}건 · 예정 내역 {deleteCategoryUsage.occurrences}건 ·
-                        예산 설정 {deleteCategoryUsage.budgets}건
-                      </p>
-                    </div>
-
-                    <label className="block">
-                      <span className="mb-1.5 block font-bold text-slate-200">전환할 카테고리</span>
-                      <select
-                        value={replacementCategoryId}
-                        onChange={event => setReplacementCategoryId(event.target.value)}
-                        className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-slate-100"
-                      >
-                        <option value="">반드시 선택해주세요</option>
-                        {replacementCategories.map(category => (
-                          <option key={category.id} value={category.id}>{category.name}</option>
-                        ))}
-                      </select>
-                    </label>
-
-                    {replacementCategories.length === 0 && (
-                      <p className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">
-                        전환 가능한 같은 유형의 활성 카테고리가 없습니다. 먼저 새 카테고리를 추가해주세요.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs leading-relaxed text-slate-300">
-                    연결된 거래나 고정 항목이 없습니다. 삭제하면 카테고리 목록에서 제거됩니다.
-                  </p>
-                )}
-
-                <div className="flex gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={closeCategoryDelete}
-                    className="flex-1 rounded-xl border border-slate-700 bg-slate-800 py-3 font-bold text-slate-300"
-                  >
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteCategory}
-                    disabled={deleteCategoryUsageTotal > 0 && (!replacementCategoryId || replacementCategories.length === 0)}
-                    className="flex-1 rounded-xl bg-rose-500 py-3 font-bold text-white hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {deleteCategoryUsageTotal > 0 ? '전환 후 삭제' : '삭제'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 

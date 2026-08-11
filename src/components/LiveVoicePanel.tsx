@@ -47,7 +47,7 @@ interface LiveVoicePanelProps {
   onUseQuickVoice: () => void;
 }
 
-const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
+const REALTIME_MODEL = 'gpt-4o-mini-realtime-preview';
 const LIVE_ASSISTANT_PROMPT = `
 당신은 1인 사용자를 위한 한국어 수입·지출 비서다.
 돈에 관해 말하면 정확히 이해하고 거래 초안을 만들며, 개인 재무 질문에는 도구로 조회한 계산 결과만 근거로 답한다.
@@ -311,7 +311,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         audio: {
           input: {
             transcription: {
-              model: 'gpt-4o-mini-transcribe',
+              model: 'whisper-1',
               language: 'ko',
             },
             turn_detection: {
@@ -321,7 +321,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
               interrupt_response: true,
             },
           },
-          output: { voice: 'marin' },
+          output: { voice: 'alloy' },
         },
         tools: [
           {
@@ -389,13 +389,16 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         throw new Error('이 브라우저는 GPT 라이브 음성을 지원하지 않습니다.');
       }
 
-      const peer = new RTCPeerConnection();
+      const peer = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
       peerRef.current = peer;
       const remoteAudio = document.createElement('audio');
       remoteAudio.autoplay = true;
       audioRef.current = remoteAudio;
       peer.ontrack = event => {
         remoteAudio.srcObject = event.streams[0];
+        remoteAudio.play().catch(() => undefined);
       };
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
@@ -435,7 +438,12 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
       if (!response.ok) {
         const raw = await response.text();
         let message = 'GPT 라이브 음성에 연결하지 못했습니다.';
-        try { message = JSON.parse(raw).message || message; } catch { /* response can be plain text */ }
+        try {
+          const parsed = JSON.parse(raw);
+          message = parsed.message || parsed.error?.message || message;
+        } catch {
+          if (raw.trim()) message = raw.slice(0, 200);
+        }
         throw new Error(message);
       }
       const answerSdp = await response.text();

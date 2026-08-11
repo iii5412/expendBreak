@@ -390,7 +390,6 @@ export default function App() {
             recurringOccurrences={recurringOccurrences}
             budget={budget}
             categories={categories}
-            transactions={transactions}
             userProfile={userProfile}
             merchantRules={merchantRules}
             bankAccounts={bankAccounts}

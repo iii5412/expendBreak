@@ -152,7 +152,7 @@ export function createLiveVoiceResult(
     reason: cleanText(raw.reason, 300) || 'GPT 라이브 대화에서 만든 거래 초안',
     multipleTransactionsDetected: false,
     needsConfirmation: true,
-    modelUsed: context.modelUsed || 'gpt-realtime-2.1-mini',
+    modelUsed: context.modelUsed || 'gpt-4o-mini-realtime-preview',
     fallbackUsed: false,
   };
 }
