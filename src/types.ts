@@ -170,7 +170,9 @@ export interface UserProfile {
   email: string;
   currency: string;
   timezone: string;
-  monthStartDay: number; // default 1
+  monthStartDay: number; // Salary/payday accounting cycle start (default 10)
+  /** One-time persisted migration marker for the salary-day planning model. */
+  paydayPlanningVersion?: number;
   aiClassificationEnabled: boolean;
   aiInsightsEnabled: boolean;
   aiConsentAt: string | null;

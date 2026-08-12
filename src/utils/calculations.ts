@@ -26,6 +26,7 @@ export interface MonthSummary {
   
   // Budget Control
   allowanceLimit: number;
+  spendableLimit: number;
   remainingAllowance: number;
   disposableAfterFixed: number;
   plannedSavings: number;
@@ -142,6 +143,19 @@ export function isDateInPeriod(localDate: string, period: AccountingPeriod): boo
   return localDate >= period.startDate && localDate <= period.endDate;
 }
 
+/** Returns the monthly due date that belongs to this payday period. */
+export function getMonthlyDueDateInPeriod(dayOfMonth: number, period: AccountingPeriod): string | null {
+  const calendarMonths = [...new Set([period.startDate.slice(0, 7), period.endDate.slice(0, 7)])];
+  for (const yearMonth of calendarMonths) {
+    const [year, month] = yearMonth.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).getDate();
+    const day = Math.min(lastDay, Math.max(1, Math.trunc(dayOfMonth)));
+    const candidate = `${yearMonth}-${String(day).padStart(2, '0')}`;
+    if (isDateInPeriod(candidate, period)) return candidate;
+  }
+  return null;
+}
+
 /** Which period a date belongs to, e.g. 2026-09-02 with start day 25 -> 2026-08. */
 export function getYearMonthForDate(localDate: string, monthStartDay: number = 1): string {
   const startDay = normalizeMonthStartDay(monthStartDay);
@@ -232,14 +246,43 @@ export function calculateMonthSummary(
     .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
 
   // Remaining Scheduled Expenses (recurring items with template.type === 'expense' or fallback)
-  const remainingScheduledExpenses = pendingOccurrences
+  const scheduledOccurrenceExpenses = pendingOccurrences
     .filter(o => {
       const tmpl = templateMap.get(o.templateId);
       return (o.typeSnapshot ?? tmpl?.type) === 'expense';
     })
     .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
 
-  const totalIncome = confirmedIncome + scheduledIncome;
+  // Occurrences are normally generated before this calculation. Keep the plan
+  // safe even when a newly registered template has not materialized yet: every
+  // active monthly fixed expense due in the salary cycle is reserved once.
+  const occurrenceTemplateIds = new Set(
+    occurrences
+      .filter(o => isDateInPeriod(o.scheduledDate, period))
+      .map(o => o.templateId),
+  );
+  const transactionTemplateIds = new Set(
+    monthTxs
+      .filter(t => t.type === 'expense' && t.recurringTemplateId)
+      .map(t => t.recurringTemplateId as string),
+  );
+  const unmaterializedFixedExpenses = templates
+    .filter(template => {
+      if (!template.active || template.type !== 'expense' || template.frequency !== 'monthly') return false;
+      if (occurrenceTemplateIds.has(template.id) || transactionTemplateIds.has(template.id)) return false;
+      const dueDate = getMonthlyDueDateInPeriod(template.dayOfMonth, period);
+      return Boolean(
+        dueDate
+        && dueDate >= template.startDate
+        && (!template.endDate || dueDate <= template.endDate),
+      );
+    })
+    .reduce((sum, template) => sum + Math.round(template.defaultAmount), 0);
+  const remainingScheduledExpenses = scheduledOccurrenceExpenses + unmaterializedFixedExpenses;
+
+  // Spending starts only after money has actually arrived. Registered future
+  // income remains informational and never increases the usable balance.
+  const totalIncome = confirmedIncome;
   const totalExpectedRecurringIncome = confirmedRecurringIncome + scheduledIncome;
   const totalExpectedFixedExpenses = confirmedFixedExpenses + remainingScheduledExpenses;
   
@@ -249,8 +292,9 @@ export function calculateMonthSummary(
   // Allowance control. Keep Budget.totalLimit persisted as-is and reinterpret it as
   // the user-controlled allowance limit so existing records require no migration.
   const allowanceLimit = Math.round(budget.totalLimit);
-  const remainingAllowance = allowanceLimit - confirmedVariableExpenses;
   const disposableAfterFixed = totalIncome - totalExpectedFixedExpenses;
+  const spendableLimit = Math.max(0, Math.min(allowanceLimit, disposableAfterFixed));
+  const remainingAllowance = spendableLimit - confirmedVariableExpenses;
   const plannedSavings = disposableAfterFixed - allowanceLimit;
   const allowanceOverCapacity = Math.max(0, -plannedSavings);
 
@@ -263,9 +307,9 @@ export function calculateMonthSummary(
   const dailySafeAllowance = Math.max(0, Math.floor(remainingAllowance / Math.max(1, daysRemaining)));
   
   // Allowance Usage %
-  const budgetUsagePercent = allowanceLimit > 0
-    ? Math.min(999, Math.round((confirmedVariableExpenses / allowanceLimit) * 100))
-    : 0;
+  const budgetUsagePercent = spendableLimit > 0
+    ? Math.min(999, Math.round((confirmedVariableExpenses / spendableLimit) * 100))
+    : confirmedVariableExpenses > 0 ? 999 : 0;
     
   // Alert Level
   let alertLevel: BudgetAlertLevel = 'safe';
@@ -326,6 +370,7 @@ export function calculateMonthSummary(
     netCashFlow,
     expectedEndMonthCashFlow,
     allowanceLimit,
+    spendableLimit,
     remainingAllowance,
     disposableAfterFixed,
     plannedSavings,

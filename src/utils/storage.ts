@@ -138,6 +138,24 @@ export function initializeStorageAfterLogin() {
       }
     }
 
+    // This app plans spending from salary day (10th) through the day before
+    // the next salary. Persist the migration once so an existing cloud profile
+    // does not keep using the old calendar-month default after refresh.
+    const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+    if (profile.paydayPlanningVersion !== 1) {
+      const migratedProfile: UserProfile = {
+        ...profile,
+        monthStartDay: 10,
+        paydayPlanningVersion: 1,
+        updatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(migratedProfile));
+      const saved = await syncUserProfileToFirestore(migratedProfile);
+      if (!saved) {
+        throw new Error('급여일 10일 기준 예산 주기를 DB에 저장하지 못했습니다.');
+      }
+    }
+
     storageReady = true;
     initFirestoreSync(notifyListeners);
     notifyListeners();

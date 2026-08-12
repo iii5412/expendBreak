@@ -54,6 +54,10 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
     if (prepared?.previewUrl) URL.revokeObjectURL(prepared.previewUrl);
   }, [prepared]);
 
+  useEffect(() => {
+    setCardId(current => paymentCards.some(card => card.id === current) ? current : paymentCards[0]?.id || '');
+  }, [paymentCards]);
+
   const defaultExpenseCategory = () => categories.find(category => category.id === 'etc_expense')?.id
     || categories.find(category => category.type === 'expense' && category.active)?.id
     || '';
@@ -255,8 +259,8 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
                 </button>
               ))}
             </div>
-            {paymentMethodType === 'card' && paymentCards.length > 0 && <select value={cardId} onChange={event => setCardId(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white"><option value="">카드 선택</option>{paymentCards.map(card => <option key={card.id} value={card.id}>{card.cardName} ({card.cardCompany})</option>)}</select>}
-            {paymentMethodType === 'account' && bankAccounts.length > 0 && <select value={accountId} onChange={event => setAccountId(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white"><option value="">계좌 선택</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>[{account.bankName}] {account.accountName}</option>)}</select>}
+            {paymentMethodType === 'card' && <select value={cardId} onChange={event => setCardId(event.target.value)} disabled={paymentCards.length === 0} className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white disabled:text-slate-500"><option value="">{paymentCards.length > 0 ? '카드 선택' : '등록된 카드 없음'}</option>{paymentCards.map(card => <option key={card.id} value={card.id}>{card.cardName} ({card.cardCompany})</option>)}</select>}
+            {paymentMethodType === 'account' && <select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={bankAccounts.length === 0} className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white disabled:text-slate-500"><option value="">{bankAccounts.length > 0 ? '계좌 선택' : '등록된 계좌 없음'}</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>[{account.bankName}] {account.accountName}</option>)}</select>}
           </div>
 
           <label className="block space-y-1 text-slate-400">메모

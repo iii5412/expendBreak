@@ -126,9 +126,19 @@ export function createLiveVoiceResult(
     ? cleanText(raw.date, 10)
     : defaultDate;
   const merchant = cleanText(raw.merchant, 120) || (type === 'income' ? '수입처 미확인' : '사용처 미확인');
-  const paymentMethodType = resolvePaymentMethod(raw.payment_method);
   const transcript = cleanText(raw.spoken_summary, 500)
     || [date, merchant, amount ? `${amount}원` : '', type === 'income' ? '수입' : '지출'].filter(Boolean).join(' ');
+  const cardHint = raw.card_name || raw.spoken_summary;
+  const accountHint = raw.account_name || raw.spoken_summary;
+  const matchedCardId = findNamedId(context.paymentCards, cardHint, ['cardName', 'cardCompany']);
+  const matchedAccountId = findNamedId(context.bankAccounts, accountHint, ['bankName', 'accountName']);
+  const paymentMethodType = raw.payment_method
+    ? resolvePaymentMethod(raw.payment_method)
+    : matchedCardId
+      ? 'card'
+      : matchedAccountId
+        ? 'account'
+        : resolvePaymentMethod(raw.spoken_summary);
   const confidenceValue = Number(raw.confidence);
 
   return {
@@ -147,12 +157,8 @@ export function createLiveVoiceResult(
     ),
     paymentMethodType,
     paymentMethodHint: cleanText(raw.card_name || raw.account_name || raw.payment_method, 100),
-    suggestedAccountId: paymentMethodType === 'account'
-      ? findNamedId(context.bankAccounts, raw.account_name, ['bankName', 'accountName'])
-      : null,
-    suggestedCardId: paymentMethodType === 'card'
-      ? findNamedId(context.paymentCards, raw.card_name, ['cardName', 'cardCompany'])
-      : null,
+    suggestedAccountId: paymentMethodType === 'account' ? matchedAccountId : null,
+    suggestedCardId: paymentMethodType === 'card' ? matchedCardId : null,
     tags: Array.isArray(raw.tags)
       ? raw.tags.map(tag => cleanText(tag, 40).replace(/^#/, '')).filter(Boolean).slice(0, 10)
       : [],

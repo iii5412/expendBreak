@@ -79,6 +79,24 @@ describe('GPT live finance helpers', () => {
     expect(result.amount).toBe(24_900);
   });
 
+  it('recognizes a card company spoken in the summary even when card_name is omitted', () => {
+    const result = createLiveVoiceResult({
+      type: 'expense', amount: 15_000, merchant: '카페', payment_method: 'card',
+      spoken_summary: '신한카드로 카페에서 15000원 결제',
+    }, {
+      categories,
+      merchantRules: [],
+      bankAccounts: [],
+      paymentCards: [{
+        id: 'shinhan', cardName: '생활 카드', cardCompany: '신한카드', cardType: 'credit',
+        createdAt: '2026-08-01', updatedAt: '2026-08-01',
+      }],
+    });
+
+    expect(result.paymentMethodType).toBe('card');
+    expect(result.suggestedCardId).toBe('shinhan');
+  });
+
   it('returns deterministic financial facts without account numbers', () => {
     const accounts: BankAccount[] = [{
       id: 'account-1',
@@ -111,7 +129,7 @@ describe('GPT live finance helpers', () => {
 
     expect(snapshot.확정전체지출).toBe(52_000);
     expect(snapshot.사용한용돈).toBe(52_000);
-    expect(snapshot.남은용돈).toBe(948_000);
+    expect(snapshot.남은용돈).toBe(-52_000);
     expect(snapshot.수동계좌잔액합계).toBe(1_200_000);
     expect(JSON.stringify(snapshot)).not.toContain('110-123-456789');
   });

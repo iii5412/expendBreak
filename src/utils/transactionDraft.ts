@@ -16,6 +16,9 @@ export interface TransactionDraft {
   merchant: string;
   memo: string;
   tagsText: string;
+  paymentMethodType?: 'account' | 'card' | 'cash' | 'other';
+  accountId?: string;
+  cardId?: string;
   savedAt: string;
 }
 

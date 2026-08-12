@@ -144,8 +144,19 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   // Persist the manual form so an auto-lock does not discard it.
   useEffect(() => {
     if (!isOpen) return;
-    saveTransactionDraft({ type, amount, localDate, categoryId, merchant, memo, tagsText });
-  }, [isOpen, type, amount, localDate, categoryId, merchant, memo, tagsText]);
+    saveTransactionDraft({
+      type,
+      amount,
+      localDate,
+      categoryId,
+      merchant,
+      memo,
+      tagsText,
+      paymentMethodType,
+      accountId: selectedAccountId,
+      cardId: selectedCardId,
+    });
+  }, [isOpen, type, amount, localDate, categoryId, merchant, memo, tagsText, paymentMethodType, selectedAccountId, selectedCardId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -199,6 +210,20 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setConfirmType(safeType);
       setConfirmDate(data.date || getLocalDateString());
       setConfirmMemo(data.memo || aiPromptText);
+      const compactPrompt = aiPromptText.toLocaleLowerCase('ko-KR').replace(/\s+/g, '');
+      const matchedCard = paymentCards.find(card => [card.cardName, card.cardCompany]
+        .some(value => compactPrompt.includes(value.toLocaleLowerCase('ko-KR').replace(/\s+/g, ''))));
+      const matchedAccount = bankAccounts.find(account => [account.bankName, account.accountName]
+        .some(value => compactPrompt.includes(value.toLocaleLowerCase('ko-KR').replace(/\s+/g, ''))));
+      if (matchedCard) {
+        setConfirmPaymentMethodType('card');
+        setConfirmCardId(matchedCard.id);
+      } else if (matchedAccount) {
+        setConfirmPaymentMethodType('account');
+        setConfirmAccountId(matchedAccount.id);
+      } else if (compactPrompt.includes('현금')) {
+        setConfirmPaymentMethodType('cash');
+      }
     } catch (err: any) {
       console.error(err);
       setAiError('AI 분석 중 오류가 발생했습니다. 아래 수동 입력을 이용해주세요.');
@@ -217,6 +242,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       failValidation(`${confirmType === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
+    if (confirmPaymentMethodType === 'card' && paymentCards.length > 0 && !confirmCardId) {
+      failValidation('카드 결제 예정액을 계산할 수 있도록 사용한 카드를 선택해 주세요.');
+      return;
+    }
     setSaveError(null);
 
     onSaveTransaction({
@@ -229,6 +258,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       memo: confirmMemo,
       tags: normalizeTags(tagsText),
       source: 'ai',
+      paymentMethodType: confirmPaymentMethodType,
+      accountId: confirmPaymentMethodType === 'account' ? confirmAccountId : null,
+      cardId: confirmPaymentMethodType === 'card' ? confirmCardId : null,
       aiConfidence: aiResult?.confidence || 0.9,
       aiReviewed: true,
     });
@@ -342,6 +374,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setMerchant(confirmMerchant);
     if (confirmCategoryId) setCategoryId(confirmCategoryId);
     setMemo(confirmMemo);
+    setPaymentMethodType(confirmPaymentMethodType);
+    setSelectedAccountId(confirmAccountId);
+    setSelectedCardId(confirmCardId);
     setVoiceResult(null);
     setActiveMode('manual');
   };
@@ -392,6 +427,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setMerchant(recoverableDraft.merchant);
     setMemo(recoverableDraft.memo);
     setTagsText(recoverableDraft.tagsText);
+    setPaymentMethodType(recoverableDraft.paymentMethodType || 'card');
+    setSelectedAccountId(recoverableDraft.accountId || '');
+    setSelectedCardId(recoverableDraft.cardId || paymentCards[0]?.id || '');
     setActiveMode('manual');
     setRecoverableDraft(null);
   };
@@ -767,7 +805,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                       type="button"
                       onClick={() => setConfirmPaymentMethodType('cash')}
                       className={`p-1.5 rounded-lg text-xs font-semibold border ${
-                        confirmPaymentMethodType === 'cash'
+                        (confirmPaymentMethodType === 'cash' || confirmPaymentMethodType === 'other')
                           ? 'bg-slate-800 border-slate-600 text-slate-200'
                           : 'bg-slate-900 border-slate-800 text-slate-400'
                       }`}
@@ -776,13 +814,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     </button>
                   </div>
 
-                  {confirmPaymentMethodType === 'card' && paymentCards.length > 0 && (
+                  {confirmPaymentMethodType === 'card' && (
                     <select
                       value={confirmCardId}
                       onChange={(e) => setConfirmCardId(e.target.value)}
+                      disabled={paymentCards.length === 0}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-white"
                     >
-                      <option value="">-- 카드 선택 --</option>
+                      <option value="">{paymentCards.length > 0 ? '-- 카드 선택 --' : '등록된 카드 없음'}</option>
                       {paymentCards.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.cardName} ({c.cardCompany})
@@ -791,13 +830,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     </select>
                   )}
 
-                  {confirmPaymentMethodType === 'account' && bankAccounts.length > 0 && (
+                  {confirmPaymentMethodType === 'account' && (
                     <select
                       value={confirmAccountId}
                       onChange={(e) => setConfirmAccountId(e.target.value)}
+                      disabled={bankAccounts.length === 0}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-white"
                     >
-                      <option value="">-- 계좌 선택 --</option>
+                      <option value="">{bankAccounts.length > 0 ? '-- 계좌 선택 --' : '등록된 계좌 없음'}</option>
                       {bankAccounts.map((a) => (
                         <option key={a.id} value={a.id}>
                           [{a.bankName}] {a.accountName}
@@ -990,6 +1030,29 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </div>
                 </div>
 
+                <div>
+                  <label className="text-slate-400 block mb-1">결제 / 출금 수단</label>
+                  <div className="grid grid-cols-3 gap-2 mb-2">
+                    {([['card', '카드'], ['account', '계좌'], ['cash', '현금/기타']] as Array<[PaymentMethodType, string]>).map(([method, label]) => (
+                      <button key={method} type="button" onClick={() => setConfirmPaymentMethodType(method)} className={`rounded-lg border p-2 text-xs font-semibold ${(confirmPaymentMethodType === method || (method === 'cash' && confirmPaymentMethodType === 'other')) ? 'border-indigo-500 bg-indigo-600/30 text-indigo-200' : 'border-slate-800 bg-slate-900 text-slate-400'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {confirmPaymentMethodType === 'card' && (
+                    <select value={confirmCardId} onChange={event => setConfirmCardId(event.target.value)} disabled={paymentCards.length === 0} className="w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white disabled:text-slate-500">
+                      <option value="">{paymentCards.length > 0 ? '-- 카드 선택 --' : '등록된 카드 없음'}</option>
+                      {paymentCards.map(card => <option key={card.id} value={card.id}>{card.cardName} ({card.cardCompany})</option>)}
+                    </select>
+                  )}
+                  {confirmPaymentMethodType === 'account' && (
+                    <select value={confirmAccountId} onChange={event => setConfirmAccountId(event.target.value)} disabled={bankAccounts.length === 0} className="w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white disabled:text-slate-500">
+                      <option value="">{bankAccounts.length > 0 ? '-- 계좌 선택 --' : '등록된 계좌 없음'}</option>
+                      {bankAccounts.map(account => <option key={account.id} value={account.id}>[{account.bankName}] {account.accountName}</option>)}
+                    </select>
+                  )}
+                </div>
+
                 <div className="text-xs text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
                   <span className="font-semibold text-amber-300">AI 판단 이유:</span> {aiResult.reason}
                 </div>
@@ -1134,13 +1197,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 </button>
               </div>
 
-              {paymentMethodType === 'card' && paymentCards.length > 0 && (
+              {paymentMethodType === 'card' && (
                 <select
                   value={selectedCardId}
                   onChange={(e) => setSelectedCardId(e.target.value)}
+                  disabled={paymentCards.length === 0}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white"
                 >
-                  <option value="">-- 카드 선택 --</option>
+                  <option value="">{paymentCards.length > 0 ? '-- 카드 선택 --' : '등록된 카드 없음'}</option>
                   {paymentCards.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.cardName} ({c.cardCompany})
@@ -1149,13 +1213,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 </select>
               )}
 
-              {paymentMethodType === 'account' && bankAccounts.length > 0 && (
+              {paymentMethodType === 'account' && (
                 <select
                   value={selectedAccountId}
                   onChange={(e) => setSelectedAccountId(e.target.value)}
+                  disabled={bankAccounts.length === 0}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white"
                 >
-                  <option value="">-- 계좌 선택 --</option>
+                  <option value="">{bankAccounts.length > 0 ? '-- 계좌 선택 --' : '등록된 계좌 없음'}</option>
                   {bankAccounts.map((a) => (
                     <option key={a.id} value={a.id}>
                       [{a.bankName}] {a.accountName} ({a.accountNumber})

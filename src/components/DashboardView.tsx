@@ -147,7 +147,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
           </div>
           <p className="text-xs text-slate-400 mt-2 border-t border-slate-800/60 pt-2 flex items-center justify-between">
-            <span>고정비와 분리해 설정한 용돈 안에서만 계산합니다</span>
+            <span>입금된 수입에서 이번 급여 주기의 고정비를 먼저 확보한 뒤 계산합니다</span>
             <span className="font-semibold text-rose-300">남은 용돈: {formatKRW(summary.remainingAllowance)}</span>
           </p>
         </div>
@@ -158,7 +158,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-slate-400">이번 달 용돈 사용</span>
             <div className="text-slate-200 font-semibold">
               <span className="text-white font-bold">{formatKRW(summary.confirmedVariableExpenses)}</span>
-              <span className="text-slate-400"> / 용돈 {formatKRW(summary.allowanceLimit)}</span>
+              <span className="text-slate-400"> / 사용 가능 {formatKRW(summary.spendableLimit)}</span>
               <span className="ml-2 font-bold text-rose-400">({summary.budgetUsagePercent}%)</span>
             </div>
           </div>
@@ -198,14 +198,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="bg-slate-950/40 rounded-xl p-3 border border-slate-800/60">
             <div className="text-slate-400 mb-1 flex items-center justify-between">
-              <span>이번 달 고정지출</span>
+              <span>급여일에 먼저 확보할 고정지출</span>
               <Lock className="w-3.5 h-3.5 text-indigo-400" />
             </div>
             <div className="font-bold text-sm text-indigo-300">
               {formatKRW(summary.totalExpectedFixedExpenses)}
             </div>
             <div className="text-xs text-slate-400 mt-0.5">
-              납부 {formatKRW(summary.confirmedFixedExpenses)} | 예정 {formatKRW(summary.remainingScheduledExpenses)}
+              납부 {formatKRW(summary.confirmedFixedExpenses)} | 미납부·예약 {formatKRW(summary.remainingScheduledExpenses)}
             </div>
           </div>
 

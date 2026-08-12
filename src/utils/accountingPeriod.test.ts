@@ -7,6 +7,7 @@ import {
   getCategoryBreakdown,
   getCurrentYearMonth,
   getMonthDaysInfo,
+  getMonthlyDueDateInPeriod,
   getYearMonthForDate,
   normalizeMonthStartDay,
   shiftYearMonth,
@@ -83,6 +84,12 @@ describe('accounting period', () => {
   it('labels the range only when it is not a calendar month', () => {
     expect(formatPeriodRange(getAccountingPeriod('2026-08', 1, now))).toBe('');
     expect(formatPeriodRange(getAccountingPeriod('2026-08', 25, now))).toBe('8/25~9/24');
+  });
+
+  it('finds due dates on either side of a salary-day cycle', () => {
+    const period = getAccountingPeriod('2026-08', 10, now);
+    expect(getMonthlyDueDateInPeriod(25, period)).toBe('2026-08-25');
+    expect(getMonthlyDueDateInPeriod(5, period)).toBe('2026-09-05');
   });
 });
 

@@ -40,6 +40,7 @@ import {
   formatKRW,
   getAccountingPeriod,
   getCurrentYearMonth,
+  getMonthlyDueDateInPeriod,
   MonthSummary,
   normalizeMonthStartDay,
 } from '../utils/calculations';
@@ -278,6 +279,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
     setRecurringError(null);
 
+    const existingTemplate = editingTemplateId
+      ? recurringTemplates.find(template => template.id === editingTemplateId)
+      : null;
+    const dueDateInCurrentPeriod = getMonthlyDueDateInPeriod(dayNum, currentPeriodPreview)
+      || currentPeriodPreview.startDate;
     const payload = {
       type: recType,
       name: recName,
@@ -296,8 +302,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       paymentMethodType: recPaymentMethodType,
       accountId: recPaymentMethodType === 'account' ? (recAccountId || null) : (recPaymentMethodType === 'card' ? (recAccountId || null) : null),
       cardId: recPaymentMethodType === 'card' ? (recCardId || null) : null,
-      startDate: new Date().toISOString().split('T')[0],
-      nextDueDate: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`,
+      // A new commitment belongs to the full salary cycle even when its due
+      // date is before the day it was entered. Editing must not reset its term.
+      startDate: existingTemplate?.startDate || currentPeriodPreview.startDate,
+      nextDueDate: dueDateInCurrentPeriod,
       active: true,
     };
 
@@ -1082,15 +1090,15 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <CalendarRange className="w-4 h-4 text-rose-300" />
-              <span>예산 주기 (월 시작일)</span>
+              <span>급여 사용 주기</span>
             </h3>
             <p className="text-xs leading-relaxed text-slate-400">
-              급여일에 맞춰 예산 주기를 옮길 수 있습니다. 예를 들어 25일로 설정하면 한 기간이 25일부터 다음 달 24일까지입니다.
-              요약, 분석, 카드 정산, CSV 내보내기가 모두 이 주기를 따릅니다.
+              급여일을 주기의 첫날로 삼습니다. 10일로 설정하면 10일부터 다음 달 9일까지가 한 기간입니다.
+              이 기간의 활성 고정지출은 실제 납부일이 25일이라도 급여가 들어온 시점에 먼저 전액 확보합니다.
             </p>
 
             <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
-              <span className="font-bold text-slate-200">매월 시작일</span>
+              <span className="font-bold text-slate-200">매월 급여일</span>
               <select
                 value={normalizeMonthStartDay(userProfile.monthStartDay)}
                 onChange={async event => {

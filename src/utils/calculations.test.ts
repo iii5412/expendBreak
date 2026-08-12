@@ -44,8 +44,47 @@ describe('financial calculations', () => {
   });
 
   it('uses configured alert thresholds', () => {
-    const summary = calculateMonthSummary('2026-08', [tx({ amount: 520_000 })], [], budget, [], now);
+    const summary = calculateMonthSummary('2026-08', [
+      tx({ id: 'income', type: 'income', categoryId: 'salary', amount: 1_000_000 }),
+      tx({ amount: 520_000 }),
+    ], [], budget, [], now);
     expect(summary.alertLevel).toBe('caution');
+  });
+
+  it('does not make scheduled income spendable before it is deposited', () => {
+    const incomeTemplate: RecurringTemplate = {
+      id: 'salary-template', type: 'income', name: '급여', defaultAmount: 3_000_000,
+      categoryId: 'salary', counterparty: '회사', frequency: 'monthly', dayOfMonth: 10,
+      holidayPolicy: 'previous_business_day', postingMode: 'confirm', allowAmountChange: true,
+      startDate: '2026-01-01', nextDueDate: '2026-08-10', active: true,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    };
+    const scheduledIncome: RecurringOccurrence = {
+      id: 'salary-pending', templateId: incomeTemplate.id, occurrenceKey: 'salary_2026-08-10',
+      scheduledDate: '2026-08-10', expectedAmount: 3_000_000, status: 'needs_confirmation',
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    };
+
+    const summary = calculateMonthSummary('2026-08', [], [scheduledIncome], budget, [incomeTemplate], now, 10);
+    expect(summary.scheduledIncome).toBe(3_000_000);
+    expect(summary.totalIncome).toBe(0);
+    expect(summary.spendableLimit).toBe(0);
+  });
+
+  it('reserves every active fixed expense in the salary cycle before its due date', () => {
+    const fixedTemplate: RecurringTemplate = {
+      id: 'insurance', type: 'expense', name: '보험료', defaultAmount: 250_000,
+      categoryId: 'food', counterparty: '보험사', expenseNature: 'fixed', frequency: 'monthly', dayOfMonth: 25,
+      holidayPolicy: 'next_business_day', postingMode: 'confirm', allowAmountChange: true,
+      startDate: '2026-08-10', nextDueDate: '2026-08-25', active: true,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    };
+    const salary = tx({ id: 'salary', type: 'income', categoryId: 'salary', amount: 3_000_000, localDate: '2026-08-10' });
+
+    const summary = calculateMonthSummary('2026-08', [salary], [], budget, [fixedTemplate], now, 10);
+    expect(summary.totalExpectedFixedExpenses).toBe(250_000);
+    expect(summary.disposableAfterFixed).toBe(2_750_000);
+    expect(summary.spendableLimit).toBe(1_000_000);
   });
 
   it('keeps fixed expenses outside the user allowance and derives planned savings', () => {

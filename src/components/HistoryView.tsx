@@ -15,7 +15,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { Transaction, Category } from '../types';
+import { Transaction, Category, BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { AccountingPeriod, formatKRW, formatPeriodRange, getLocalDateString } from '../utils/calculations';
 import { normalizeTags } from '../utils/receipt';
 import { ReceiptDetailsModal } from './ReceiptDetailsModal';
@@ -46,6 +46,8 @@ function highlight(text: string, query: string): React.ReactNode {
 interface HistoryViewProps {
   transactions: Transaction[];
   categories: Category[];
+  bankAccounts: BankAccount[];
+  paymentCards: PaymentCard[];
   /** App-wide accounting period; the default filter follows it. */
   period: AccountingPeriod;
   /** Owns the confirmation dialog and the undo window (see App). */
@@ -56,6 +58,8 @@ interface HistoryViewProps {
 export const HistoryView: React.FC<HistoryViewProps> = ({
   transactions,
   categories,
+  bankAccounts,
+  paymentCards,
   period,
   onDeleteTransaction,
   onUpdateTransaction,
@@ -216,6 +220,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       setEditError(`${editingTx.type === 'expense' ? '지출' : '수입'} 유형에 맞는 카테고리를 선택해 주세요.`);
       return;
     }
+    const paymentMethodType = editingTx.paymentMethodType || 'other';
+    if (paymentMethodType === 'card' && paymentCards.length > 0 && !editingTx.cardId) {
+      setEditError('사용한 카드를 선택해 주세요.');
+      return;
+    }
     setEditError(null);
     onUpdateTransaction(editingTx.id, {
       amount,
@@ -226,6 +235,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       occurredAt: `${editingTx.localDate}T12:00:00.000Z`,
       type: editingTx.type,
       tags: normalizeTags(editingTx.tags || []),
+      paymentMethodType,
+      accountId: paymentMethodType === 'account' ? editingTx.accountId || null : null,
+      cardId: paymentMethodType === 'card' ? editingTx.cardId || null : null,
     });
     setEditingTx(null);
   };
@@ -660,6 +672,57 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="text-slate-400 mb-1 block">결제 / 출금 수단</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {([['card', '카드'], ['account', '계좌'], ['cash', '현금/기타']] as Array<[PaymentMethodType, string]>).map(([method, label]) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => {
+                        setEditError(null);
+                        setEditingTx({
+                          ...editingTx,
+                          paymentMethodType: method,
+                          accountId: method === 'account' ? editingTx.accountId : null,
+                          cardId: method === 'card' ? (editingTx.cardId || paymentCards[0]?.id || null) : null,
+                        });
+                      }}
+                      className={`rounded-lg border p-2 font-semibold ${
+                        (editingTx.paymentMethodType || 'other') === method
+                          || (method === 'cash' && (editingTx.paymentMethodType || 'other') === 'other')
+                          ? 'border-indigo-500 bg-indigo-500/20 text-indigo-200'
+                          : 'border-slate-800 bg-slate-950 text-slate-400'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {(editingTx.paymentMethodType || 'other') === 'card' && (
+                  <select
+                    value={editingTx.cardId || ''}
+                    onChange={event => setEditingTx({ ...editingTx, cardId: event.target.value || null })}
+                    disabled={paymentCards.length === 0}
+                    className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5 text-slate-100 disabled:text-slate-500"
+                  >
+                    <option value="">{paymentCards.length > 0 ? '-- 카드 선택 --' : '등록된 카드 없음'}</option>
+                    {paymentCards.map(card => <option key={card.id} value={card.id}>{card.cardName} ({card.cardCompany})</option>)}
+                  </select>
+                )}
+                {(editingTx.paymentMethodType || 'other') === 'account' && (
+                  <select
+                    value={editingTx.accountId || ''}
+                    onChange={event => setEditingTx({ ...editingTx, accountId: event.target.value || null })}
+                    disabled={bankAccounts.length === 0}
+                    className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-950 p-2.5 text-slate-100 disabled:text-slate-500"
+                  >
+                    <option value="">{bankAccounts.length > 0 ? '-- 계좌 선택 --' : '등록된 계좌 없음'}</option>
+                    {bankAccounts.map(account => <option key={account.id} value={account.id}>[{account.bankName}] {account.accountName}</option>)}
+                  </select>
+                )}
               </div>
 
               <div>

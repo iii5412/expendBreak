@@ -564,6 +564,8 @@ export default function App() {
           <HistoryView
             transactions={transactions}
             categories={categories}
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
             period={period}
             onDeleteTransaction={handleDeleteTransaction}
             onUpdateTransaction={updateTransaction}
