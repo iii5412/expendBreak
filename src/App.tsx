@@ -496,11 +496,13 @@ export default function App() {
           <DashboardView
             summary={summary}
             upcomingOccurrences={recurringOccurrences}
+            recurringTemplates={recurringTemplates}
             categories={categories}
             categoryBreakdown={categoryBreakdown}
             cardPaymentSummary={cardPaymentSummary}
             cardSettlementSummary={cardSettlementSummary}
             bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
             onOpenAddModal={() => setIsAddModalOpen(true)}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}

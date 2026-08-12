@@ -16,17 +16,20 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { MonthSummary, formatKRW } from '../utils/calculations';
-import { RecurringOccurrence, Category, BankAccount } from '../types';
+import { RecurringOccurrence, RecurringTemplate, Category, BankAccount, PaymentCard } from '../types';
 import { CardPaymentSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
+import { getPendingRecurringTimeline } from '../utils/recurringTimeline';
 
 interface DashboardViewProps {
   summary: MonthSummary;
   upcomingOccurrences: RecurringOccurrence[];
+  recurringTemplates: RecurringTemplate[];
   categories: Category[];
   categoryBreakdown: { categoryId: string; categoryName: string; amount: number; percent: number; color: string }[];
   cardPaymentSummary: CardPaymentSummary;
   cardSettlementSummary: MonthlyCardSettlementSummary;
   bankAccounts: BankAccount[];
+  paymentCards: PaymentCard[];
   onOpenAddModal: () => void;
   onNavigateTab: (tab: 'history' | 'analytics' | 'management' | 'accounts', subTab?: string) => void;
   onConfirmOccurrence: (occId: string) => void;
@@ -38,11 +41,13 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   summary,
   upcomingOccurrences,
+  recurringTemplates,
   categories,
   categoryBreakdown,
   cardPaymentSummary,
   cardSettlementSummary,
   bankAccounts,
+  paymentCards,
   onOpenAddModal,
   onNavigateTab,
   onConfirmOccurrence,
@@ -103,6 +108,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     .reduce((sum, card) => sum + card.totalAmount, 0);
   const projectedLinkedAccountBalance = linkedAccountBalance - linkedCardPaymentTotal;
   const unlinkedCreditPayment = cardPaymentSummary.estimatedNextPaymentTotal - linkedCardPaymentTotal;
+  const pendingRecurringTimeline = getPendingRecurringTimeline(upcomingOccurrences);
+
+  const describeRecurringPaymentMethod = (occurrence: RecurringOccurrence, template?: RecurringTemplate) => {
+    const paymentMethodType = occurrence.paymentMethodType || template?.paymentMethodType;
+    const accountId = occurrence.accountId || template?.accountId;
+    const cardId = occurrence.cardId || template?.cardId;
+
+    if (paymentMethodType === 'card') {
+      const card = paymentCards.find(candidate => candidate.id === cardId);
+      return card ? `카드 · ${card.cardName}` : '카드 결제';
+    }
+    if (paymentMethodType === 'account') {
+      const account = bankAccounts.find(candidate => candidate.id === accountId);
+      return account ? `계좌 · ${account.accountName}` : '계좌 이체';
+    }
+    return '직접 결제 / 기타';
+  };
 
   return (
     <div className="space-y-6 pb-24">
@@ -432,12 +454,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* 4. Upcoming Recurring Schedule Widget */}
+      {/* 4. Pending recurring schedule for the selected accounting period */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-sm font-bold text-slate-200">이번 달 예정 정기 항목 타임라인</h3>
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-emerald-400" />
+              <h3 className="text-sm font-bold text-slate-200">이번 급여 주기의 미처리 정기 일정</h3>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              정기/고정 관리에서 등록한 항목 중 아직 거래로 확정하지 않은 수입·지출입니다. 금액은 해당 월에 저장된 계획 금액입니다.
+            </p>
           </div>
           <button
             onClick={() => onNavigateTab('management', 'recurring')}
@@ -448,9 +475,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
 
-        {upcomingOccurrences.length === 0 ? (
+        {pendingRecurringTimeline.length === 0 ? (
           <div className="space-y-2 rounded-lg border border-slate-800/60 bg-slate-950/40 py-6 text-center text-xs text-slate-400">
-            <p>이 기간에 남은 정기 지출 및 수입 일정이 없습니다.</p>
+            <p>이번 급여 주기에 처리할 정기 수입·지출 일정이 없습니다.</p>
             <button
               onClick={() => onNavigateTab('management', 'recurring')}
               className="min-h-9 rounded-lg border border-slate-700 bg-slate-900 px-3 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
@@ -460,30 +487,57 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         ) : (
           <div className="space-y-2">
-            {upcomingOccurrences.slice(0, 3).map(occ => (
-              <div
-                key={occ.id}
-                className="bg-slate-950/60 border border-slate-800 rounded-lg p-3 flex items-center justify-between text-xs"
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-200">{occ.scheduledDate}</span>
-                    <span className="text-xs font-semibold bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700">
-                      {occ.status === 'needs_confirmation' ? '확인 필요' : '예정'}
-                    </span>
-                  </div>
-                  <div className="text-slate-400 mt-1">예상 금액: {formatKRW(occ.expectedAmount)}</div>
-                </div>
-
-                <button
-                  onClick={() => onConfirmOccurrence(occ.id)}
-                  className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1"
+            {pendingRecurringTimeline.slice(0, 3).map(occ => {
+              const template = recurringTemplates.find(candidate => candidate.id === occ.templateId);
+              const type = occ.typeSnapshot || template?.type || 'expense';
+              const statusLabel = occ.status === 'overdue'
+                ? '예정일 지남'
+                : occ.status === 'needs_confirmation'
+                  ? '확인 필요'
+                  : '자동 반영 예정';
+              return (
+                <div
+                  key={occ.id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>거래 확정</span>
-                </button>
-              </div>
-            ))}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate font-bold text-slate-100">{template?.name || '삭제된 정기 항목'}</span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                        type === 'income'
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                          : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+                      }`}>
+                        {type === 'income' ? '정기 수입' : '고정 지출'}
+                      </span>
+                      <span className="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
+                        {statusLabel}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-slate-400">
+                      {occ.scheduledDate} · {describeRecurringPaymentMethod(occ, template)}
+                    </div>
+                    <div className="mt-1 font-semibold text-slate-200">이번 달 계획 금액 {formatKRW(occ.expectedAmount)}</div>
+                  </div>
+
+                  <button
+                    onClick={() => onConfirmOccurrence(occ.id)}
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/20 px-3 py-1.5 font-medium text-emerald-300 transition-colors hover:bg-emerald-500/30"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>거래 확정</span>
+                  </button>
+                </div>
+              );
+            })}
+            {pendingRecurringTimeline.length > 3 && (
+              <button
+                onClick={() => onNavigateTab('management', 'recurring')}
+                className="w-full rounded-lg border border-slate-800 bg-slate-950/40 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              >
+                나머지 {pendingRecurringTimeline.length - 3}건 모두 보기
+              </button>
+            )}
           </div>
         )}
       </div>

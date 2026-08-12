@@ -198,6 +198,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   };
 
   const openNewRecurringModal = () => {
+    setRecurringError(null);
     setEditingTemplateId(null);
     setRecType('expense');
     setRecName('');
@@ -229,6 +230,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   };
 
   const openEditRecurringModal = (tmpl: RecurringTemplate) => {
+    setRecurringError(null);
     setEditingTemplateId(tmpl.id);
     setRecType(tmpl.type);
     setRecName(tmpl.name);
@@ -1366,11 +1368,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </button>
             </div>
 
-            {recurringError && (
-              <p role="alert" className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300">
-                {recurringError}
-              </p>
-            )}
+            <div aria-live="polite">
+              {recurringError && (
+                <p role="alert" className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300">
+                  {recurringError}
+                </p>
+              )}
+            </div>
 
             <form onSubmit={handleSaveRecurringSubmit} className="space-y-3 text-xs" noValidate>
               <div>
