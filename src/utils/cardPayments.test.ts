@@ -30,8 +30,22 @@ describe('calculateMonthlyCardSettlementSummary', () => {
     expect(summary.linkedAccountTotal).toBe(230_000);
     expect(summary.cards[0]).toEqual(expect.objectContaining({
       source: 'estimated',
+      status: 'scheduled',
       paymentDate: '2026-09-30',
     }));
+  });
+
+  it('keeps the card bill amount when its monthly status changes to paid', () => {
+    const paidCards: PaymentCard[] = [{
+      ...cards[0],
+      monthlyPaymentStatuses: { '2026-09': 'paid' },
+    }];
+    const summary = calculateMonthlyCardSettlementSummary('2026-09', [
+      transaction({ cardId: 'credit', amount: 230_000 }),
+    ], paidCards);
+
+    expect(summary.totalAmount).toBe(230_000);
+    expect(summary.cards[0]).toEqual(expect.objectContaining({ status: 'paid', amount: 230_000 }));
   });
 
   it('prefers a confirmed month-specific amount without counting it as another transaction', () => {

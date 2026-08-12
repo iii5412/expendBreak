@@ -74,6 +74,7 @@ interface ManagementViewProps {
   initialSubTab?: string;
   recurringTemplates: RecurringTemplate[];
   recurringOccurrences: RecurringOccurrence[];
+  ignoredCardSettlementTemplateIds?: string[];
   budget: Budget;
   summary: MonthSummary;
   categories: Category[];
@@ -108,6 +109,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   initialSubTab = 'recurring',
   recurringTemplates,
   recurringOccurrences,
+  ignoredCardSettlementTemplateIds = [],
   budget,
   summary,
   categories,
@@ -442,7 +444,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       }
     >();
 
-    const activeExpenseTemplates = recurringTemplates.filter(template => {
+  const activeExpenseTemplates = recurringTemplates.filter(template => {
+      if (ignoredCardSettlementTemplateIds.includes(template.id)) return false;
       if (!template.active || template.type !== 'expense') return false;
       const occurrence = recurringOccurrences.find(item => item.templateId === template.id);
       return (occurrence?.paymentMethodType ?? template.paymentMethodType) !== 'card';
@@ -488,7 +491,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
 
     return Array.from(groupsMap.values()).sort((a, b) => b.totalExpectedAmount - a.totalExpectedAmount);
-  }, [recurringTemplates, recurringOccurrences]);
+  }, [recurringTemplates, recurringOccurrences, ignoredCardSettlementTemplateIds]);
 
   // Total transfer required for registered accounts
   const totalTransferNeeded = accountGroups.reduce((acc, g) => acc + g.totalExpectedAmount, 0);

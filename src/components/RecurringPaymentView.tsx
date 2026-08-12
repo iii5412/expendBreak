@@ -39,6 +39,8 @@ interface RecurringPaymentViewProps {
   paymentCards: PaymentCard[];
   cardSettlementSummary: MonthlyCardSettlementSummary;
   onReloadRecurringPlan: () => Promise<void>;
+  duplicateManualCardSettlementCount: number;
+  onUpdateCardSettlementStatus: (cardId: string, status: 'scheduled' | 'paid') => void;
   onPostOccurrence: (
     occId: string,
     customAmount?: number,
@@ -65,6 +67,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   paymentCards,
   cardSettlementSummary,
   onReloadRecurringPlan,
+  duplicateManualCardSettlementCount,
+  onUpdateCardSettlementStatus,
   onPostOccurrence,
   onUpdateOccurrenceStatus,
   onUpdateOccurrencePlan,
@@ -177,11 +181,16 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     (sum, o) => sum + (o.actualAmount ?? o.expectedAmount),
     cardSettlementSummary.totalAmount,
   );
+  const postedCardSettlementAmount = cardSettlementSummary.cards
+    .filter(card => card.status === 'paid')
+    .reduce((sum, card) => sum + card.amount, 0);
   const totalPostedExpense = nonCardExpenseOccurrences
     .filter((o) => o.status === 'posted')
-    .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), 0);
+    .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), postedCardSettlementAmount);
   const pendingExpenseAmount = totalScheduledExpense - totalPostedExpense;
-  const cardSettlementItems = cardSettlementSummary.cards.filter(card => card.amount > 0);
+  const cardSettlementItems = cardSettlementSummary.cards;
+  const pendingCardSettlementCount = cardSettlementItems.filter(card => card.status !== 'paid').length;
+  const paidCardSettlementCount = cardSettlementItems.filter(card => card.status === 'paid').length;
   const [selectedYear, selectedMonth] = period.yearMonth.split('-').map(Number);
   const previousMonthDate = new Date(selectedYear, selectedMonth - 2, 1);
   const previousYearMonth = `${previousMonthDate.getFullYear()}-${String(previousMonthDate.getMonth() + 1).padStart(2, '0')}`;
@@ -274,10 +283,10 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             미처리 항목 건수
           </div>
           <p className="text-xl font-extrabold text-indigo-300 mt-1">
-            {recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length}건
+            {recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건
           </p>
           <p className="text-xs text-slate-400 mt-1">
-            수입 {incomeOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 대기 중
+            수입 {incomeOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건 대기 중
           </p>
         </div>
       </div>
@@ -287,7 +296,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           <div>
             <h3 className="flex items-center gap-2 text-sm font-bold text-indigo-200">
               <CreditCard className="h-4 w-4" />
-              신용카드 결제계좌 반영액
+              자동 생성 카드대금 고정출금 항목
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               {period.yearMonth} 결제 예정액은 {previousYearMonth}에 현재까지 등록된 카드 사용과 카드 결제 고정지출을 합산합니다. 카드 사용 거래를 다시 지출로 중복 저장하지 않고 결제계좌에서 확보할 출금액으로 반영합니다.
@@ -298,7 +307,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
 
         {cardSettlementItems.length === 0 ? (
           <p className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-400">
-            {previousYearMonth}에 등록된 신용카드 사용액이 없습니다.
+            등록된 신용카드가 없습니다. 카드와 결제계좌를 연결하면 월별 카드대금 항목이 자동 생성됩니다.
           </p>
         ) : (
           <div className="space-y-2">
@@ -309,7 +318,13 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
               return (
                 <div key={card.cardId} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
                   <div className="min-w-0">
-                    <div className="font-bold text-slate-100">{card.cardName} 카드대금</div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-bold text-slate-100">{card.cardName} 카드대금</span>
+                      <span className="rounded border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-bold text-indigo-200">자동 생성</span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${card.status === 'paid' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}>
+                        {card.status === 'paid' ? '납부 완료' : '납부 예정'}
+                      </span>
+                    </div>
                     <div className="mt-1 text-slate-400">
                       {card.paymentDate ? `${card.paymentDate} 출금 예정` : '결제일 미지정'} · {linkedAccount ? `[${linkedAccount.bankName}] ${linkedAccount.accountName}` : '결제계좌 미지정'}
                     </div>
@@ -317,7 +332,16 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       {card.source === 'confirmed' ? '직접 저장한 월 결제액' : `${previousYearMonth} 현재 사용액 자동 계산`}
                     </div>
                   </div>
-                  <span className="shrink-0 font-extrabold text-indigo-200">{formatKRW(card.amount)}</span>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    <span className="font-extrabold text-indigo-200">{formatKRW(card.amount)}</span>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateCardSettlementStatus(card.cardId, card.status === 'paid' ? 'scheduled' : 'paid')}
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${card.status === 'paid' ? 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'}`}
+                    >
+                      {card.status === 'paid' ? '미납부로 되돌리기' : '납부 완료'}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -326,6 +350,11 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
         {cardSettlementSummary.unlinkedAmount > 0 && (
           <p className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-2.5 text-xs text-amber-200">
             결제계좌가 지정되지 않은 카드대금 {formatKRW(cardSettlementSummary.unlinkedAmount)}은 계좌별 확보액에 포함할 수 없습니다. 카드 설정에서 결제계좌를 연결해 주세요.
+          </p>
+        )}
+        {duplicateManualCardSettlementCount > 0 && (
+          <p className="rounded-xl border border-sky-500/25 bg-sky-500/10 p-2.5 text-xs text-sky-200">
+            동일 카드와 결제계좌로 등록된 기존 수동 카드대금 {duplicateManualCardSettlementCount}건은 자동 생성 항목으로 대체되어 고정지출 합계에서 제외했습니다.
           </p>
         )}
       </div>
@@ -341,7 +370,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            미처리 대기 ({recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length})
+            미처리 대기 ({recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount})
           </button>
 
           <button
@@ -363,7 +392,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            고정 지출만 ({expenseOccurrences.length})
+            고정 지출만 ({expenseOccurrences.length + cardSettlementItems.length})
           </button>
 
           <button
@@ -374,7 +403,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            처리 완료 ({recurringOccurrences.filter((o) => o.status === 'posted').length})
+            처리 완료 ({recurringOccurrences.filter((o) => o.status === 'posted').length + paidCardSettlementCount})
           </button>
 
           <button
@@ -385,13 +414,13 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            전체 보기 ({recurringOccurrences.length})
+            전체 보기 ({recurringOccurrences.length + cardSettlementItems.length})
           </button>
         </div>
       </div>
 
       {/* List of Recurring Items */}
-      {filteredOccurrences.length === 0 ? (
+      {filteredOccurrences.length === 0 && cardSettlementItems.length === 0 ? (
         <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-8 text-center space-y-3">
           <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
             <Receipt className="w-6 h-6" />
@@ -401,7 +430,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             관리 메뉴의 '정기 항목 템플릿'에서 월급, 부수입, 관리비 등을 등록해보세요. 카드대금은 카드별 지출에서 자동 계산됩니다.
           </p>
         </div>
-      ) : (
+      ) : filteredOccurrences.length > 0 ? (
         <div className="space-y-3">
           {filteredOccurrences.map((occ) => {
             const tmpl = occ.tmpl;
@@ -550,7 +579,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             );
           })}
         </div>
-      )}
+      ) : null}
 
       {/* CONFIRM PAYMENT / INCOME MODAL */}
       <Modal

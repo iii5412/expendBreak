@@ -43,6 +43,7 @@ export interface MonthlyCardSettlement {
   amount: number;
   estimatedAmount: number;
   source: 'confirmed' | 'estimated';
+  status: 'scheduled' | 'paid';
 }
 
 export interface MonthlyCardSettlementSummary {
@@ -246,6 +247,7 @@ export function calculateMonthlyCardSettlementSummary(
         amount,
         estimatedAmount,
         source: hasConfirmedAmount ? 'confirmed' as const : 'estimated' as const,
+        status: card.monthlyPaymentStatuses?.[paymentYearMonth] === 'paid' ? 'paid' as const : 'scheduled' as const,
       };
     })
     .sort((left, right) => right.amount - left.amount);

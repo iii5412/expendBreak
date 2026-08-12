@@ -5,6 +5,7 @@ export type HolidayPolicy = 'previous_business_day' | 'next_business_day' | 'fix
 export type PostingMode = 'auto' | 'confirm';
 export type OccurrenceStatus = 'scheduled' | 'needs_confirmation' | 'posted' | 'skipped' | 'overdue';
 export type PaymentMethodType = 'account' | 'card' | 'cash' | 'other';
+export type CardPaymentStatus = 'scheduled' | 'paid';
 
 export interface ReceiptLineItem {
   name: string;
@@ -53,6 +54,7 @@ export interface PaymentCard {
   linkedAccountId?: string | null; // 출금 계좌 ID (BankAccount ID)
   billingDay?: number | null; // 결제일 (1~31)
   monthlyPaymentAmounts?: Record<string, number>; // 결제월(YYYY-MM)별 확정 카드대금
+  monthlyPaymentStatuses?: Record<string, CardPaymentStatus>; // 결제월별 납부 상태(금액 산식과 분리)
   memo?: string; // 비고
   createdAt: string;
   updatedAt: string;

@@ -75,6 +75,7 @@ import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndic
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { OnboardingResult, OnboardingSheet } from './components/OnboardingSheet';
+import { getDuplicateManualCardSettlementTemplateIds } from './utils/cardSettlementPlans';
 
 type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
@@ -239,6 +240,27 @@ export default function App() {
       .join('|'),
     [recurringTemplates],
   );
+  const duplicateCardSettlementTemplateIds = useMemo(
+    () => getDuplicateManualCardSettlementTemplateIds(recurringTemplates, paymentCards),
+    [recurringTemplates, paymentCards],
+  );
+  const planningRecurringTemplates = useMemo(
+    () => recurringTemplates.filter(template => !duplicateCardSettlementTemplateIds.has(template.id)),
+    [recurringTemplates, duplicateCardSettlementTemplateIds],
+  );
+  const planningRecurringOccurrences = useMemo(
+    () => recurringOccurrences.filter(occurrence => !duplicateCardSettlementTemplateIds.has(occurrence.templateId)),
+    [recurringOccurrences, duplicateCardSettlementTemplateIds],
+  );
+  const planningAllRecurringOccurrences = useMemo(
+    () => allRecurringOccurrences.filter(occurrence => !duplicateCardSettlementTemplateIds.has(occurrence.templateId)),
+    [allRecurringOccurrences, duplicateCardSettlementTemplateIds],
+  );
+  const planningTransactions = useMemo(
+    () => transactions.filter(transaction => !transaction.recurringTemplateId
+      || !duplicateCardSettlementTemplateIds.has(transaction.recurringTemplateId)),
+    [transactions, duplicateCardSettlementTemplateIds],
+  );
 
   // Generate or normalize the selected planning period only when its inputs
   // change. Realtime snapshots merely refresh local state and never write back.
@@ -265,14 +287,14 @@ export default function App() {
   const summary = useMemo(() => {
     return calculateMonthSummary(
       currentYM,
-      transactions,
-      recurringOccurrences,
+      planningTransactions,
+      planningRecurringOccurrences,
       budget,
-      recurringTemplates,
+      planningRecurringTemplates,
       new Date(),
       monthStartDay,
     );
-  }, [currentYM, transactions, recurringOccurrences, budget, recurringTemplates, monthStartDay]);
+  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay]);
 
   const categoryMap = useMemo(() => {
     return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
@@ -288,10 +310,10 @@ export default function App() {
       transactions,
       paymentCards,
       monthStartDay,
-      allRecurringOccurrences,
-      recurringTemplates,
+      planningAllRecurringOccurrences,
+      planningRecurringTemplates,
     ),
-    [currentYM, transactions, paymentCards, monthStartDay, allRecurringOccurrences, recurringTemplates],
+    [currentYM, transactions, paymentCards, monthStartDay, planningAllRecurringOccurrences, planningRecurringTemplates],
   );
 
   const cardSettlementSummary = useMemo(
@@ -300,10 +322,10 @@ export default function App() {
       transactions,
       paymentCards,
       monthStartDay,
-      allRecurringOccurrences,
-      recurringTemplates,
+      planningAllRecurringOccurrences,
+      planningRecurringTemplates,
     ),
-    [currentYM, transactions, paymentCards, monthStartDay, allRecurringOccurrences, recurringTemplates],
+    [currentYM, transactions, paymentCards, monthStartDay, planningAllRecurringOccurrences, planningRecurringTemplates],
   );
 
   const classificationIssues = useMemo(
@@ -329,6 +351,22 @@ export default function App() {
   const handlePostOccurrence = async (occId: string) => {
     await postOccurrenceToTransaction(occId);
     refreshAppData();
+  };
+
+  const handleCardSettlementStatus = (cardId: string, status: 'scheduled' | 'paid') => {
+    const card = paymentCards.find(candidate => candidate.id === cardId);
+    if (!card) return;
+    updatePaymentCard(cardId, {
+      monthlyPaymentStatuses: {
+        ...(card.monthlyPaymentStatuses || {}),
+        [currentYM]: status,
+      },
+    });
+    refreshAppData();
+    showToast({
+      message: status === 'paid' ? `${card.cardName} 카드대금을 납부 완료로 표시했습니다.` : `${card.cardName} 카드대금을 미납부 상태로 되돌렸습니다.`,
+      tone: 'success',
+    });
   };
 
   const handleReloadRecurringPlan = async () => {
@@ -534,8 +572,8 @@ export default function App() {
         {activeTab === 'home' && (
           <DashboardView
             summary={summary}
-            upcomingOccurrences={recurringOccurrences}
-            recurringTemplates={recurringTemplates}
+            upcomingOccurrences={planningRecurringOccurrences}
+            recurringTemplates={planningRecurringTemplates}
             categories={categories}
             categoryBreakdown={categoryBreakdown}
             cardPaymentSummary={cardPaymentSummary}
@@ -553,13 +591,15 @@ export default function App() {
         {activeTab === 'recurring_payment' && (
           <RecurringPaymentView
             period={period}
-            recurringOccurrences={recurringOccurrences}
-            recurringTemplates={recurringTemplates}
+            recurringOccurrences={planningRecurringOccurrences}
+            recurringTemplates={planningRecurringTemplates}
             categories={categories}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
             cardSettlementSummary={cardSettlementSummary}
             onReloadRecurringPlan={handleReloadRecurringPlan}
+            duplicateManualCardSettlementCount={duplicateCardSettlementTemplateIds.size}
+            onUpdateCardSettlementStatus={handleCardSettlementStatus}
             onPostOccurrence={async (occId, amt, pType, accId, cId) => {
               await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
               refreshAppData();
@@ -659,7 +699,8 @@ export default function App() {
           <ManagementView
             initialSubTab={managementSubTab}
             recurringTemplates={recurringTemplates}
-            recurringOccurrences={recurringOccurrences}
+            recurringOccurrences={planningRecurringOccurrences}
+            ignoredCardSettlementTemplateIds={[...duplicateCardSettlementTemplateIds]}
             budget={budget}
             summary={summary}
             categories={categories}
