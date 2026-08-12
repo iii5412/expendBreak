@@ -207,12 +207,14 @@ export function calculateCardPaymentSummary(
 /**
  * Card settlement is an account cash outflow, not a second expense.
  * When a month has no confirmed amount, the previous calendar month's card usage is used.
+ * Card settlement months intentionally do not follow the payday accounting cycle:
+ * September's estimate is based on August 1 through August 31.
  */
 export function calculateMonthlyCardSettlementSummary(
   paymentYearMonth: string,
   transactions: Transaction[],
   paymentCards: PaymentCard[],
-  monthStartDay: number = 1,
+  _monthStartDay: number = 1,
   recurringOccurrences: RecurringOccurrence[] = [],
   recurringTemplates: RecurringTemplate[] = [],
 ): MonthlyCardSettlementSummary {
@@ -220,7 +222,7 @@ export function calculateMonthlyCardSettlementSummary(
     getPreviousYearMonth(paymentYearMonth),
     transactions,
     paymentCards,
-    monthStartDay,
+    1,
     recurringOccurrences,
     recurringTemplates,
   );

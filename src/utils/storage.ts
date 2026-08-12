@@ -28,6 +28,7 @@ import {
   syncRecurringTemplateToFirestore,
   deleteRecurringTemplateFromFirestore,
   syncRecurringOccurrencesToFirestore,
+  deleteRecurringOccurrencesFromFirestore,
   commitRecurringPosting,
   syncMerchantRuleToFirestore,
   syncBankAccountToFirestore,
@@ -46,6 +47,7 @@ import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 import { getCarriedRecurringAmount } from './recurringPlans';
 import { resolveInheritedAllowanceLimit } from './budgetPlans';
+import { getScheduledDatesForMonth, normalizeRecurringOccurrencesForMonth } from './recurringNormalization';
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'brake_transactions',
@@ -185,57 +187,26 @@ export function shutdownStorage() {
  * Generate recurring occurrences for a given YYYY-MM based on templates
  */
 function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemplate[]) {
-  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  let occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   let changed = false;
 
-  const toLocalDate = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
-  const adjustForWeekend = (dateText: string, policy: RecurringTemplate['holidayPolicy']) => {
-    if (policy === 'fixed_date') return dateText;
-    const [year, month, day] = dateText.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    const direction = policy === 'previous_business_day' ? -1 : 1;
-    while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() + direction);
-    return toLocalDate(date);
-  };
-
-  const scheduledDatesFor = (template: RecurringTemplate) => {
-    const [year, month] = yearMonth.split('-').map(Number);
-    const monthStart = `${yearMonth}-01`;
-    const lastDay = new Date(year, month, 0).getDate();
-    const monthEnd = `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
-
-    if (template.endDate && template.endDate < monthStart) return [];
-    if (template.startDate > monthEnd) return [];
-
-    if (template.frequency === 'weekly') {
-      const [startYear, startMonth, startDay] = template.startDate.split('-').map(Number);
-      const cursor = new Date(startYear, startMonth - 1, startDay);
-      while (toLocalDate(cursor) < monthStart) cursor.setDate(cursor.getDate() + 7);
-      const dates: string[] = [];
-      while (toLocalDate(cursor) <= monthEnd) {
-        const dateText = toLocalDate(cursor);
-        if (!template.endDate || dateText <= template.endDate) dates.push(adjustForWeekend(dateText, template.holidayPolicy));
-        cursor.setDate(cursor.getDate() + 7);
-      }
-      return dates;
-    }
-
-    const clampedDay = Math.min(Math.max(1, template.dayOfMonth), lastDay);
-    const dateText = `${yearMonth}-${String(clampedDay).padStart(2, '0')}`;
-    if (dateText < template.startDate || (template.endDate && dateText > template.endDate)) return [];
-    return [adjustForWeekend(dateText, template.holidayPolicy)];
-  };
+  const normalized = normalizeRecurringOccurrencesForMonth(occurrences, getRecurringTemplates(), yearMonth);
+  occurrences = normalized.occurrences;
+  if (normalized.removedIds.length > 0) {
+    changed = true;
+    if (storageReady) void deleteRecurringOccurrencesFromFirestore(normalized.removedIds);
+  }
 
   for (const tmpl of templates) {
     if (!tmpl.active) continue;
 
-    for (const scheduledDate of scheduledDatesFor(tmpl)) {
+    const alreadyPostedThisMonth = tmpl.frequency === 'monthly'
+      && occurrences.some(occurrence => occurrence.templateId === tmpl.id
+        && occurrence.scheduledDate.startsWith(`${yearMonth}-`)
+        && occurrence.status === 'posted');
+    if (alreadyPostedThisMonth) continue;
+
+    for (const scheduledDate of getScheduledDatesForMonth(tmpl, yearMonth)) {
       const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
       const existingOccurrence = occurrences.find(o => o.occurrenceKey === occurrenceKey);
       if (!existingOccurrence) {
@@ -259,6 +230,9 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
           status: tmpl.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
           typeSnapshot: tmpl.type,
           categoryIdSnapshot: tmpl.categoryId,
+          paymentMethodType: tmpl.paymentMethodType,
+          accountId: tmpl.accountId,
+          cardId: tmpl.cardId,
           templateRevision: tmpl.updatedAt,
           createdAt: now,
           updatedAt: now,
@@ -639,6 +613,41 @@ export async function updateBudget(budget: Budget): Promise<Budget> {
   return updatedBudget;
 }
 
+export interface ReloadRecurringOccurrencesResult {
+  removedCount: number;
+  loadedCount: number;
+}
+
+/** Rebuilds only the selected period's unposted plan from the current templates. */
+export async function reloadRecurringOccurrences(
+  yearMonth: string,
+  monthStartDay: number = 1,
+): Promise<ReloadRecurringOccurrencesResult> {
+  initializeStorageIfEmpty();
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const resetIds = all
+    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period) && occurrence.status !== 'posted')
+    .map(occurrence => occurrence.id);
+  const resetIdSet = new Set(resetIds);
+  const preserved = all.filter(occurrence => !resetIdSet.has(occurrence.id));
+
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(preserved));
+  if (resetIds.length > 0) await deleteRecurringOccurrencesFromFirestore(resetIds);
+
+  const templates = getRecurringTemplates();
+  generateOccurrencesForMonth(period.startDate.slice(0, 7), templates);
+  if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
+    generateOccurrencesForMonth(period.endDate.slice(0, 7), templates);
+  }
+
+  const loadedCount = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period) && occurrence.status !== 'posted')
+    .length;
+  notifyListeners();
+  return { removedCount: resetIds.length, loadedCount };
+}
+
 export function getRecurringTemplates(): RecurringTemplate[] {
   initializeStorageIfEmpty();
   return readJson<RecurringTemplate[]>(STORAGE_KEYS.RECURRING_TEMPLATES, []);
@@ -732,7 +741,22 @@ export function getRecurringOccurrences(yearMonth: string, monthStartDay: number
 /** All generated months, used when a card bill needs the prior month's plans. */
 export function getAllRecurringOccurrences(): RecurringOccurrence[] {
   initializeStorageIfEmpty();
-  return readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  let occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const templates = getRecurringTemplates();
+  const months = [...new Set(occurrences.map(occurrence => occurrence.scheduledDate.slice(0, 7)))];
+  const removedIds: string[] = [];
+
+  months.forEach(yearMonth => {
+    const normalized = normalizeRecurringOccurrencesForMonth(occurrences, templates, yearMonth);
+    occurrences = normalized.occurrences;
+    removedIds.push(...normalized.removedIds);
+  });
+
+  if (removedIds.length > 0) {
+    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+    if (storageReady) void deleteRecurringOccurrencesFromFirestore([...new Set(removedIds)]);
+  }
+  return occurrences;
 }
 
 export function updateOccurrenceStatus(

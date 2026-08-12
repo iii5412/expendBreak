@@ -36,6 +36,7 @@ import {
   postOccurrenceToTransaction,
   updateOccurrenceStatus,
   updateOccurrencePlan,
+  reloadRecurringOccurrences,
   updateBudget,
   saveCategory,
   toggleCategoryActive,
@@ -313,6 +314,27 @@ export default function App() {
     refreshAppData();
   };
 
+  const handleReloadRecurringPlan = async () => {
+    const accepted = await confirm({
+      title: `${currentYM} 정기 항목을 새로 불러올까요?`,
+      description: '납부일 변경으로 남은 중복 건을 정리하고, 미처리 일정만 현재 정기/고정 설정에서 다시 만듭니다. 이미 확정된 거래와 납부 완료 기록은 유지됩니다.',
+      details: [
+        { label: '대상 기간', value: `${period.startDate} ~ ${period.endDate}` },
+        { label: '카드 결제계좌', value: '전월 현재까지 등록된 신용카드 사용액으로 다시 계산' },
+      ],
+      confirmLabel: '새로 불러오기',
+    });
+    if (!accepted) return;
+
+    const result = await reloadRecurringOccurrences(currentYM, monthStartDay);
+    refreshAppData();
+    showToast({
+      message: '정기 항목을 현재 설정으로 새로 불러왔습니다.',
+      description: `기존 미처리 ${result.removedCount}건 정리 · 현재 일정 ${result.loadedCount}건`,
+      tone: 'success',
+    });
+  };
+
   const handleSaveTransaction = (tx: Parameters<typeof saveTransaction>[0]) => {
     const { transaction, synced } = saveTransaction(tx);
     const label = `${transaction.merchant || '거래'} ${formatKRW(transaction.amount)}`;
@@ -519,6 +541,8 @@ export default function App() {
             categories={categories}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
+            cardSettlementSummary={cardSettlementSummary}
+            onReloadRecurringPlan={handleReloadRecurringPlan}
             onPostOccurrence={async (occId, amt, pType, accId, cId) => {
               await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
               refreshAppData();

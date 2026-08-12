@@ -418,6 +418,13 @@ export async function syncRecurringOccurrencesToFirestore(occs: RecurringOccurre
   return results.every(Boolean);
 }
 
+export async function deleteRecurringOccurrencesFromFirestore(ids: string[]) {
+  const results = await Promise.all(ids.map(id => persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_RECURRING_OCCURRENCES, documentId: id,
+  }, 'Failed to delete recurring occurrence from Firestore')));
+  return results.every(Boolean);
+}
+
 export async function commitRecurringPosting(tx: Transaction, occurrence: RecurringOccurrence) {
   const transactionRef = scopedDoc(COLLECTION_TRANSACTIONS, tx.id);
   const occurrenceRef = scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occurrence.id);

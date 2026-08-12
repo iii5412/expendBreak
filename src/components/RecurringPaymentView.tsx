@@ -14,6 +14,7 @@ import {
   X,
   TrendingUp,
   TrendingDown,
+  RefreshCw,
 } from 'lucide-react';
 import {
   BankAccount,
@@ -26,6 +27,7 @@ import {
 import { AccountingPeriod, formatKRW, formatPeriodRange } from '../utils/calculations';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
+import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 
 interface RecurringPaymentViewProps {
   /** Period comes from the app-wide selector; this view no longer owns month state. */
@@ -35,6 +37,8 @@ interface RecurringPaymentViewProps {
   categories: Category[];
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
+  cardSettlementSummary: MonthlyCardSettlementSummary;
+  onReloadRecurringPlan: () => Promise<void>;
   onPostOccurrence: (
     occId: string,
     customAmount?: number,
@@ -59,6 +63,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   categories,
   bankAccounts,
   paymentCards,
+  cardSettlementSummary,
+  onReloadRecurringPlan,
   onPostOccurrence,
   onUpdateOccurrenceStatus,
   onUpdateOccurrencePlan,
@@ -72,6 +78,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [isReloading, setIsReloading] = useState(false);
 
   const periodRange = formatPeriodRange(period);
   const templateMap = new Map<string, RecurringTemplate>(recurringTemplates.map((t) => [t.id, t]));
@@ -162,14 +169,31 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), 0);
   const pendingIncomeAmount = totalScheduledIncome - totalPostedIncome;
 
-  const totalScheduledExpense = expenseOccurrences.filter(o => o.status !== 'skipped').reduce(
+  const nonCardExpenseOccurrences = expenseOccurrences.filter(occurrence => {
+    const paymentMethod = occurrence.paymentMethodType || occurrence.tmpl?.paymentMethodType;
+    return paymentMethod !== 'card';
+  });
+  const totalScheduledExpense = nonCardExpenseOccurrences.filter(o => o.status !== 'skipped').reduce(
     (sum, o) => sum + (o.actualAmount ?? o.expectedAmount),
-    0
+    cardSettlementSummary.totalAmount,
   );
-  const totalPostedExpense = expenseOccurrences
+  const totalPostedExpense = nonCardExpenseOccurrences
     .filter((o) => o.status === 'posted')
     .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), 0);
   const pendingExpenseAmount = totalScheduledExpense - totalPostedExpense;
+  const cardSettlementItems = cardSettlementSummary.cards.filter(card => card.amount > 0);
+  const [selectedYear, selectedMonth] = period.yearMonth.split('-').map(Number);
+  const previousMonthDate = new Date(selectedYear, selectedMonth - 2, 1);
+  const previousYearMonth = `${previousMonthDate.getFullYear()}-${String(previousMonthDate.getMonth() + 1).padStart(2, '0')}`;
+
+  const handleReload = async () => {
+    setIsReloading(true);
+    try {
+      await onReloadRecurringPlan();
+    } finally {
+      setIsReloading(false);
+    }
+  };
 
   // Filter Occurrences
   const filteredOccurrences = occurrencesWithTemplates.filter((occ) => {
@@ -190,13 +214,24 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             정기 수입 · 지출 관리 센터
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            급여 등 고정 수입과 가스비·관리비 등 월별 고정지출을 확인하고 처리합니다. 카드대금은 카드 메뉴에서 자동 계산됩니다.
+            급여 등 고정 수입과 월별 고정지출을 처리하고, 전월 카드 사용액을 이번 달 결제계좌 출금액으로 함께 확인합니다.
           </p>
         </div>
 
-        <div className="self-start rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs sm:self-auto">
-          <span className="font-bold text-white">{period.yearMonth.replace('-', '년 ')}월</span>
-          {periodRange && <span className="ml-1.5 text-slate-400">{periodRange}</span>}
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs">
+            <span className="font-bold text-white">{period.yearMonth.replace('-', '년 ')}월</span>
+            {periodRange && <span className="ml-1.5 text-slate-400">{periodRange}</span>}
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleReload()}
+            disabled={isReloading}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 text-xs font-bold text-indigo-200 transition-colors hover:bg-indigo-500/20 disabled:cursor-wait disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isReloading ? 'animate-spin' : ''}`} />
+            {isReloading ? '불러오는 중...' : '고정 지출 새로 불러오기'}
+          </button>
         </div>
       </div>
 
@@ -220,13 +255,16 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 text-rose-400 text-xs font-semibold">
               <TrendingDown className="w-4 h-4" />
-              월 고정 지출 예정액
+              이번 달 고정 출금 예정액
             </span>
             <span className="text-xs text-slate-400 font-medium">납부 완료: {formatKRW(totalPostedExpense)}</span>
           </div>
           <p className="text-xl font-extrabold text-white mt-1">{formatKRW(totalScheduledExpense)}</p>
           <p className="text-xs text-slate-400 mt-1">
             남은 납부 예정: <strong className="text-amber-300">{formatKRW(pendingExpenseAmount)}</strong>
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            계좌 고정지출 + 신용카드대금 {formatKRW(cardSettlementSummary.totalAmount)}
           </p>
         </div>
 
@@ -242,6 +280,54 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             수입 {incomeOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 대기 중
           </p>
         </div>
+      </div>
+
+      <div className="space-y-3 rounded-2xl border border-indigo-500/25 bg-indigo-500/5 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-bold text-indigo-200">
+              <CreditCard className="h-4 w-4" />
+              신용카드 결제계좌 반영액
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              {period.yearMonth} 결제 예정액은 {previousYearMonth}에 현재까지 등록된 카드 사용과 카드 결제 고정지출을 합산합니다. 카드 사용 거래를 다시 지출로 중복 저장하지 않고 결제계좌에서 확보할 출금액으로 반영합니다.
+            </p>
+          </div>
+          <span className="shrink-0 text-base font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.linkedAccountTotal)}</span>
+        </div>
+
+        {cardSettlementItems.length === 0 ? (
+          <p className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-400">
+            {previousYearMonth}에 등록된 신용카드 사용액이 없습니다.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {cardSettlementItems.map(card => {
+              const linkedAccount = card.linkedAccountId
+                ? accountMap.get(card.linkedAccountId)
+                : undefined;
+              return (
+                <div key={card.cardId} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-100">{card.cardName} 카드대금</div>
+                    <div className="mt-1 text-slate-400">
+                      {card.paymentDate ? `${card.paymentDate} 출금 예정` : '결제일 미지정'} · {linkedAccount ? `[${linkedAccount.bankName}] ${linkedAccount.accountName}` : '결제계좌 미지정'}
+                    </div>
+                    <div className="mt-1 text-[11px] text-indigo-300">
+                      {card.source === 'confirmed' ? '직접 저장한 월 결제액' : `${previousYearMonth} 현재 사용액 자동 계산`}
+                    </div>
+                  </div>
+                  <span className="shrink-0 font-extrabold text-indigo-200">{formatKRW(card.amount)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {cardSettlementSummary.unlinkedAmount > 0 && (
+          <p className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-2.5 text-xs text-amber-200">
+            결제계좌가 지정되지 않은 카드대금 {formatKRW(cardSettlementSummary.unlinkedAmount)}은 계좌별 확보액에 포함할 수 없습니다. 카드 설정에서 결제계좌를 연결해 주세요.
+          </p>
+        )}
       </div>
 
       {/* Filter Tabs */}

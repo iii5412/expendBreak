@@ -50,6 +50,16 @@ describe('calculateMonthlyCardSettlementSummary', () => {
       source: 'confirmed',
     }));
   });
+
+  it('uses the previous calendar month even when the payday cycle starts on the 10th', () => {
+    const summary = calculateMonthlyCardSettlementSummary('2026-09', [
+      transaction({ id: 'august-early', cardId: 'credit', localDate: '2026-08-05', amount: 140_000 }),
+      transaction({ id: 'september-early', cardId: 'credit', localDate: '2026-09-05', amount: 90_000 }),
+    ], cards, 10);
+
+    expect(summary.totalAmount).toBe(140_000);
+    expect(summary.linkedAccountTotal).toBe(140_000);
+  });
 });
 
 describe('calculateCardPaymentSummary', () => {
