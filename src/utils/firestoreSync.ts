@@ -30,6 +30,7 @@ import {
   reportWriteSucceeded,
   resetSyncStatus,
 } from './syncStatus';
+import { stripUndefined } from './firestorePayload';
 
 const COLLECTION_APP_SETTINGS = 'appSettings';
 const DOC_GLOBAL_SETTINGS = 'global';
@@ -105,11 +106,17 @@ export function getPendingFirestoreWrites(): PendingWriteSummary[] {
 
 function enqueueFirestoreWrite(entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>): PendingFirestoreWrite {
   const queued: PendingFirestoreWrite = {
-    ...entry,
+    ...stripUndefined(entry),
     id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
     queuedAt: new Date().toISOString(),
   };
-  writeFirestoreOutbox([...readFirestoreOutbox(), queued]);
+  // Only the latest pending operation for one document matters. This also
+  // collapses queues produced by older clients that retried the same write.
+  const pending = readFirestoreOutbox().filter(candidate => !(
+    candidate.collectionName === queued.collectionName
+    && candidate.documentId === queued.documentId
+  ));
+  writeFirestoreOutbox([...pending, queued]);
   return queued;
 }
 
@@ -124,10 +131,10 @@ async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
     return;
   }
   if (entry.merge) {
-    await setDoc(reference, entry.data || {}, { merge: true });
+    await setDoc(reference, stripUndefined(entry.data || {}), { merge: true });
     return;
   }
-  await setDoc(reference, entry.data || {});
+  await setDoc(reference, stripUndefined(entry.data || {}));
 }
 
 function persistFirestoreWrite(
@@ -154,7 +161,12 @@ function persistFirestoreWrite(
 export function flushFirestoreOutbox(): Promise<boolean> {
   reportWriteStarted();
   const operation = persistenceChain.then(async () => {
-    const pending = readFirestoreOutbox().sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
+    const pending = [...new Map(
+      readFirestoreOutbox()
+        .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
+        .map(entry => [`${entry.collectionName}/${entry.documentId}`, entry]),
+    ).values()];
+    writeFirestoreOutbox(pending);
     for (const entry of pending) {
       await executeFirestoreWrite(entry);
       removeFirestoreWrite(entry.id);

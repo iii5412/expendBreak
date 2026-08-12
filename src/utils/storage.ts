@@ -188,14 +188,10 @@ export function shutdownStorage() {
  */
 function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemplate[]) {
   let occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  let changed = false;
+  const changedOccurrences: RecurringOccurrence[] = [];
 
   const normalized = normalizeRecurringOccurrencesForMonth(occurrences, getRecurringTemplates(), yearMonth);
   occurrences = normalized.occurrences;
-  if (normalized.removedIds.length > 0) {
-    changed = true;
-    if (storageReady) void deleteRecurringOccurrencesFromFirestore(normalized.removedIds);
-  }
 
   for (const tmpl of templates) {
     if (!tmpl.active) continue;
@@ -220,7 +216,7 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
           scheduledDate,
           occurrences,
         );
-        occurrences.push({
+        const newOccurrence: RecurringOccurrence = {
           id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
           templateId: tmpl.id,
           occurrenceKey,
@@ -236,8 +232,9 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
           templateRevision: tmpl.updatedAt,
           createdAt: now,
           updatedAt: now,
-        });
-        changed = true;
+        };
+        occurrences.push(newOccurrence);
+        changedOccurrences.push(newOccurrence);
       } else if (
         (existingOccurrence.status === 'scheduled'
           || existingOccurrence.status === 'needs_confirmation'
@@ -252,13 +249,24 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
         existingOccurrence.cardId = tmpl.cardId;
         existingOccurrence.templateRevision = tmpl.updatedAt;
         existingOccurrence.updatedAt = new Date().toISOString();
-        changed = true;
+        changedOccurrences.push(existingOccurrence);
       }
     }
   }
 
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-  if (changed && storageReady) syncRecurringOccurrencesToFirestore(occurrences);
+  const changed = normalized.removedIds.length > 0 || changedOccurrences.length > 0;
+  if (changed) localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  if (storageReady) {
+    if (normalized.removedIds.length > 0) void deleteRecurringOccurrencesFromFirestore(normalized.removedIds);
+    // Persist only documents that actually changed. Rewriting the entire
+    // occurrence history makes every realtime snapshot fan out into many writes.
+    if (changedOccurrences.length > 0) void syncRecurringOccurrencesToFirestore(changedOccurrences);
+  }
+  return {
+    changed,
+    removedCount: normalized.removedIds.length,
+    upsertedCount: changedOccurrences.length,
+  };
 }
 
 /**
@@ -380,17 +388,17 @@ export function restoreTransaction(transaction: Transaction, linkedOccurrenceIds
   if (linkedOccurrenceIds.length > 0) {
     const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
     const now = new Date().toISOString();
-    let changed = false;
+    const changedOccurrences: RecurringOccurrence[] = [];
     occurrences.forEach(occurrence => {
       if (!linkedOccurrenceIds.includes(occurrence.id)) return;
       occurrence.status = 'posted';
       occurrence.transactionId = transaction.id;
       occurrence.updatedAt = now;
-      changed = true;
+      changedOccurrences.push(occurrence);
     });
-    if (changed) {
+    if (changedOccurrences.length > 0) {
       localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-      syncRecurringOccurrencesToFirestore(occurrences);
+      syncRecurringOccurrencesToFirestore(changedOccurrences);
     }
   }
 
@@ -451,7 +459,9 @@ export function deleteTransaction(id: string): DeletedTransactionSnapshot | null
   });
   if (restoredOccurrenceIds.length > 0) {
     localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-    syncRecurringOccurrencesToFirestore(occurrences);
+    syncRecurringOccurrencesToFirestore(
+      occurrences.filter(occurrence => restoredOccurrenceIds.includes(occurrence.id)),
+    );
   }
 
   notifyListeners();
@@ -544,16 +554,16 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
   if (rulesModified) localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
 
   const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  let occurrencesModified = false;
+  const changedOccurrences: RecurringOccurrence[] = [];
   occurrences.forEach(occurrence => {
     if (occurrence.categoryIdSnapshot !== removeId) return;
     occurrence.categoryIdSnapshot = replaceWithId;
     occurrence.updatedAt = new Date().toISOString();
-    occurrencesModified = true;
+    changedOccurrences.push(occurrence);
   });
-  if (occurrencesModified) {
+  if (changedOccurrences.length > 0) {
     localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-    syncRecurringOccurrencesToFirestore(occurrences);
+    syncRecurringOccurrencesToFirestore(changedOccurrences);
   }
 
   // Remove category
@@ -568,21 +578,40 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
 export function getBudget(yearMonth: string): Budget {
   initializeStorageIfEmpty();
   const map = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {});
-  if (!map[yearMonth]) {
-    const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
-    const inheritedLimit = resolveInheritedAllowanceLimit(
-      yearMonth,
-      Object.values(map),
-      profile.defaultAllowanceLimit,
-    );
-    map[yearMonth] = {
-      ...getSampleBudget(yearMonth),
-      totalLimit: Math.max(0, Math.round(inheritedLimit)),
-    };
+  if (map[yearMonth]) return map[yearMonth];
+  const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+  const inheritedLimit = resolveInheritedAllowanceLimit(
+    yearMonth,
+    Object.values(map),
+    profile.defaultAllowanceLimit,
+  );
+  return {
+    ...getSampleBudget(yearMonth),
+    totalLimit: Math.max(0, Math.round(inheritedLimit)),
+  };
+}
+
+const budgetEnsures = new Map<string, Promise<Budget>>();
+
+/** Creates a missing monthly budget once; getBudget itself remains read-only. */
+export function ensureBudget(yearMonth: string): Promise<Budget> {
+  const existing = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {})[yearMonth];
+  if (existing) return Promise.resolve(existing);
+  const inFlight = budgetEnsures.get(yearMonth);
+  if (inFlight) return inFlight;
+
+  const budget = getBudget(yearMonth);
+  const operation = (async () => {
+    const map = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {});
+    if (map[yearMonth]) return map[yearMonth];
+    map[yearMonth] = budget;
     localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
-    syncBudgetToFirestore(map[yearMonth]);
-  }
-  return map[yearMonth];
+    notifyListeners();
+    if (storageReady) await syncBudgetToFirestore(budget);
+    return budget;
+  })().finally(() => budgetEnsures.delete(yearMonth));
+  budgetEnsures.set(yearMonth, operation);
+  return operation;
 }
 
 export async function updateBudget(budget: Budget): Promise<Budget> {
@@ -705,16 +734,16 @@ export function deleteRecurringTemplate(id: string): boolean {
     deleteRecurringTemplateFromFirestore(id);
 
     const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-    let changedOccurrences = false;
+    const changedOccurrences: RecurringOccurrence[] = [];
     occurrences.forEach(occurrence => {
       if (occurrence.templateId !== id || occurrence.status === 'posted') return;
       occurrence.status = 'skipped';
       occurrence.updatedAt = new Date().toISOString();
-      changedOccurrences = true;
+      changedOccurrences.push(occurrence);
     });
-    if (changedOccurrences) {
+    if (changedOccurrences.length > 0) {
       localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-      syncRecurringOccurrencesToFirestore(occurrences);
+      syncRecurringOccurrencesToFirestore(changedOccurrences);
     }
     notifyListeners();
     return true;
@@ -725,15 +754,6 @@ export function deleteRecurringTemplate(id: string): boolean {
 export function getRecurringOccurrences(yearMonth: string, monthStartDay: number = 1): RecurringOccurrence[] {
   initializeStorageIfEmpty();
   const period = getAccountingPeriod(yearMonth, monthStartDay);
-  const templates = getRecurringTemplates();
-
-  // A period with a non-default start day spans two calendar months, so both
-  // calendar months need their occurrences generated before filtering.
-  generateOccurrencesForMonth(period.startDate.slice(0, 7), templates);
-  if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
-    generateOccurrencesForMonth(period.endDate.slice(0, 7), templates);
-  }
-
   const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   return all.filter(o => isDateInPeriod(o.scheduledDate, period));
 }
@@ -741,22 +761,26 @@ export function getRecurringOccurrences(yearMonth: string, monthStartDay: number
 /** All generated months, used when a card bill needs the prior month's plans. */
 export function getAllRecurringOccurrences(): RecurringOccurrence[] {
   initializeStorageIfEmpty();
-  let occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  return readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+}
+
+/**
+ * Explicit mutation boundary for period generation/normalization. Realtime
+ * snapshot callbacks may call the getters freely without causing DB writes.
+ */
+export function ensureRecurringOccurrences(yearMonth: string, monthStartDay: number = 1) {
+  initializeStorageIfEmpty();
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
   const templates = getRecurringTemplates();
-  const months = [...new Set(occurrences.map(occurrence => occurrence.scheduledDate.slice(0, 7)))];
-  const removedIds: string[] = [];
-
-  months.forEach(yearMonth => {
-    const normalized = normalizeRecurringOccurrencesForMonth(occurrences, templates, yearMonth);
-    occurrences = normalized.occurrences;
-    removedIds.push(...normalized.removedIds);
-  });
-
-  if (removedIds.length > 0) {
-    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-    if (storageReady) void deleteRecurringOccurrencesFromFirestore([...new Set(removedIds)]);
-  }
-  return occurrences;
+  const startResult = generateOccurrencesForMonth(period.startDate.slice(0, 7), templates);
+  const endResult = period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)
+    ? generateOccurrencesForMonth(period.endDate.slice(0, 7), templates)
+    : { changed: false, removedCount: 0, upsertedCount: 0 };
+  if (startResult.changed || endResult.changed) notifyListeners();
+  return {
+    removedCount: startResult.removedCount + endResult.removedCount,
+    upsertedCount: startResult.upsertedCount + endResult.upsertedCount,
+  };
 }
 
 export function updateOccurrenceStatus(
@@ -776,7 +800,7 @@ export function updateOccurrenceStatus(
     }
     target.updatedAt = new Date().toISOString();
     localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-    syncRecurringOccurrencesToFirestore(all);
+    syncRecurringOccurrencesToFirestore([target]);
     notifyListeners();
   }
 }
@@ -803,6 +827,7 @@ export function updateOccurrencePlan(
   target.accountId = updates.paymentMethodType === 'account' ? updates.accountId ?? null : null;
   target.cardId = updates.paymentMethodType === 'card' ? updates.cardId ?? null : null;
   target.updatedAt = new Date().toISOString();
+  const changedOccurrences = [target];
 
   // If future months were already opened/generated, keep carrying this value
   // through months that have not received their own override yet.
@@ -814,9 +839,10 @@ export function updateOccurrencePlan(
       || occurrence.status === 'skipped') return;
     occurrence.expectedAmount = amount;
     occurrence.updatedAt = target.updatedAt;
+    changedOccurrences.push(occurrence);
   });
   localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-  syncRecurringOccurrencesToFirestore(all);
+  syncRecurringOccurrencesToFirestore(changedOccurrences);
   notifyListeners();
   return target;
 }

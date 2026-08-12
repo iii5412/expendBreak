@@ -15,9 +15,11 @@ import {
   getTransactions,
   getCategories,
   getBudget,
+  ensureBudget,
   getRecurringTemplates,
   getRecurringOccurrences,
   getAllRecurringOccurrences,
+  ensureRecurringOccurrences,
   getMerchantRules,
   getUserProfile,
   getBankAccounts,
@@ -230,6 +232,21 @@ export default function App() {
     [currentYM, monthStartDay],
   );
   const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay]);
+  const recurringTemplateSignature = useMemo(
+    () => recurringTemplates
+      .map(template => `${template.id}:${template.updatedAt}:${template.active ? 1 : 0}`)
+      .sort()
+      .join('|'),
+    [recurringTemplates],
+  );
+
+  // Generate or normalize the selected planning period only when its inputs
+  // change. Realtime snapshots merely refresh local state and never write back.
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    void ensureBudget(currentYM);
+    ensureRecurringOccurrences(currentYM, monthStartDay);
+  }, [bootState, currentYM, monthStartDay, recurringTemplateSignature]);
 
   // Realign the selected period after login or a monthStartDay change so the app
   // never opens on a period that no longer contains today.
