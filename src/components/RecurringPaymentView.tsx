@@ -43,6 +43,13 @@ interface RecurringPaymentViewProps {
     customCardId?: string | null
   ) => void;
   onUpdateOccurrenceStatus: (occId: string, status: any) => void;
+  onUpdateOccurrencePlan: (
+    occId: string,
+    amount: number,
+    paymentMethodType: PaymentMethodType,
+    accountId: string | null,
+    cardId: string | null,
+  ) => void;
 }
 
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
@@ -54,6 +61,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   paymentCards,
   onPostOccurrence,
   onUpdateOccurrenceStatus,
+  onUpdateOccurrencePlan,
 }) => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'posted' | 'expense' | 'income'>('pending');
 
@@ -114,6 +122,27 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     setSelectedOcc(null);
   };
 
+  const handleSaveMonthlyPlan = () => {
+    if (!selectedOcc) return;
+    if (paymentAmount < 0) {
+      setPaymentError('이번 달 예정 금액은 0원 이상이어야 합니다.');
+      return;
+    }
+    if (paymentMethodType === 'card' && paymentCards.length > 0 && !selectedCardId) {
+      setPaymentError('카드대금에 반영할 카드를 선택해 주세요.');
+      return;
+    }
+    setPaymentError(null);
+    onUpdateOccurrencePlan(
+      selectedOcc.id,
+      paymentAmount,
+      paymentMethodType,
+      paymentMethodType === 'account' ? selectedAccountId || null : null,
+      paymentMethodType === 'card' ? selectedCardId || null : null,
+    );
+    setSelectedOcc(null);
+  };
+
   // Map Occurrences with template type
   const occurrencesWithTemplates = recurringOccurrences.map((occ) => {
     const tmpl = templateMap.get(occ.templateId);
@@ -124,7 +153,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   const incomeOccurrences = occurrencesWithTemplates.filter((o) => o.type === 'income');
   const expenseOccurrences = occurrencesWithTemplates.filter((o) => o.type === 'expense');
 
-  const totalScheduledIncome = incomeOccurrences.reduce(
+  const totalScheduledIncome = incomeOccurrences.filter(o => o.status !== 'skipped').reduce(
     (sum, o) => sum + (o.actualAmount ?? o.expectedAmount),
     0
   );
@@ -133,7 +162,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), 0);
   const pendingIncomeAmount = totalScheduledIncome - totalPostedIncome;
 
-  const totalScheduledExpense = expenseOccurrences.reduce(
+  const totalScheduledExpense = expenseOccurrences.filter(o => o.status !== 'skipped').reduce(
     (sum, o) => sum + (o.actualAmount ?? o.expectedAmount),
     0
   );
@@ -161,7 +190,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             정기 수입 · 지출 관리 센터
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            급여 등 고정 수입 입금과 가스비, 관리비, 카드대금 등 고정 지출 납부를 한곳에서 확인하고 처리합니다.
+            급여 등 고정 수입과 가스비·관리비 등 월별 고정지출을 확인하고 처리합니다. 카드대금은 카드 메뉴에서 자동 계산됩니다.
           </p>
         </div>
 
@@ -210,7 +239,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             {recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length}건
           </p>
           <p className="text-xs text-slate-400 mt-1">
-            수입 {incomeOccurrences.filter(o => o.status !== 'posted').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted').length}건 대기 중
+            수입 {incomeOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 대기 중
           </p>
         </div>
       </div>
@@ -283,7 +312,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           </div>
           <p className="text-sm text-slate-300 font-medium">해당 조건의 정기 항목이 없습니다.</p>
           <p className="text-xs text-slate-400 max-w-xs mx-auto">
-            관리 메뉴의 '정기 항목 템플릿'에서 월급, 부수입, 매월 발생하는 카드대금, 관리비 등을 등록해보세요.
+            관리 메뉴의 '정기 항목 템플릿'에서 월급, 부수입, 관리비 등을 등록해보세요. 카드대금은 카드별 지출에서 자동 계산됩니다.
           </p>
         </div>
       ) : (
@@ -518,7 +547,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       <p className="text-xs text-slate-400 mt-1">
                         {isIncome
                           ? '실제 수령한 급여/수입 금액을 확인하여 입력해주세요.'
-                          : '가스비, 관리비, 카드 청구액 등 변경된 실제 지출 금액을 입력해 주세요.'}
+                          : '가스비, 관리비 등 이번 달에 변동된 고정지출 금액을 입력해 주세요.'}
                       </p>
                     </div>
 
@@ -621,13 +650,25 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       </div>
                     )}
 
-                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                    <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3 text-xs leading-relaxed text-slate-300">
+                      이 금액과 결제수단은 선택한 월에만 저장됩니다. 다음 달 일반 고정지출은 이 금액을 그대로 이어받으며 다시 수정할 수 있습니다.
+                      카드 결제 항목은 선택한 카드의 결제예정액에도 포함됩니다.
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-800">
                       <button
                         type="button"
                         onClick={() => setSelectedOcc(null)}
                         className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl transition-colors font-medium"
                       >
                         취소
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveMonthlyPlan}
+                        className="rounded-xl border border-indigo-500/40 bg-indigo-500/15 px-4 py-2 font-bold text-indigo-200 transition-colors hover:bg-indigo-500/25"
+                      >
+                        이번 달 금액만 저장
                       </button>
                       <button
                         type="submit"

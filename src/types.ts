@@ -79,6 +79,14 @@ export interface VoiceRecord {
   recordedAt: string;
 }
 
+export interface InstallmentPlan {
+  totalMonths: number;
+  /** Installment round that applies in baseYearMonth. */
+  currentRound: number;
+  /** Accounting period label (YYYY-MM) used as the projection anchor. */
+  baseYearMonth: string;
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
@@ -96,6 +104,7 @@ export interface Transaction {
   paymentMethodType?: PaymentMethodType;
   accountId?: string | null;
   cardId?: string | null;
+  installment?: InstallmentPlan | null;
   tags?: string[];
   receipt?: ReceiptRecord | null;
   voiceRecord?: VoiceRecord | null;
@@ -173,6 +182,8 @@ export interface UserProfile {
   monthStartDay: number; // Salary/payday accounting cycle start (default 10)
   /** One-time persisted migration marker for the salary-day planning model. */
   paydayPlanningVersion?: number;
+  /** Last DB-saved allowance limit, used to seed a month that has no budget document yet. */
+  defaultAllowanceLimit?: number;
   aiClassificationEnabled: boolean;
   aiInsightsEnabled: boolean;
   aiConsentAt: string | null;
@@ -231,6 +242,8 @@ export interface VoiceAnalysisResult {
   paymentMethodHint?: string;
   suggestedAccountId?: string | null;
   suggestedCardId?: string | null;
+  installmentMonths?: number;
+  installmentCurrentRound?: number;
   tags?: string[];
   confidence: number;
   reason: string;

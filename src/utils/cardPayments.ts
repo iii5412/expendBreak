@@ -1,5 +1,6 @@
-import { PaymentCard, Transaction } from '../types';
+import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { getAccountingPeriod, isDateInPeriod } from './calculations';
+import { getInstallmentCharge } from './installments';
 
 export interface CreditCardPaymentEstimate {
   cardId: string;
@@ -10,6 +11,15 @@ export interface CreditCardPaymentEstimate {
   totalAmount: number;
   allowanceAmount: number;
   fixedAmount: number;
+  scheduledFixedAmount: number;
+  installmentAmount: number;
+  installments: Array<{
+    transactionId: string;
+    merchant: string;
+    round: number;
+    totalMonths: number;
+    amount: number;
+  }>;
   estimatedPaymentDate: string | null;
 }
 
@@ -19,6 +29,7 @@ export interface CardPaymentSummary {
   creditCardUsage: number;
   debitCardUsage: number;
   unassignedCardUsage: number;
+  scheduledFixedCardUsage: number;
   estimatedNextPaymentTotal: number;
   creditCards: CreditCardPaymentEstimate[];
 }
@@ -73,6 +84,8 @@ export function calculateCardPaymentSummary(
   transactions: Transaction[],
   paymentCards: PaymentCard[],
   monthStartDay: number = 1,
+  recurringOccurrences: RecurringOccurrence[] = [],
+  recurringTemplates: RecurringTemplate[] = [],
 ): CardPaymentSummary {
   const period = getAccountingPeriod(yearMonth, monthStartDay);
   const cardMap = new Map(paymentCards.map(card => [card.id, card]));
@@ -90,6 +103,9 @@ export function calculateCardPaymentSummary(
         totalAmount: 0,
         allowanceAmount: 0,
         fixedAmount: 0,
+        scheduledFixedAmount: 0,
+        installmentAmount: 0,
+        installments: [],
         estimatedPaymentDate: getEstimatedPaymentDate(yearMonth, card.billingDay),
       });
     });
@@ -97,13 +113,19 @@ export function calculateCardPaymentSummary(
   let totalCardUsage = 0;
   let debitCardUsage = 0;
   let unassignedCardUsage = 0;
+  let scheduledFixedCardUsage = 0;
 
   transactions
     .filter(transaction => transaction.type === 'expense'
-      && transaction.paymentMethodType === 'card'
-      && isDateInPeriod(transaction.localDate, period))
+      && transaction.paymentMethodType === 'card')
     .forEach(transaction => {
-      const amount = Math.round(transaction.amount);
+      const installmentCharge = getInstallmentCharge(transaction.amount, transaction.installment, yearMonth);
+      if (transaction.installment) {
+        if (!installmentCharge) return;
+      } else if (!isDateInPeriod(transaction.localDate, period)) {
+        return;
+      }
+      const amount = installmentCharge?.amount ?? Math.round(transaction.amount);
       totalCardUsage += amount;
       const card = transaction.cardId ? cardMap.get(transaction.cardId) : undefined;
 
@@ -119,8 +141,52 @@ export function calculateCardPaymentSummary(
       const estimate = creditCards.get(card.id);
       if (!estimate) return;
       estimate.totalAmount += amount;
+      if (installmentCharge && transaction.installment) {
+        estimate.installmentAmount += amount;
+        estimate.installments.push({
+          transactionId: transaction.id,
+          merchant: transaction.merchant,
+          round: installmentCharge.round,
+          totalMonths: transaction.installment.totalMonths,
+          amount,
+        });
+      }
       if (transaction.recurringTemplateId) estimate.fixedAmount += amount;
       else estimate.allowanceAmount += amount;
+    });
+
+  // Fixed expenses paid by card belong to that card's bill even before the
+  // occurrence is posted. Posted occurrences are already represented by their
+  // transaction above and must not be counted twice.
+  const templateMap = new Map(recurringTemplates.map(template => [template.id, template]));
+  recurringOccurrences
+    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period)
+      && occurrence.status !== 'posted'
+      && occurrence.status !== 'skipped')
+    .forEach(occurrence => {
+      const template = templateMap.get(occurrence.templateId);
+      if ((occurrence.typeSnapshot ?? template?.type) !== 'expense') return;
+      const paymentMethodType = occurrence.paymentMethodType ?? template?.paymentMethodType;
+      if (paymentMethodType !== 'card') return;
+
+      const amount = Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
+      const cardId = occurrence.cardId ?? template?.cardId;
+      const card = cardId ? cardMap.get(cardId) : undefined;
+      scheduledFixedCardUsage += amount;
+      totalCardUsage += amount;
+      if (!card) {
+        unassignedCardUsage += amount;
+        return;
+      }
+      if (card.cardType === 'debit') {
+        debitCardUsage += amount;
+        return;
+      }
+      const estimate = creditCards.get(card.id);
+      if (!estimate) return;
+      estimate.totalAmount += amount;
+      estimate.fixedAmount += amount;
+      estimate.scheduledFixedAmount += amount;
     });
 
   const estimates = [...creditCards.values()].sort((left, right) => right.totalAmount - left.totalAmount);
@@ -132,6 +198,7 @@ export function calculateCardPaymentSummary(
     creditCardUsage,
     debitCardUsage,
     unassignedCardUsage,
+    scheduledFixedCardUsage,
     estimatedNextPaymentTotal: creditCardUsage,
     creditCards: estimates,
   };
@@ -146,12 +213,16 @@ export function calculateMonthlyCardSettlementSummary(
   transactions: Transaction[],
   paymentCards: PaymentCard[],
   monthStartDay: number = 1,
+  recurringOccurrences: RecurringOccurrence[] = [],
+  recurringTemplates: RecurringTemplate[] = [],
 ): MonthlyCardSettlementSummary {
   const previousMonthUsage = calculateCardPaymentSummary(
     getPreviousYearMonth(paymentYearMonth),
     transactions,
     paymentCards,
     monthStartDay,
+    recurringOccurrences,
+    recurringTemplates,
   );
   const estimateMap = new Map(previousMonthUsage.creditCards.map(card => [card.cardId, card]));
 

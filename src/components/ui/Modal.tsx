@@ -39,7 +39,12 @@ export const Modal: React.FC<ModalProps> = ({
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
   const fallbackLabelId = useId();
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -61,7 +66,7 @@ export const Modal: React.FC<ModalProps> = ({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -94,7 +99,7 @@ export const Modal: React.FC<ModalProps> = ({
       document.body.style.overflow = overflow;
       previouslyFocused.current?.focus?.();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

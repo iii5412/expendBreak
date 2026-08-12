@@ -44,6 +44,8 @@ import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch } from './auth';
 import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
+import { getCarriedRecurringAmount } from './recurringPlans';
+import { resolveInheritedAllowanceLimit } from './budgetPlans';
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'brake_transactions',
@@ -238,12 +240,21 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
       const existingOccurrence = occurrences.find(o => o.occurrenceKey === occurrenceKey);
       if (!existingOccurrence) {
         const now = new Date().toISOString();
+        // A recurring item is a monthly plan, not one immutable template
+        // amount. Seed the new month from the latest saved month so utilities
+        // and other variable fixed expenses carry forward until edited.
+        const carriedAmount = getCarriedRecurringAmount(
+          tmpl.id,
+          tmpl.defaultAmount,
+          scheduledDate,
+          occurrences,
+        );
         occurrences.push({
           id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
           templateId: tmpl.id,
           occurrenceKey,
           scheduledDate,
-          expectedAmount: tmpl.defaultAmount,
+          expectedAmount: carriedAmount,
           actualAmount: null,
           status: tmpl.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
           typeSnapshot: tmpl.type,
@@ -584,7 +595,16 @@ export function getBudget(yearMonth: string): Budget {
   initializeStorageIfEmpty();
   const map = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {});
   if (!map[yearMonth]) {
-    map[yearMonth] = getSampleBudget(yearMonth);
+    const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+    const inheritedLimit = resolveInheritedAllowanceLimit(
+      yearMonth,
+      Object.values(map),
+      profile.defaultAllowanceLimit,
+    );
+    map[yearMonth] = {
+      ...getSampleBudget(yearMonth),
+      totalLimit: Math.max(0, Math.round(inheritedLimit)),
+    };
     localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
     syncBudgetToFirestore(map[yearMonth]);
   }
@@ -607,6 +627,14 @@ export async function updateBudget(budget: Budget): Promise<Budget> {
   const saved = await syncBudgetToFirestore(updatedBudget);
   if (!saved) {
     throw new Error('월 용돈 한도를 로컬에 보관했지만 DB 저장은 완료하지 못했습니다. 새로고침 시 자동으로 다시 저장합니다.');
+  }
+  const profile = getUserProfile();
+  if (profile.defaultAllowanceLimit !== updatedBudget.totalLimit) {
+    const updatedProfile = updateUserProfile({ defaultAllowanceLimit: updatedBudget.totalLimit });
+    const profileSaved = await syncUserProfileToFirestore(updatedProfile);
+    if (!profileSaved) {
+      throw new Error('월 용돈 한도는 저장했지만 다음 달 승계용 기본값을 DB에 저장하지 못했습니다.');
+    }
   }
   return updatedBudget;
 }
@@ -701,6 +729,12 @@ export function getRecurringOccurrences(yearMonth: string, monthStartDay: number
   return all.filter(o => isDateInPeriod(o.scheduledDate, period));
 }
 
+/** All generated months, used when a card bill needs the prior month's plans. */
+export function getAllRecurringOccurrences(): RecurringOccurrence[] {
+  initializeStorageIfEmpty();
+  return readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+}
+
 export function updateOccurrenceStatus(
   occurrenceId: string,
   status: RecurringOccurrence['status'],
@@ -721,6 +755,46 @@ export function updateOccurrenceStatus(
     syncRecurringOccurrencesToFirestore(all);
     notifyListeners();
   }
+}
+
+/** Saves a month-specific recurring plan without posting a transaction. */
+export function updateOccurrencePlan(
+  occurrenceId: string,
+  updates: {
+    amount: number;
+    paymentMethodType?: PaymentMethodType;
+    accountId?: string | null;
+    cardId?: string | null;
+  },
+): RecurringOccurrence | null {
+  const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
+  if (!raw) return null;
+  const all: RecurringOccurrence[] = JSON.parse(raw);
+  const target = all.find(occurrence => occurrence.id === occurrenceId);
+  const amount = Math.round(Number(updates.amount));
+  if (!target || target.status === 'posted' || !Number.isFinite(amount) || amount < 0) return null;
+
+  target.actualAmount = amount;
+  if (updates.paymentMethodType) target.paymentMethodType = updates.paymentMethodType;
+  target.accountId = updates.paymentMethodType === 'account' ? updates.accountId ?? null : null;
+  target.cardId = updates.paymentMethodType === 'card' ? updates.cardId ?? null : null;
+  target.updatedAt = new Date().toISOString();
+
+  // If future months were already opened/generated, keep carrying this value
+  // through months that have not received their own override yet.
+  all.forEach(occurrence => {
+    if (occurrence.templateId !== target.templateId
+      || occurrence.scheduledDate <= target.scheduledDate
+      || occurrence.actualAmount !== null
+      || occurrence.status === 'posted'
+      || occurrence.status === 'skipped') return;
+    occurrence.expectedAmount = amount;
+    occurrence.updatedAt = target.updatedAt;
+  });
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
+  syncRecurringOccurrencesToFirestore(all);
+  notifyListeners();
+  return target;
 }
 
 export async function postOccurrenceToTransaction(

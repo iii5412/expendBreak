@@ -23,6 +23,7 @@ import { HistoryPeriod, isTransactionInPeriod, sortTransactionsNewestFirst } fro
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
+import { normalizeInstallmentPlan } from '../utils/installments';
 
 const HISTORY_PAGE_SIZES = [10, 20, 50];
 
@@ -238,6 +239,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       paymentMethodType,
       accountId: paymentMethodType === 'account' ? editingTx.accountId || null : null,
       cardId: paymentMethodType === 'card' ? editingTx.cardId || null : null,
+      installment: editingTx.type === 'expense' && paymentMethodType === 'card'
+        ? editingTx.installment ?? null
+        : null,
     });
     setEditingTx(null);
   };
@@ -501,6 +505,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           <ReceiptText className="w-2.5 h-2.5" /><span>영수증</span>
                         </button>
                       )}
+                      {t.installment && (
+                        <span className="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.5 rounded">
+                          할부 {t.installment.currentRound}/{t.installment.totalMonths}회차
+                        </span>
+                      )}
                       {isLowConfidence && (
                         <span
                           className="text-xs bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded flex items-center gap-0.5"
@@ -688,6 +697,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           paymentMethodType: method,
                           accountId: method === 'account' ? editingTx.accountId : null,
                           cardId: method === 'card' ? (editingTx.cardId || paymentCards[0]?.id || null) : null,
+                          installment: method === 'card' ? editingTx.installment : null,
                         });
                       }}
                       className={`rounded-lg border p-2 font-semibold ${
@@ -722,6 +732,52 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     <option value="">{bankAccounts.length > 0 ? '-- 계좌 선택 --' : '등록된 계좌 없음'}</option>
                     {bankAccounts.map(account => <option key={account.id} value={account.id}>[{account.bankName}] {account.accountName}</option>)}
                   </select>
+                )}
+                {editingTx.type === 'expense' && (editingTx.paymentMethodType || 'other') === 'card' && (
+                  <div className="mt-2 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-slate-400">
+                        <span className="mb-1 block">할부 개월</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="60"
+                          value={editingTx.installment?.totalMonths || 1}
+                          onChange={event => {
+                            const months = Math.min(60, Math.max(1, Number(event.target.value) || 1));
+                            setEditingTx({
+                              ...editingTx,
+                              installment: normalizeInstallmentPlan(
+                                months,
+                                Math.min(months, editingTx.installment?.currentRound || 1),
+                                period.yearMonth,
+                              ),
+                            });
+                          }}
+                          className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white"
+                        />
+                      </label>
+                      <label className="text-slate-400">
+                        <span className="mb-1 block">이번 달 회차</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max={editingTx.installment?.totalMonths || 1}
+                          disabled={!editingTx.installment}
+                          value={editingTx.installment?.currentRound || 1}
+                          onChange={event => setEditingTx({
+                            ...editingTx,
+                            installment: normalizeInstallmentPlan(
+                              editingTx.installment?.totalMonths || 1,
+                              Number(event.target.value) || 1,
+                              period.yearMonth,
+                            ),
+                          })}
+                          className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white disabled:opacity-50"
+                        />
+                      </label>
+                    </div>
+                  </div>
                 )}
               </div>
 

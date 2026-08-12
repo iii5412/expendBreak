@@ -13,7 +13,7 @@ import {
   FileText,
   Copy
 } from 'lucide-react';
-import { BankAccount, PaymentCard, Transaction } from '../types';
+import { BankAccount, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { calculateMonthlyCardSettlementSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
@@ -25,6 +25,8 @@ interface AccountsViewProps {
   currentYM: string;
   monthStartDay: number;
   transactions: Transaction[];
+  recurringOccurrences: RecurringOccurrence[];
+  recurringTemplates: RecurringTemplate[];
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
   cardSettlementSummary: MonthlyCardSettlementSummary;
@@ -51,6 +53,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   currentYM,
   monthStartDay,
   transactions,
+  recurringOccurrences,
+  recurringTemplates,
   bankAccounts,
   paymentCards,
   cardSettlementSummary,
@@ -232,8 +236,15 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const selectedMonthSettlement = useMemo(
     () => cardPaymentMonth === currentYM
       ? cardSettlementSummary
-      : calculateMonthlyCardSettlementSummary(cardPaymentMonth, transactions, paymentCards, monthStartDay),
-    [cardPaymentMonth, currentYM, cardSettlementSummary, transactions, paymentCards, monthStartDay],
+      : calculateMonthlyCardSettlementSummary(
+        cardPaymentMonth,
+        transactions,
+        paymentCards,
+        monthStartDay,
+        recurringOccurrences,
+        recurringTemplates,
+      ),
+    [cardPaymentMonth, currentYM, cardSettlementSummary, transactions, paymentCards, monthStartDay, recurringOccurrences, recurringTemplates],
   );
 
   // Follow the app-wide period selector; the card month can still be changed here.
@@ -641,7 +652,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           <div>
                             <div className="font-bold text-slate-200">{cardPaymentMonth} 카드대금</div>
                             <div className="mt-0.5 text-xs text-slate-400">
-                              {monthlySettlement.paymentDate || '결제일 미지정'} · 전월 사용 추정 {formatKRW(monthlySettlement.estimatedAmount)}
+                              {monthlySettlement.paymentDate || '결제일 미지정'} · 전월 카드 지출·고정비 {formatKRW(monthlySettlement.estimatedAmount)}
                             </div>
                           </div>
                           <span className={`rounded-md border px-2 py-1 text-xs font-bold ${
@@ -680,7 +691,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                             onClick={() => useEstimatedMonthlyCardAmount(card)}
                             className="text-xs font-semibold text-slate-400 hover:text-amber-300"
                           >
-                            저장 금액 삭제하고 전월 사용액 자동 추정 사용
+                            수동 보정값 삭제하고 카드별 지출 자동 계산 사용
                           </button>
                         )}
                       </div>

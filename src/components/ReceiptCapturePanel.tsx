@@ -10,15 +10,17 @@ import {
   Transaction,
 } from '../types';
 import { authenticatedFetch } from '../utils/auth';
-import { formatKRW, getLocalDateString } from '../utils/calculations';
+import { formatKRW, getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
 import { blobToBase64, normalizeTags, prepareReceiptImage, PreparedReceiptImage } from '../utils/receipt';
 import { deleteReceiptImage, uploadReceiptImage } from '../utils/receiptStorage';
+import { normalizeInstallmentPlan } from '../utils/installments';
 
 interface ReceiptCapturePanelProps {
   categories: Category[];
   merchantRules: MerchantRule[];
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
+  monthStartDay: number;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
   onDone: () => void;
@@ -29,6 +31,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
   merchantRules,
   bankAccounts,
   paymentCards,
+  monthStartDay,
   onSaveTransaction,
   onSaveMerchantRule,
   onDone,
@@ -47,6 +50,8 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
   const [paymentMethodType, setPaymentMethodType] = useState<PaymentMethodType>('card');
   const [accountId, setAccountId] = useState('');
   const [cardId, setCardId] = useState('');
+  const [installmentMonths, setInstallmentMonths] = useState(1);
+  const [installmentCurrentRound, setInstallmentCurrentRound] = useState(1);
   const [saveOriginal, setSaveOriginal] = useState(true);
   const [rememberRule, setRememberRule] = useState(true);
 
@@ -155,6 +160,9 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
         paymentMethodType,
         accountId: paymentMethodType === 'account' ? accountId || null : null,
         cardId: paymentMethodType === 'card' ? cardId || null : null,
+        installment: paymentMethodType === 'card'
+          ? normalizeInstallmentPlan(installmentMonths, installmentCurrentRound, getCurrentYearMonth(monthStartDay))
+          : null,
         tags: normalizeTags(tagsText),
         receipt: {
           id: receiptId,
@@ -262,6 +270,16 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
             {paymentMethodType === 'card' && <select value={cardId} onChange={event => setCardId(event.target.value)} disabled={paymentCards.length === 0} className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white disabled:text-slate-500"><option value="">{paymentCards.length > 0 ? '카드 선택' : '등록된 카드 없음'}</option>{paymentCards.map(card => <option key={card.id} value={card.id}>{card.cardName} ({card.cardCompany})</option>)}</select>}
             {paymentMethodType === 'account' && <select value={accountId} onChange={event => setAccountId(event.target.value)} disabled={bankAccounts.length === 0} className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white disabled:text-slate-500"><option value="">{bankAccounts.length > 0 ? '계좌 선택' : '등록된 계좌 없음'}</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>[{account.bankName}] {account.accountName}</option>)}</select>}
           </div>
+
+          {paymentMethodType === 'card' && (
+            <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
+              <span className="mb-2 block font-bold text-indigo-200">할부 정보</span>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-slate-400">할부 개월<input type="number" min="1" max="60" value={installmentMonths} onChange={event => { const months = Math.min(60, Math.max(1, Number(event.target.value) || 1)); setInstallmentMonths(months); setInstallmentCurrentRound(current => Math.min(months, current)); }} className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white" /></label>
+                <label className="text-slate-400">이번 달 회차<input type="number" min="1" max={installmentMonths} disabled={installmentMonths <= 1} value={installmentCurrentRound} onChange={event => setInstallmentCurrentRound(Math.min(installmentMonths, Math.max(1, Number(event.target.value) || 1)))} className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white disabled:opacity-50" /></label>
+              </div>
+            </div>
+          )}
 
           <label className="block space-y-1 text-slate-400">메모
             <input value={memo} onChange={event => setMemo(event.target.value)} className="w-full rounded-lg border border-slate-800 bg-slate-900 p-2 text-white" />

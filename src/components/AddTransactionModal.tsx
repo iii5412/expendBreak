@@ -25,7 +25,7 @@ import {
   RecurringOccurrence,
   RecurringTemplate,
 } from '../types';
-import { formatKRW, getLocalDateString } from '../utils/calculations';
+import { formatKRW, getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
 import { normalizeTags } from '../utils/receipt';
 import { Modal } from './ui/Modal';
@@ -40,6 +40,7 @@ import {
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { LiveVoicePanel } from './LiveVoicePanel';
+import { normalizeInstallmentPlan } from '../utils/installments';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -92,6 +93,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [paymentMethodType, setPaymentMethodType] = useState<PaymentMethodType>('card');
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [selectedCardId, setSelectedCardId] = useState<string>('');
+  const [installmentMonths, setInstallmentMonths] = useState<number>(1);
+  const [installmentCurrentRound, setInstallmentCurrentRound] = useState<number>(1);
 
   // AI Prompt State
   const [aiPromptText, setAiPromptText] = useState<string>('');
@@ -115,6 +118,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [confirmPaymentMethodType, setConfirmPaymentMethodType] = useState<PaymentMethodType>('card');
   const [confirmAccountId, setConfirmAccountId] = useState<string>('');
   const [confirmCardId, setConfirmCardId] = useState<string>('');
+  const [confirmInstallmentMonths, setConfirmInstallmentMonths] = useState<number>(1);
+  const [confirmInstallmentCurrentRound, setConfirmInstallmentCurrentRound] = useState<number>(1);
   const [rememberRule, setRememberRule] = useState<boolean>(true);
 
   /** Inline validation message for whichever save flow is active. */
@@ -155,8 +160,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       paymentMethodType,
       accountId: selectedAccountId,
       cardId: selectedCardId,
+      installmentMonths,
+      installmentCurrentRound,
     });
-  }, [isOpen, type, amount, localDate, categoryId, merchant, memo, tagsText, paymentMethodType, selectedAccountId, selectedCardId]);
+  }, [isOpen, type, amount, localDate, categoryId, merchant, memo, tagsText, paymentMethodType, selectedAccountId, selectedCardId, installmentMonths, installmentCurrentRound]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -224,6 +231,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       } else if (compactPrompt.includes('현금')) {
         setConfirmPaymentMethodType('cash');
       }
+      const installmentMatch = compactPrompt.match(/(\d+)개월할부/);
+      const roundMatch = compactPrompt.match(/(\d+)회차/);
+      if (installmentMatch) {
+        const months = Math.min(60, Math.max(2, Number(installmentMatch[1])));
+        setConfirmInstallmentMonths(months);
+        setConfirmInstallmentCurrentRound(Math.min(months, Math.max(1, Number(roundMatch?.[1] || 1))));
+      } else {
+        setConfirmInstallmentMonths(1);
+        setConfirmInstallmentCurrentRound(1);
+      }
     } catch (err: any) {
       console.error(err);
       setAiError('AI 분석 중 오류가 발생했습니다. 아래 수동 입력을 이용해주세요.');
@@ -261,6 +278,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       paymentMethodType: confirmPaymentMethodType,
       accountId: confirmPaymentMethodType === 'account' ? confirmAccountId : null,
       cardId: confirmPaymentMethodType === 'card' ? confirmCardId : null,
+      installment: confirmType === 'expense' && confirmPaymentMethodType === 'card'
+        ? normalizeInstallmentPlan(confirmInstallmentMonths, confirmInstallmentCurrentRound, getCurrentYearMonth(monthStartDay))
+        : null,
       aiConfidence: aiResult?.confidence || 0.9,
       aiReviewed: true,
     });
@@ -302,6 +322,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     if (result.suggestedCardId) {
       setConfirmCardId(result.suggestedCardId);
     }
+    setConfirmInstallmentMonths(result.installmentMonths || 1);
+    setConfirmInstallmentCurrentRound(result.installmentCurrentRound || 1);
   };
 
   const handleConfirmVoiceSave = () => {
@@ -333,6 +355,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       paymentMethodType: confirmPaymentMethodType,
       accountId: confirmPaymentMethodType === 'account' ? confirmAccountId : null,
       cardId: confirmPaymentMethodType === 'card' ? confirmCardId : null,
+      installment: confirmType === 'expense' && confirmPaymentMethodType === 'card'
+        ? normalizeInstallmentPlan(confirmInstallmentMonths, confirmInstallmentCurrentRound, getCurrentYearMonth(monthStartDay))
+        : null,
       aiConfidence: voiceResult?.confidence || 0.9,
       aiReviewed: true,
       voiceRecord: {
@@ -377,6 +402,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setPaymentMethodType(confirmPaymentMethodType);
     setSelectedAccountId(confirmAccountId);
     setSelectedCardId(confirmCardId);
+    setInstallmentMonths(confirmInstallmentMonths);
+    setInstallmentCurrentRound(confirmInstallmentCurrentRound);
     setVoiceResult(null);
     setActiveMode('manual');
   };
@@ -412,6 +439,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       paymentMethodType,
       accountId: paymentMethodType === 'account' ? selectedAccountId : null,
       cardId: paymentMethodType === 'card' ? selectedCardId : null,
+      installment: type === 'expense' && paymentMethodType === 'card'
+        ? normalizeInstallmentPlan(installmentMonths, installmentCurrentRound, getCurrentYearMonth(monthStartDay))
+        : null,
     });
 
     resetAll();
@@ -430,6 +460,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setPaymentMethodType(recoverableDraft.paymentMethodType || 'card');
     setSelectedAccountId(recoverableDraft.accountId || '');
     setSelectedCardId(recoverableDraft.cardId || paymentCards[0]?.id || '');
+    setInstallmentMonths(recoverableDraft.installmentMonths || 1);
+    setInstallmentCurrentRound(recoverableDraft.installmentCurrentRound || 1);
     setActiveMode('manual');
     setRecoverableDraft(null);
   };
@@ -453,6 +485,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setMerchant('');
     setMemo('');
     setTagsText('');
+    setInstallmentMonths(1);
+    setInstallmentCurrentRound(1);
+    setConfirmInstallmentMonths(1);
+    setConfirmInstallmentCurrentRound(1);
   };
 
   const saveErrorNotice = saveError ? (
@@ -471,6 +507,48 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     '월급 3,500,000원 들어옴',
     '어제 카카오택시 13,500',
   ];
+
+  const renderInstallmentFields = (confirmation: boolean) => {
+    const currentType = confirmation ? confirmType : type;
+    const currentMethod = confirmation ? confirmPaymentMethodType : paymentMethodType;
+    if (currentType !== 'expense' || currentMethod !== 'card') return null;
+    const months = confirmation ? confirmInstallmentMonths : installmentMonths;
+    const round = confirmation ? confirmInstallmentCurrentRound : installmentCurrentRound;
+    const setMonths = (next: number) => {
+      const normalized = Math.min(60, Math.max(1, Math.trunc(next || 1)));
+      if (confirmation) {
+        setConfirmInstallmentMonths(normalized);
+        setConfirmInstallmentCurrentRound(current => Math.min(normalized, Math.max(1, current)));
+      } else {
+        setInstallmentMonths(normalized);
+        setInstallmentCurrentRound(current => Math.min(normalized, Math.max(1, current)));
+      }
+    };
+    const setRound = (next: number) => {
+      const normalized = Math.min(months, Math.max(1, Math.trunc(next || 1)));
+      if (confirmation) setConfirmInstallmentCurrentRound(normalized);
+      else setInstallmentCurrentRound(normalized);
+    };
+    return (
+      <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-bold text-indigo-200">할부 정보</span>
+          <span className="text-xs text-slate-400">{months <= 1 ? '일시불' : `${round}/${months}회차`}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-slate-400">
+            <span className="mb-1 block">할부 개월</span>
+            <input type="number" min="1" max="60" value={months} onChange={event => setMonths(Number(event.target.value))} className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white" />
+          </label>
+          <label className="text-slate-400">
+            <span className="mb-1 block">이번 달 회차</span>
+            <input type="number" min="1" max={months} value={round} disabled={months <= 1} onChange={event => setRound(Number(event.target.value))} className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white disabled:opacity-50" />
+          </label>
+        </div>
+        {months > 1 && <p className="mt-2 text-xs text-slate-400">총 결제금액을 {months}개월로 나누어 이번 달 {round}회차부터 남은 카드대금을 예측합니다.</p>}
+      </div>
+    );
+  };
 
   return (
     <Modal
@@ -606,6 +684,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             merchantRules={merchantRules}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
+            monthStartDay={monthStartDay}
             onSaveTransaction={onSaveTransaction}
             onSaveMerchantRule={onSaveMerchantRule}
             onDone={() => {
@@ -847,6 +926,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   )}
                 </div>
 
+                {renderInstallmentFields(true)}
+
                 <div className="text-xs text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
                   <span className="font-semibold text-purple-300">AI 판단 이유:</span> {voiceResult.reason}
                 </div>
@@ -1053,6 +1134,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   )}
                 </div>
 
+                {renderInstallmentFields(true)}
+
                 <div className="text-xs text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
                   <span className="font-semibold text-amber-300">AI 판단 이유:</span> {aiResult.reason}
                 </div>
@@ -1229,6 +1312,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 </select>
               )}
             </div>
+
+            {renderInstallmentFields(false)}
 
             <div>
               <label className="text-slate-400 block mb-1">사용처 / 거래처</label>

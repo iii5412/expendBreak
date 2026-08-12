@@ -237,8 +237,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <CreditCard className="w-4 h-4 text-indigo-300" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-slate-100">카드 사용과 다음 결제</h3>
-                <p className="text-xs text-slate-400">구매 시 소비 반영 · 결제일에는 계좌 정산</p>
+                <h3 className="text-sm font-bold text-slate-100">카드 사용·고정비와 다음 결제</h3>
+                <p className="text-xs text-slate-400">카드로 내는 고정지출도 해당 카드대금에 자동 합산</p>
               </div>
             </div>
             <button
@@ -258,10 +258,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="mt-0.5 text-xs text-slate-400">신용카드 결제계좌 자동 반영</div>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-              <div className="text-xs text-slate-400">이번 달 전체 카드 사용</div>
+              <div className="text-xs text-slate-400">이번 달 카드 사용·예정</div>
               <div className="mt-1 text-base font-bold text-slate-100">{formatKRW(cardPaymentSummary.totalCardUsage)}</div>
               <div className="mt-0.5 text-xs text-slate-400">
-                체크카드 {formatKRW(cardPaymentSummary.debitCardUsage)} 포함
+                체크카드 {formatKRW(cardPaymentSummary.debitCardUsage)} · 미납부 고정비 {formatKRW(cardPaymentSummary.scheduledFixedCardUsage)}
               </div>
             </div>
             <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3">
@@ -269,7 +269,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="mt-1 text-base font-bold text-indigo-300">
                 {formatKRW(cardPaymentSummary.estimatedNextPaymentTotal)}
               </div>
-              <div className="mt-0.5 text-xs text-slate-400">이번 달 사용분 기준</div>
+              <div className="mt-0.5 text-xs text-slate-400">이번 달 지출 + 카드 고정지출 기준</div>
             </div>
           </div>
 
@@ -291,8 +291,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </div>
                     <div className="mt-2 flex items-center justify-between border-t border-slate-800/70 pt-2 text-xs text-slate-400">
                       <span>용돈 사용 {formatKRW(card.allowanceAmount)}</span>
-                      <span>카드 결제 고정비 {formatKRW(card.fixedAmount)}</span>
+                      <span>카드 고정비 {formatKRW(card.fixedAmount)} (예정 {formatKRW(card.scheduledFixedAmount)})</span>
                     </div>
+                    {card.installmentAmount > 0 && (
+                      <div className="mt-1.5 rounded-lg bg-indigo-500/10 px-2 py-1.5 text-xs text-indigo-200">
+                        할부 예측 {formatKRW(card.installmentAmount)} · {card.installments.map(item => `${item.merchant} ${item.round}/${item.totalMonths}회차`).join(', ')}
+                      </div>
+                    )}
                   </div>
                 );
               })}

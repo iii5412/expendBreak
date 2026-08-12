@@ -17,6 +17,7 @@ import {
   getBudget,
   getRecurringTemplates,
   getRecurringOccurrences,
+  getAllRecurringOccurrences,
   getMerchantRules,
   getUserProfile,
   getBankAccounts,
@@ -34,6 +35,7 @@ import {
   finalizeTransactionDeletion,
   postOccurrenceToTransaction,
   updateOccurrenceStatus,
+  updateOccurrencePlan,
   updateBudget,
   saveCategory,
   toggleCategoryActive,
@@ -94,6 +96,7 @@ export default function App() {
   const [budget, setBudget] = useState<Budget>(() => getSampleBudget(getYearMonthString()));
   const [recurringTemplates, setRecurringTemplates] = useState<RecurringTemplate[]>([]);
   const [recurringOccurrences, setRecurringOccurrences] = useState<RecurringOccurrence[]>([]);
+  const [allRecurringOccurrences, setAllRecurringOccurrences] = useState<RecurringOccurrence[]>([]);
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
@@ -110,6 +113,7 @@ export default function App() {
     setBudget(getBudget(currentYM));
     setRecurringTemplates(getRecurringTemplates());
     setRecurringOccurrences(getRecurringOccurrences(currentYM, startDay));
+    setAllRecurringOccurrences(getAllRecurringOccurrences());
     setMerchantRules(getMerchantRules());
     setBankAccounts(getBankAccounts());
     setPaymentCards(getPaymentCards());
@@ -162,6 +166,7 @@ export default function App() {
     setCategories([]);
     setRecurringTemplates([]);
     setRecurringOccurrences([]);
+    setAllRecurringOccurrences([]);
     setMerchantRules([]);
     setBankAccounts([]);
     setPaymentCards([]);
@@ -260,13 +265,27 @@ export default function App() {
   }, [currentYM, transactions, categoryMap, monthStartDay]);
 
   const cardPaymentSummary = useMemo(
-    () => calculateCardPaymentSummary(currentYM, transactions, paymentCards, monthStartDay),
-    [currentYM, transactions, paymentCards, monthStartDay],
+    () => calculateCardPaymentSummary(
+      currentYM,
+      transactions,
+      paymentCards,
+      monthStartDay,
+      allRecurringOccurrences,
+      recurringTemplates,
+    ),
+    [currentYM, transactions, paymentCards, monthStartDay, allRecurringOccurrences, recurringTemplates],
   );
 
   const cardSettlementSummary = useMemo(
-    () => calculateMonthlyCardSettlementSummary(currentYM, transactions, paymentCards, monthStartDay),
-    [currentYM, transactions, paymentCards, monthStartDay],
+    () => calculateMonthlyCardSettlementSummary(
+      currentYM,
+      transactions,
+      paymentCards,
+      monthStartDay,
+      allRecurringOccurrences,
+      recurringTemplates,
+    ),
+    [currentYM, transactions, paymentCards, monthStartDay, allRecurringOccurrences, recurringTemplates],
   );
 
   const classificationIssues = useMemo(
@@ -506,6 +525,15 @@ export default function App() {
               updateOccurrenceStatus(occId, status);
               refreshAppData();
             }}
+            onUpdateOccurrencePlan={(occId, amount, pType, accId, cId) => {
+              updateOccurrencePlan(occId, {
+                amount,
+                paymentMethodType: pType,
+                accountId: accId,
+                cardId: cId,
+              });
+              refreshAppData();
+            }}
           />
         )}
 
@@ -514,6 +542,8 @@ export default function App() {
             currentYM={currentYM}
             monthStartDay={monthStartDay}
             transactions={transactions}
+            recurringOccurrences={allRecurringOccurrences}
+            recurringTemplates={recurringTemplates}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
             cardSettlementSummary={cardSettlementSummary}

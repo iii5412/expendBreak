@@ -42,6 +42,7 @@ export const INITIAL_USER_PROFILE: UserProfile = {
   timezone: 'Asia/Seoul',
   monthStartDay: 10,
   paydayPlanningVersion: 1,
+  defaultAllowanceLimit: 0,
   aiClassificationEnabled: false,
   aiInsightsEnabled: false,
   securityPinEnabled: true,
@@ -57,7 +58,7 @@ export function getSampleRecurringTemplates(): RecurringTemplate[] {
 export function getSampleBudget(yearMonth: string): Budget {
   return {
     yearMonth,
-    totalLimit: 1800000, // Monthly allowance limit (field name retained for stored-data compatibility)
+    totalLimit: 0, // New accounts start unset; saved DB/profile values seed following months.
     thresholds: [0.70, 0.85, 1.00],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

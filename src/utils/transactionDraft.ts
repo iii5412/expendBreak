@@ -19,6 +19,8 @@ export interface TransactionDraft {
   paymentMethodType?: 'account' | 'card' | 'cash' | 'other';
   accountId?: string;
   cardId?: string;
+  installmentMonths?: number;
+  installmentCurrentRound?: number;
   savedAt: string;
 }
 

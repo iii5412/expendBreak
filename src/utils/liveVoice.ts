@@ -31,6 +31,8 @@ export interface LiveTransactionToolArguments {
   payment_method?: string;
   account_name?: string;
   card_name?: string;
+  installment_months?: number | string;
+  installment_current_round?: number | string;
   tags?: string[];
   spoken_summary?: string;
   confidence?: number;
@@ -140,6 +142,11 @@ export function createLiveVoiceResult(
         ? 'account'
         : resolvePaymentMethod(raw.spoken_summary);
   const confidenceValue = Number(raw.confidence);
+  const installmentMonths = Math.min(60, Math.max(1, Math.trunc(Number(raw.installment_months) || 1)));
+  const installmentCurrentRound = Math.min(
+    installmentMonths,
+    Math.max(1, Math.trunc(Number(raw.installment_current_round) || 1)),
+  );
 
   return {
     transcript,
@@ -159,6 +166,8 @@ export function createLiveVoiceResult(
     paymentMethodHint: cleanText(raw.card_name || raw.account_name || raw.payment_method, 100),
     suggestedAccountId: paymentMethodType === 'account' ? matchedAccountId : null,
     suggestedCardId: paymentMethodType === 'card' ? matchedCardId : null,
+    installmentMonths,
+    installmentCurrentRound,
     tags: Array.isArray(raw.tags)
       ? raw.tags.map(tag => cleanText(tag, 40).replace(/^#/, '')).filter(Boolean).slice(0, 10)
       : [],
@@ -196,8 +205,22 @@ export function createAssistantFinancialSnapshot(args: {
     monthStartDay,
   );
   const categoryMap = new Map(args.categories.map(category => [category.id, category.name]));
-  const cardSummary = calculateCardPaymentSummary(yearMonth, args.transactions, args.paymentCards || [], monthStartDay);
-  const cardSettlementSummary = calculateMonthlyCardSettlementSummary(yearMonth, args.transactions, args.paymentCards || [], monthStartDay);
+  const cardSummary = calculateCardPaymentSummary(
+    yearMonth,
+    args.transactions,
+    args.paymentCards || [],
+    monthStartDay,
+    args.recurringOccurrences,
+    args.recurringTemplates,
+  );
+  const cardSettlementSummary = calculateMonthlyCardSettlementSummary(
+    yearMonth,
+    args.transactions,
+    args.paymentCards || [],
+    monthStartDay,
+    args.recurringOccurrences,
+    args.recurringTemplates,
+  );
   const expenseByCategory = new Map<string, number>();
   args.transactions
     .filter(transaction => transaction.type === 'expense'
@@ -227,6 +250,7 @@ export function createAssistantFinancialSnapshot(args: {
     월말예상지출: summary.forecastMonthEndSpend,
     월말예상저축: summary.forecastSavings,
     이번달전체카드사용: cardSummary.totalCardUsage,
+    카드고정지출예정: cardSummary.scheduledFixedCardUsage,
     다음달신용카드결제추정: cardSummary.estimatedNextPaymentTotal,
     이번달카드계좌고정출금: cardSettlementSummary.linkedAccountTotal,
     카드미지정사용: cardSummary.unassignedCardUsage,
@@ -235,6 +259,7 @@ export function createAssistantFinancialSnapshot(args: {
       .map(card => ({
         카드: `${card.cardCompany} ${card.cardName}`,
         금액: card.totalAmount,
+        할부예측: card.installmentAmount,
         결제예정일: card.estimatedPaymentDate,
       })),
     수동계좌잔액합계: args.bankAccounts.reduce((sum, account) => sum + Math.round(account.balance || 0), 0),

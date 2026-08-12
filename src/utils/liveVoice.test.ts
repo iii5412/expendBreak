@@ -97,6 +97,19 @@ describe('GPT live finance helpers', () => {
     expect(result.suggestedCardId).toBe('shinhan');
   });
 
+  it('keeps spoken installment months and the current round in the draft', () => {
+    const result = createLiveVoiceResult({
+      type: 'expense', amount: 600_000, merchant: '가전매장', payment_method: 'card',
+      installment_months: 6, installment_current_round: 2,
+      spoken_summary: '신한카드 6개월 할부 이번 달 2회차',
+    }, {
+      categories, merchantRules: [], bankAccounts: [], paymentCards: [], defaultDate: '2026-08-11',
+    });
+
+    expect(result.installmentMonths).toBe(6);
+    expect(result.installmentCurrentRound).toBe(2);
+  });
+
   it('returns deterministic financial facts without account numbers', () => {
     const accounts: BankAccount[] = [{
       id: 'account-1',

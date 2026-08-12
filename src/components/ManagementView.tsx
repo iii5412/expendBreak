@@ -406,8 +406,23 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   // posted recurring transactions + remaining recurring occurrences.
   const monthlyFixedIncome = summary.totalExpectedRecurringIncome;
   const monthlyFixedExpense = summary.totalExpectedFixedExpenses;
-
-  const totalFixedOutflow = monthlyFixedExpense + cardSettlementSummary.linkedAccountTotal;
+  const cardPaidFixedExpense = recurringTemplates
+    .filter(template => template.active && template.type === 'expense')
+    .reduce((sum, template) => {
+      const templateOccurrences = recurringOccurrences.filter(occurrence => occurrence.templateId === template.id);
+      if (templateOccurrences.length > 0) {
+        return sum + templateOccurrences.reduce((occurrenceSum, occurrence) => {
+          if (occurrence.status === 'skipped') return occurrenceSum;
+          const method = occurrence.paymentMethodType ?? template.paymentMethodType;
+          return occurrenceSum + (method === 'card'
+            ? Math.round(occurrence.actualAmount ?? occurrence.expectedAmount)
+            : 0);
+        }, 0);
+      }
+      return sum + (template.paymentMethodType === 'card' ? Math.round(template.defaultAmount) : 0);
+    }, 0);
+  const nonCardFixedExpense = Math.max(0, monthlyFixedExpense - cardPaidFixedExpense);
+  const totalFixedOutflow = nonCardFixedExpense + cardSettlementSummary.totalAmount;
 
   // Grouping Recurring Items by Bank & Account Number for Transfer Assistance
   const accountGroups = React.useMemo(() => {
@@ -425,7 +440,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       }
     >();
 
-    const activeExpenseTemplates = recurringTemplates.filter(t => t.active && t.type === 'expense');
+    const activeExpenseTemplates = recurringTemplates.filter(template => {
+      if (!template.active || template.type !== 'expense') return false;
+      const occurrence = recurringOccurrences.find(item => item.templateId === template.id);
+      return (occurrence?.paymentMethodType ?? template.paymentMethodType) !== 'card';
+    });
 
     for (const tmpl of activeExpenseTemplates) {
       const bank = tmpl.bankName || '은행 미지정';
@@ -450,11 +469,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       group.templates.push(tmpl);
 
       // Find occurrences for this template in the current month
-      const tmplOccs = recurringOccurrences.filter(o => o.templateId === tmpl.id);
+      const tmplOccs = recurringOccurrences.filter(o => o.templateId === tmpl.id && o.status !== 'skipped');
       for (const occ of tmplOccs) {
         group.occurrences.push({ occ, tmpl });
         if (occ.status !== 'posted') {
-          group.totalExpectedAmount += occ.expectedAmount;
+          group.totalExpectedAmount += occ.actualAmount ?? occ.expectedAmount;
           group.hasUnpostedItems = true;
         }
       }
@@ -552,13 +571,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">정기 고정지출</span>
-                <span className="font-extrabold text-rose-400">{formatKRW(monthlyFixedExpense)}</span>
+                <span className="text-slate-400 text-xs block mb-0.5">카드 제외 고정지출</span>
+                <span className="font-extrabold text-rose-400">{formatKRW(nonCardFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-indigo-500/20">
-                <span className="text-slate-400 text-xs block mb-0.5">카드 계좌 고정 출금</span>
-                <span className="font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.linkedAccountTotal)}</span>
+                <span className="text-slate-400 text-xs block mb-0.5">이번 달 카드대금</span>
+                <span className="font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.totalAmount)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
@@ -681,7 +700,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
                               <div className="flex items-center gap-3">
                                 <span className="font-bold text-slate-100">
-                                  {formatKRW(occ ? occ.expectedAmount : tmpl.defaultAmount)}
+                                  {formatKRW(occ ? (occ.actualAmount ?? occ.expectedAmount) : tmpl.defaultAmount)}
                                 </span>
 
                                 {occ && occ.status !== 'posted' ? (
@@ -781,6 +800,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 <div className="space-y-2">
                   {recurringTemplates.map(tmpl => {
                     const cat = categories.find(c => c.id === tmpl.categoryId);
+                    const monthOccurrence = recurringOccurrences.find(occurrence => occurrence.templateId === tmpl.id);
+                    const monthAmount = monthOccurrence
+                      ? monthOccurrence.actualAmount ?? monthOccurrence.expectedAmount
+                      : tmpl.defaultAmount;
 
                     return (
                       <div
@@ -817,7 +840,14 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                         </div>
 
                         <div className="flex items-center gap-3">
-                          <span className="font-black text-slate-100">{formatKRW(tmpl.defaultAmount)}</span>
+                          <div className="text-right">
+                            <span className="block font-black text-slate-100">{formatKRW(monthAmount)}</span>
+                            <span className="text-xs text-slate-400">
+                              {monthOccurrence?.actualAmount !== null && monthOccurrence?.actualAmount !== undefined
+                                ? '이번 달 별도 금액'
+                                : '직전 달 승계·기본값'}
+                            </span>
+                          </div>
 
                           <div className="flex items-center gap-1">
                             <button
@@ -880,7 +910,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </div>
             </div>
             <p className="text-xs leading-relaxed text-slate-400">
-              카드대금은 연결 계좌의 월 고정 출금으로 표시되며, 카드 구매 시 이미 반영된 지출과 중복 합산하지 않습니다.
+              일반 고정지출은 직전 월 금액을 승계하고 월별로 수정합니다. 카드대금은 승계하지 않고 카드별 지출에서 다시 계산합니다.
+            </p>
+            <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-xs leading-relaxed text-emerald-200">
+              저장한 용돈 한도는 현재 월 DB 문서와 사용자 기본 설정에 함께 저장됩니다. 다음 달 예산이 없으면 직전 달의 DB 금액을 자동 승계합니다.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PaymentCard, Transaction } from '../types';
+import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 
 const now = '2026-08-11T00:00:00.000Z';
@@ -81,5 +81,47 @@ describe('calculateCardPaymentSummary', () => {
 
     expect(summary.totalCardUsage).toBe(0);
     expect(summary.estimatedNextPaymentTotal).toBe(0);
+  });
+
+  it('adds an unposted card-paid fixed expense to that card bill without a transaction', () => {
+    const template: RecurringTemplate = {
+      id: 'subscription', type: 'expense', name: '구독료', defaultAmount: 45_000,
+      categoryId: 'subscriptions', counterparty: '구독 서비스', expenseNature: 'fixed', frequency: 'monthly',
+      dayOfMonth: 25, holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true,
+      paymentMethodType: 'card', cardId: 'credit', startDate: '2026-01-01', nextDueDate: '2026-08-25',
+      active: true, createdAt: now, updatedAt: now,
+    };
+    const pending: RecurringOccurrence = {
+      id: 'pending-subscription', templateId: template.id, occurrenceKey: 'subscription_2026-08-25',
+      scheduledDate: '2026-08-25', expectedAmount: 45_000, actualAmount: 52_000,
+      status: 'needs_confirmation', createdAt: now, updatedAt: now,
+    };
+
+    const summary = calculateCardPaymentSummary('2026-08', [
+      transaction({ id: 'allowance', cardId: 'credit', amount: 120_000 }),
+    ], cards, 1, [pending], [template]);
+
+    expect(summary.estimatedNextPaymentTotal).toBe(172_000);
+    expect(summary.scheduledFixedCardUsage).toBe(52_000);
+    expect(summary.creditCards[0]).toEqual(expect.objectContaining({
+      fixedAmount: 52_000,
+      scheduledFixedAmount: 52_000,
+    }));
+  });
+
+  it('includes only the applicable installment round in each projected card month', () => {
+    const installmentTx = transaction({
+      id: 'installment', cardId: 'credit', amount: 300_000, localDate: '2026-06-10',
+      installment: { totalMonths: 3, currentRound: 2, baseYearMonth: '2026-08' },
+    });
+
+    expect(calculateCardPaymentSummary('2026-08', [installmentTx], cards).estimatedNextPaymentTotal).toBe(100_000);
+    expect(calculateCardPaymentSummary('2026-08', [installmentTx], cards).creditCards[0]).toEqual(expect.objectContaining({
+      installmentAmount: 100_000,
+      installments: [expect.objectContaining({ round: 2, totalMonths: 3 })],
+    }));
+    expect(calculateCardPaymentSummary('2026-09', [installmentTx], cards).estimatedNextPaymentTotal).toBe(100_000);
+    expect(calculateCardPaymentSummary('2026-10', [installmentTx], cards).estimatedNextPaymentTotal).toBe(0);
+    expect(calculateCardPaymentSummary('2026-06', [installmentTx], cards).estimatedNextPaymentTotal).toBe(0);
   });
 });
