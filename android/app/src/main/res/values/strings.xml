@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">지출브레이크</string>
+    <string name="title_activity_main">지출브레이크</string>
+    <string name="package_name">com.iii5412.expendbreak</string>
+    <string name="custom_url_scheme">com.iii5412.expendbreak</string>
+    <string name="widget_name">지출브레이크 생활비</string>
+    <string name="widget_description">오늘 안전 금액과 남은 생활비를 확인합니다.</string>
+</resources>

@@ -26,6 +26,10 @@ npm run pin:hash -- 123456
 - `OPENAI_REALTIME_VOICE`: 기본값 `marin`
 - `NODE_ENV=production`
 - `PORT`: 호스팅 플랫폼이 주입
+- `APP_URL`: 운영 앱의 HTTPS origin
+- `NATIVE_ALLOWED_ORIGINS=https://localhost`: Android WebView의 정확한 허용 origin
+
+Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 설정한다. 상세 절차는 [ANDROID.md](./ANDROID.md)를 따른다.
 
 `APP_ACCESS_KEY`는 기존 배포 호환용 임시 fallback이다. `APP_PIN_HASH` 확인 후 제거한다.
 
@@ -33,7 +37,7 @@ npm run pin:hash -- 123456
 
 1. `storage.rules`를 운영 Storage에 배포한다. 영수증 원본은 이 규칙 없이는 저장되지 않아야 한다.
 2. 새 앱과 서버를 배포하되 Firestore rules는 아직 기존 상태로 둔다.
-3. PIN으로 최초 로그인한다.
+3. 웹과 Android 앱에서 PIN으로 최초 로그인한다. `/api/auth/verify-key`가 API 세션 토큰과 Firebase custom token을 모두 반환해야 한다.
 4. 서버가 `/api/migration/ensure`를 실행하여 루트 컬렉션을 소유자 경로로 복사한다.
 5. `users/{OWNER_UID}/migrations/legacy-root-v1` 보고서가 생성됐는지 확인한다.
 6. 각 컬렉션의 `sourceCount`, `destinationCount`와 거래 `sourceAmountTotal`, `destinationAmountTotal`을 확인한다.

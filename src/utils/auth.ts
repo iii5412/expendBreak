@@ -1,3 +1,7 @@
+import { apiUrl } from './api';
+import { signInWithCustomToken, signOut } from 'firebase/auth';
+import { auth } from '../lib/firebase';
+
 const SESSION_TOKEN_KEY = 'eb_session_token';
 
 export interface PinLoginError extends Error {
@@ -26,14 +30,14 @@ export function isOwnerLoggedIn(): boolean {
 }
 
 export async function loginWithPin(pin: string) {
-  const response = await fetch('/api/auth/verify-key', {
+  const response = await fetch(apiUrl('/api/auth/verify-key'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ key: pin }),
   });
   const data = await response.json().catch(() => ({}));
 
-  if (!response.ok || !data.token) {
+  if (!response.ok || !data.token || !data.firebaseToken) {
     const error = new Error(
       response.status === 429
         ? 'PIN 입력이 잠시 제한되었습니다.'
@@ -44,6 +48,7 @@ export async function loginWithPin(pin: string) {
     throw error;
   }
 
+  await signInWithCustomToken(auth, data.firebaseToken);
   sessionStorage.setItem(SESSION_TOKEN_KEY, data.token);
   notifyAuthState();
 }
@@ -58,10 +63,12 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   const token = await getOwnerIdToken();
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token}`);
-  return fetch(input, { ...init, headers });
+  const target = typeof input === 'string' && input.startsWith('/') ? apiUrl(input) : input;
+  return fetch(target, { ...init, headers });
 }
 
 export async function logoutOwner() {
   sessionStorage.removeItem(SESSION_TOKEN_KEY);
+  await signOut(auth).catch(() => undefined);
   notifyAuthState();
 }

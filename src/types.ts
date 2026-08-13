@@ -223,6 +223,8 @@ export interface MerchantRule {
   createdAt: string;
 }
 
+export type WidgetPrivacyMode = 'unlock_required' | 'always_show' | 'amounts_hidden';
+
 export interface UserProfile {
   uid: string;
   displayName: string;
@@ -243,6 +245,8 @@ export interface UserProfile {
   onboardingCompletedAt?: string | null;
   /** Idle minutes before the app locks. 0 disables the idle lock. */
   idleLockMinutes?: number;
+  /** Android home-screen widget disclosure policy. */
+  widgetPrivacyMode?: WidgetPrivacyMode;
   securityPinEnabled?: boolean;
   accessPin?: string; // Legacy only. New PIN authentication never stores this field.
   createdAt: string;

@@ -10,7 +10,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../public');
+const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const OUT_DIR = resolve(ROOT_DIR, 'public');
+const ANDROID_RES_DIR = resolve(ROOT_DIR, 'android/app/src/main/res');
 
 const BACKGROUND = [2, 6, 23]; // slate-950
 const BOLT = [244, 63, 94]; // rose-500
@@ -53,13 +55,13 @@ function chunk(type, data) {
   return Buffer.concat([length, typeAndData, crc]);
 }
 
-function encodePng(size, pixelAt) {
+function encodePng(width, height, pixelAt) {
   // One filter byte (0 = None) per scanline, then RGBA samples.
-  const raw = Buffer.alloc(size * (size * 4 + 1));
+  const raw = Buffer.alloc(height * (width * 4 + 1));
   let offset = 0;
-  for (let y = 0; y < size; y++) {
+  for (let y = 0; y < height; y++) {
     raw[offset++] = 0;
-    for (let x = 0; x < size; x++) {
+    for (let x = 0; x < width; x++) {
       const [r, g, b, a] = pixelAt(x, y);
       raw[offset++] = r;
       raw[offset++] = g;
@@ -69,8 +71,8 @@ function encodePng(size, pixelAt) {
   }
 
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(size, 0);
-  ihdr.writeUInt32BE(size, 4);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
   ihdr[9] = 6; // colour type: RGBA
   ihdr[10] = 0; // deflate
@@ -94,7 +96,7 @@ function makeIcon(size, { maskable }) {
   const inset = maskable ? size * 0.18 : size * 0.16;
   const boltSize = size - inset * 2;
 
-  return encodePng(size, (x, y) => {
+  return encodePng(size, size, (x, y) => {
     if (!maskable) {
       // Round the corners by clearing pixels outside the rounded rectangle.
       const cornerX = Math.min(x, size - 1 - x);
@@ -116,6 +118,28 @@ function makeIcon(size, { maskable }) {
   });
 }
 
+function makeSplash(width, height) {
+  const boltSize = Math.round(Math.min(width, height) * 0.28);
+  const left = (width - boltSize) / 2;
+  const top = (height - boltSize) / 2;
+
+  return encodePng(width, height, (x, y) => {
+    const unitX = (x - left) / boltSize;
+    const unitY = (y - top) / boltSize;
+    if (unitX >= 0 && unitX <= 1 && unitY >= 0 && unitY <= 1
+      && isInsidePolygon(unitX, unitY, BOLT_POLYGON)) {
+      return [...BOLT, 255];
+    }
+    return [...BACKGROUND, 255];
+  });
+}
+
+function writePng(target, png, dimensions) {
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, png);
+  console.log(`${target.replace(`${ROOT_DIR}\\`, '')}: ${dimensions}, ${png.length} bytes`);
+}
+
 mkdirSync(OUT_DIR, { recursive: true });
 
 const targets = [
@@ -127,6 +151,38 @@ const targets = [
 
 for (const [name, size, options] of targets) {
   const png = makeIcon(size, options);
-  writeFileSync(resolve(OUT_DIR, name), png);
-  console.log(`${name}: ${size}x${size}, ${png.length} bytes`);
+  writePng(resolve(OUT_DIR, name), png, `${size}x${size}`);
+}
+
+const androidIconSizes = {
+  mdpi: 48,
+  hdpi: 72,
+  xhdpi: 96,
+  xxhdpi: 144,
+  xxxhdpi: 192,
+};
+
+for (const [density, size] of Object.entries(androidIconSizes)) {
+  const png = makeIcon(size, { maskable: true });
+  for (const name of ['ic_launcher.png', 'ic_launcher_round.png']) {
+    writePng(resolve(ANDROID_RES_DIR, `mipmap-${density}`, name), png, `${size}x${size}`);
+  }
+}
+
+const androidSplashes = [
+  ['drawable/splash.png', 480, 320],
+  ['drawable-land-mdpi/splash.png', 480, 320],
+  ['drawable-land-hdpi/splash.png', 800, 480],
+  ['drawable-land-xhdpi/splash.png', 1280, 720],
+  ['drawable-land-xxhdpi/splash.png', 1600, 960],
+  ['drawable-land-xxxhdpi/splash.png', 1920, 1280],
+  ['drawable-port-mdpi/splash.png', 320, 480],
+  ['drawable-port-hdpi/splash.png', 480, 800],
+  ['drawable-port-xhdpi/splash.png', 720, 1280],
+  ['drawable-port-xxhdpi/splash.png', 960, 1600],
+  ['drawable-port-xxxhdpi/splash.png', 1280, 1920],
+];
+
+for (const [relativePath, width, height] of androidSplashes) {
+  writePng(resolve(ANDROID_RES_DIR, relativePath), makeSplash(width, height), `${width}x${height}`);
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Share, Smartphone } from 'lucide-react';
+import { isNativeAndroid } from '../utils/platform';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -15,6 +16,7 @@ export const InstallAppCard: React.FC = () => {
   const [isInstalled, setIsInstalled] = useState(false);
 
   useEffect(() => {
+    if (isNativeAndroid()) return;
     const standalone = window.matchMedia('(display-mode: standalone)').matches
       || (window.navigator as { standalone?: boolean }).standalone === true;
     setIsInstalled(standalone);
@@ -36,6 +38,7 @@ export const InstallAppCard: React.FC = () => {
     };
   }, []);
 
+  if (isNativeAndroid()) return null;
   if (isInstalled) return null;
 
   return (

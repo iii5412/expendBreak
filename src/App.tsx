@@ -86,6 +86,13 @@ import { findManualCardSettlementCandidates } from './utils/cardSettlementPlans'
 import { calculateFutureCommitments } from './utils/futureCommitments';
 import { buildCycleClosingReport } from './utils/cycleClosing';
 import { buildCashflowTimeline } from './utils/cashflowTimeline';
+import {
+  buildWidgetSnapshot,
+  NativeDestination,
+  publishWidgetSnapshot,
+  setWidgetLocked,
+  subscribeToNativeDestinations,
+} from './utils/widget';
 
 type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
@@ -120,6 +127,7 @@ export default function App() {
   /** Reset whenever the drift changes, so "그대로 두기" hides one notice, not all of them. */
   const [dismissedDelta, setDismissedDelta] = useState<number | null>(null);
   const [dismissedClosingYM, setDismissedClosingYM] = useState<string | null>(null);
+  const [nativeDestination, setNativeDestination] = useState<NativeDestination | null>(null);
 
   // Reload state from storage
   const refreshAppData = () => {
@@ -440,6 +448,55 @@ export default function App() {
       setManagementSubTab(subTab);
     }
   };
+
+  useEffect(() => {
+    let unsubscribe = () => undefined;
+    let cancelled = false;
+    void subscribeToNativeDestinations(destination => setNativeDestination(destination))
+      .then(remove => {
+        if (cancelled) remove();
+        else unsubscribe = remove;
+      })
+      .catch(error => console.error('Native deep-link subscription failed:', error));
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!nativeDestination || bootState !== 'ready') return;
+    if (nativeDestination === 'transaction/new') {
+      setIsAddModalOpen(true);
+    } else if (nativeDestination === 'settings/widget') {
+      handleNavigateTab('management', 'settings');
+    } else {
+      handleNavigateTab('home');
+    }
+    setNativeDestination(null);
+  }, [nativeDestination, bootState]);
+
+  useEffect(() => {
+    if (bootState === 'locked') {
+      void setWidgetLocked(true).catch(error => console.error('Widget lock update failed:', error));
+      return;
+    }
+    if (bootState !== 'ready') return;
+    const snapshot = buildWidgetSnapshot(currentYM, period.endDate, summary, userProfile);
+    void publishWidgetSnapshot(snapshot).catch(error => console.error('Widget snapshot update failed:', error));
+  }, [
+    bootState,
+    currentYM,
+    period.endDate,
+    summary.remainingAllowance,
+    summary.confirmedVariableExpenses,
+    summary.spendableLimit,
+    summary.dailySafeAllowance,
+    summary.daysRemaining,
+    summary.alertLevel,
+    userProfile.idleLockMinutes,
+    userProfile.widgetPrivacyMode,
+  ]);
 
   const handlePostOccurrence = async (occId: string) => {
     await postOccurrenceToTransaction(occId);

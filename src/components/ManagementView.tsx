@@ -52,6 +52,7 @@ import { AmountInput } from './ui/AmountInput';
 import { parseAmountInput } from '../utils/amount';
 import { IDLE_LOCK_OPTIONS, describeIdleLockMinutes, normalizeIdleLockMinutes } from '../utils/lockPolicy';
 import { InstallAppCard } from './InstallAppCard';
+import { AndroidAppCard } from './AndroidAppCard';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -1164,6 +1165,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           </div>
 
           <InstallAppCard />
+          <AndroidAppCard userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
 
           {/* AI Settings Toggles */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">

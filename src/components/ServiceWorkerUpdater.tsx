@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useToast } from './ui/FeedbackProvider';
+import { isNativeAndroid } from '../utils/platform';
 
 /**
  * Registers the service worker and, when a newer build finishes installing,
@@ -9,6 +10,9 @@ export const ServiceWorkerUpdater: React.FC = () => {
   const { showToast } = useToast();
 
   useEffect(() => {
+    // Native builds ship versioned web assets inside the APK. Registering the
+    // web service worker there would create a second, stale cache layer.
+    if (isNativeAndroid()) return;
     // The worker is only emitted by the production build.
     if (!import.meta.env.PROD) return;
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;

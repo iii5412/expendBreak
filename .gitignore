@@ -1,4 +1,6 @@
 node_modules/
+.android-sdk/
+.jdk21/
 build/
 dist/
 server-dist/

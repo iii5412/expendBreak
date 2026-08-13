@@ -4,6 +4,7 @@ import { createHmac, pbkdf2Sync, timingSafeEqual } from 'node:crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { applicationDefault, getApps as getAdminApps, initializeApp as initializeAdminApp } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json';
 import { shouldTriggerVoiceFallback, sanitizeVoiceResult } from './src/utils/voice';
@@ -19,6 +20,35 @@ const SESSION_SECRET = process.env.APP_PIN_HASH || process.env.APP_ACCESS_KEY ||
 // A compressed receipt image is sent as base64 only for the authenticated OCR request.
 app.use(express.json({ limit: '12mb' }));
 
+const allowedNativeOrigins = new Set(
+  String(process.env.NATIVE_ALLOWED_ORIGINS || 'https://localhost')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean),
+);
+try {
+  if (process.env.APP_URL) allowedNativeOrigins.add(new URL(process.env.APP_URL).origin);
+} catch {
+  console.warn('APP_URL is not a valid absolute URL; it was not added to the CORS allowlist.');
+}
+
+// Same-origin web requests need no CORS headers. The bundled Capacitor WebView
+// has the exact origin https://localhost, so only configured native origins get
+// an explicit cross-origin grant.
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && allowedNativeOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') {
+    return origin && allowedNativeOrigins.has(origin) ? res.sendStatus(204) : res.sendStatus(403);
+  }
+  return next();
+});
+
 function getAdminServices() {
   const adminApp = getAdminApps()[0] || initializeAdminApp({
     credential: applicationDefault(),
@@ -27,7 +57,7 @@ function getAdminServices() {
   const adminDb = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
     ? getAdminFirestore(adminApp, firebaseConfig.firestoreDatabaseId)
     : getAdminFirestore(adminApp);
-  return { adminDb };
+  return { adminDb, adminAuth: getAdminAuth(adminApp) };
 }
 
 function safeEqualText(left: string, right: string) {
@@ -267,7 +297,9 @@ app.post('/api/auth/verify-key', async (req, res) => {
 
     pinAttempts.delete(clientId);
     const token = createSessionToken(OWNER_UID);
-    return res.json({ isValid: true, token });
+    const { adminAuth } = getAdminServices();
+    const firebaseToken = await adminAuth.createCustomToken(OWNER_UID);
+    return res.json({ isValid: true, token, firebaseToken });
   } catch (error) {
     console.error('PIN authentication error:', error instanceof Error ? error.message : error);
     return res.status(500).json({
