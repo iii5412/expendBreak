@@ -41,6 +41,7 @@ import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { LiveVoicePanel } from './LiveVoicePanel';
 import { normalizeInstallmentPlan } from '../utils/installments';
+import { RecurringMatchCandidate, findRecurringMatches } from '../utils/recurringMatch';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -57,6 +58,14 @@ interface AddTransactionModalProps {
   aiClassificationEnabled?: boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
+  /** Settles a recurring item directly when this entry turns out to be one. */
+  onPostOccurrence?: (
+    occurrenceId: string,
+    amount: number,
+    paymentMethodType: PaymentMethodType,
+    accountId: string | null,
+    cardId: string | null,
+  ) => Promise<void> | void;
 }
 
 export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
@@ -74,6 +83,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   aiClassificationEnabled = true,
   onSaveTransaction,
   onSaveMerchantRule,
+  onPostOccurrence,
 }) => {
   const [activeMode, setActiveMode] = useState<'receipt' | 'voice' | 'ai' | 'manual'>('voice');
   const [voiceInputKind, setVoiceInputKind] = useState<'live' | 'quick'>('live');
@@ -125,6 +135,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   /** Inline validation message for whichever save flow is active. */
   const [saveError, setSaveError] = useState<string | null>(null);
   const [recoverableDraft, setRecoverableDraft] = useState<TransactionDraft | null>(null);
+  /** Pending "is this your rent?" question, blocking the save until answered. */
+  const [recurringMatchPrompt, setRecurringMatchPrompt] = useState<RecurringMatchCandidate | null>(null);
 
   const failValidation = (message: string, focusElementId?: string) => {
     setSaveError(message);
@@ -142,6 +154,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setVoiceInputKind('live');
       setVoiceResult(null);
       setSaveError(null);
+      setRecurringMatchPrompt(null);
       setRecoverableDraft(readTransactionDraft());
     }
   }, [isOpen, aiClassificationEnabled]);
@@ -426,6 +439,24 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     }
     setSaveError(null);
 
+    // Saving this as an ordinary expense while the recurring item stays pending
+    // would charge the same money twice, so ask before that happens.
+    if (!recurringMatchPrompt) {
+      const [match] = findRecurringMatches(
+        { type, amount: numAmount, localDate, merchant, categoryId },
+        recurringOccurrences,
+        recurringTemplates,
+      );
+      if (match) {
+        setRecurringMatchPrompt(match);
+        return;
+      }
+    }
+
+    saveManualTransaction(numAmount);
+  };
+
+  const saveManualTransaction = (numAmount: number) => {
     onSaveTransaction({
       type,
       amount: numAmount,
@@ -444,6 +475,23 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         : null,
     });
 
+    setRecurringMatchPrompt(null);
+    resetAll();
+    onClose();
+  };
+
+  /** Settles the matched recurring item instead of recording a separate expense. */
+  const handleConfirmRecurringMatch = async () => {
+    if (!recurringMatchPrompt || !onPostOccurrence) return;
+    const amountToPost = parseInt(amount, 10);
+    await onPostOccurrence(
+      recurringMatchPrompt.occurrence.id,
+      amountToPost,
+      paymentMethodType,
+      paymentMethodType === 'account' ? selectedAccountId || null : null,
+      paymentMethodType === 'card' ? selectedCardId || null : null,
+    );
+    setRecurringMatchPrompt(null);
     resetAll();
     onClose();
   };
@@ -545,7 +593,32 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             <input type="number" min="1" max={months} value={round} disabled={months <= 1} onChange={event => setRound(Number(event.target.value))} className="w-full rounded-lg border border-slate-800 bg-slate-950 p-2 text-white disabled:opacity-50" />
           </label>
         </div>
-        {months > 1 && <p className="mt-2 text-xs text-slate-400">총 결제금액을 {months}개월로 나누어 이번 달 {round}회차부터 남은 카드대금을 예측합니다.</p>}
+        {months > 1 && (() => {
+          // Show the monthly commitment, not the sticker price: that is the number
+          // that competes with the rest of this cycle's living budget.
+          const total = confirmation ? Math.round(confirmAmount) : parseAmountInput(amount);
+          const perRound = total > 0 ? Math.floor(total / months) : 0;
+          const remainingRounds = Math.max(0, months - round + 1);
+          return (
+            <div className="mt-2 space-y-1 border-t border-indigo-500/20 pt-2 text-xs">
+              {perRound > 0 && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">이번 주기 생활비에서</span>
+                    <span className="font-bold text-indigo-200">{formatKRW(perRound)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">남은 {remainingRounds}회 동안 매달</span>
+                    <span className="font-semibold text-slate-300">{formatKRW(perRound)}</span>
+                  </div>
+                </>
+              )}
+              <p className="text-slate-400">
+                총액이 아니라 회차분만 이번 주기에 반영됩니다. 나머지는 회차가 오는 주기에 잡힙니다.
+              </p>
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -1350,6 +1423,42 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             </div>
 
             {saveErrorNotice}
+
+            {recurringMatchPrompt && (
+              <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  <span>이 거래, 등록해 둔 정기 항목인가요?</span>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs">
+                  <div className="font-bold text-slate-100">{recurringMatchPrompt.template.name}</div>
+                  <div className="mt-0.5 text-slate-400">
+                    {recurringMatchPrompt.occurrence.scheduledDate} 예정 · {formatKRW(recurringMatchPrompt.expectedAmount)}
+                  </div>
+                </div>
+                <p className="text-xs leading-relaxed text-slate-300">
+                  정기 항목으로 확정하면 예정된 고정 출금이 처리됩니다. 별개 지출로 저장하면
+                  생활비에서 한 번 더 빠지고 정기 항목은 미처리로 남습니다.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmRecurringMatch()}
+                    disabled={!onPostOccurrence}
+                    className="min-h-11 flex-1 rounded-lg bg-amber-500 text-xs font-extrabold text-slate-950 transition-colors hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    정기 항목으로 확정
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => saveManualTransaction(parseInt(amount, 10))}
+                    className="min-h-11 flex-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
+                  >
+                    별개 지출로 저장
+                  </button>
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"

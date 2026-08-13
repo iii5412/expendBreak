@@ -195,15 +195,6 @@ export function createAssistantFinancialSnapshot(args: {
   const monthStartDay = args.monthStartDay ?? 1;
   const yearMonth = getCurrentYearMonth(monthStartDay, now);
   const period = getAccountingPeriod(yearMonth, monthStartDay, now);
-  const summary = calculateMonthSummary(
-    yearMonth,
-    args.transactions,
-    args.recurringOccurrences,
-    args.budget,
-    args.recurringTemplates,
-    now,
-    monthStartDay,
-  );
   const categoryMap = new Map(args.categories.map(category => [category.id, category.name]));
   const cardSummary = calculateCardPaymentSummary(
     yearMonth,
@@ -213,6 +204,7 @@ export function createAssistantFinancialSnapshot(args: {
     args.recurringOccurrences,
     args.recurringTemplates,
   );
+  // The card bill is a cash-track outflow, so it has to reach the summary.
   const cardSettlementSummary = calculateMonthlyCardSettlementSummary(
     yearMonth,
     args.transactions,
@@ -220,6 +212,16 @@ export function createAssistantFinancialSnapshot(args: {
     monthStartDay,
     args.recurringOccurrences,
     args.recurringTemplates,
+  );
+  const summary = calculateMonthSummary(
+    yearMonth,
+    args.transactions,
+    args.recurringOccurrences,
+    args.budget,
+    args.recurringTemplates,
+    now,
+    monthStartDay,
+    { cardSettlementOutflow: cardSettlementSummary.totalAmount },
   );
   const expenseByCategory = new Map<string, number>();
   args.transactions
@@ -240,7 +242,12 @@ export function createAssistantFinancialSnapshot(args: {
     확정전체지출: summary.confirmedExpenses,
     확정고정비: summary.confirmedFixedExpenses,
     예정고정비: summary.remainingScheduledExpenses,
-    이번달고정지출: summary.totalExpectedFixedExpenses,
+    계좌고정이체: summary.accountFixedOutflow,
+    이번주기카드대금: summary.cardSettlementOutflow,
+    이번주기고정출금합계: summary.totalExpectedFixedExpenses,
+    이번주기생활비: summary.livingBudget,
+    남은생활비: summary.remainingLivingBudget,
+    급여입금예정기준: summary.isProjected,
     사용한용돈: summary.confirmedVariableExpenses,
     순현금흐름: summary.netCashFlow,
     월용돈한도: summary.allowanceLimit,

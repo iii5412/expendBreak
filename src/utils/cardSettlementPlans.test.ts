@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { PaymentCard, RecurringTemplate } from '../types';
-import { getDuplicateManualCardSettlementTemplateIds } from './cardSettlementPlans';
+import {
+  findManualCardSettlementCandidates,
+  getDuplicateManualCardSettlementTemplateIds,
+} from './cardSettlementPlans';
 
 const now = '2026-08-11T00:00:00.000Z';
 const card: PaymentCard = {
@@ -25,5 +28,45 @@ describe('manual card settlement duplicate detection', () => {
       template({ id: 'rent', name: '월세', counterparty: '임대인' }),
       template({ id: 'other-account', accountId: 'other' }),
     ], [card]).size).toBe(0);
+  });
+
+  // An item named just "신한카드" misses the 카드대금 pattern, so it used to be
+  // counted as a transfer *and* as the generated bill.
+  it('flags a loosely named card bill for review instead of double counting silently', () => {
+    const loose = template({ id: 'loose', name: '신한카드', counterparty: '' });
+    const candidates = findManualCardSettlementCandidates([loose], [card], {
+      cardSettlementAmounts: { shinhan: 320_000 },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ templateId: 'loose', cardId: 'shinhan', status: 'needs_review' });
+    // Still counted until the user answers, so nothing disappears behind their back.
+    expect(getDuplicateManualCardSettlementTemplateIds([loose], [card], {
+      cardSettlementAmounts: { shinhan: 320_000 },
+    }).size).toBe(0);
+  });
+
+  it('leaves a same-account expense alone when the amount is nothing like the bill', () => {
+    const rent = template({ id: 'rent', name: '월세 카드자동이체', counterparty: '임대인' });
+    expect(findManualCardSettlementCandidates([rent], [card], {
+      cardSettlementAmounts: { shinhan: 900_000 },
+    })).toHaveLength(0);
+  });
+
+  it('honours an explicit confirmation over any heuristic', () => {
+    const confirmed = template({
+      id: 'confirmed', name: '월 정산', counterparty: '',
+      cardSettlementCardId: 'shinhan', cardSettlementReviewedAt: '2026-08-12T00:00:00.000Z',
+    });
+    expect(getDuplicateManualCardSettlementTemplateIds([confirmed], [card])).toEqual(new Set(['confirmed']));
+  });
+
+  it('stops suggesting once the user says it is a separate expense', () => {
+    const dismissed = template({
+      id: 'dismissed', cardSettlementCardId: null,
+      cardSettlementReviewedAt: '2026-08-12T00:00:00.000Z',
+    });
+    expect(findManualCardSettlementCandidates([dismissed], [card])).toHaveLength(0);
+    expect(getDuplicateManualCardSettlementTemplateIds([dismissed], [card]).size).toBe(0);
   });
 });

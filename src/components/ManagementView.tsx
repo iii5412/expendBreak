@@ -171,7 +171,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   const [tempTotalBudget, setTempTotalBudget] = useState(budget.totalLimit.toString());
   const [isBudgetSaving, setIsBudgetSaving] = useState(false);
   const tempAllowanceLimit = Math.max(0, Number.parseInt(tempTotalBudget, 10) || 0);
-  const tempPlannedSavings = summary.disposableAfterFixed - tempAllowanceLimit;
+  const tempPlannedSavings = summary.livingBudget - tempAllowanceLimit;
 
   useEffect(() => {
     setTempTotalBudget(budget.totalLimit.toString());
@@ -405,28 +405,12 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
   };
 
-  // Calculate Fixed Summary
-  // Keep this summary on the same current-month basis as the dashboard:
-  // posted recurring transactions + remaining recurring occurrences.
+  // Fixed cash-flow figures come from the shared cash-track model so this
+  // screen cannot drift from the dashboard or the recurring centre.
   const monthlyFixedIncome = summary.totalExpectedRecurringIncome;
-  const monthlyFixedExpense = summary.totalExpectedFixedExpenses;
-  const cardPaidFixedExpense = recurringTemplates
-    .filter(template => template.active && template.type === 'expense')
-    .reduce((sum, template) => {
-      const templateOccurrences = recurringOccurrences.filter(occurrence => occurrence.templateId === template.id);
-      if (templateOccurrences.length > 0) {
-        return sum + templateOccurrences.reduce((occurrenceSum, occurrence) => {
-          if (occurrence.status === 'skipped') return occurrenceSum;
-          const method = occurrence.paymentMethodType ?? template.paymentMethodType;
-          return occurrenceSum + (method === 'card'
-            ? Math.round(occurrence.actualAmount ?? occurrence.expectedAmount)
-            : 0);
-        }, 0);
-      }
-      return sum + (template.paymentMethodType === 'card' ? Math.round(template.defaultAmount) : 0);
-    }, 0);
-  const nonCardFixedExpense = Math.max(0, monthlyFixedExpense - cardPaidFixedExpense);
-  const totalFixedOutflow = nonCardFixedExpense + cardSettlementSummary.totalAmount;
+  const cardPaidFixedExpense = summary.cardFixedExpenses;
+  const nonCardFixedExpense = summary.accountFixedOutflow;
+  const totalFixedOutflow = summary.accountFixedOutflow + summary.cardSettlementOutflow;
 
   // Grouping Recurring Items by Bank & Account Number for Transfer Assistance
   const accountGroups = React.useMemo(() => {
@@ -576,13 +560,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">카드 제외 고정지출</span>
+                <span className="text-slate-400 text-xs block mb-0.5">계좌 고정 이체</span>
                 <span className="font-extrabold text-rose-400">{formatKRW(nonCardFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-indigo-500/20">
-                <span className="text-slate-400 text-xs block mb-0.5">이번 달 카드대금</span>
-                <span className="font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.totalAmount)}</span>
+                <span className="text-slate-400 text-xs block mb-0.5">이번 주기 카드대금</span>
+                <span className="font-extrabold text-indigo-300">{formatKRW(summary.cardSettlementOutflow)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
@@ -923,11 +907,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
               <div className="rounded-lg border border-slate-800 bg-slate-950 p-2.5">
-                <div className="text-xs text-slate-400">수입 - 이번 달 고정지출</div>
-                <div className="mt-1 font-bold text-slate-200">{formatKRW(summary.disposableAfterFixed)}</div>
+                <div className="text-xs text-slate-400">이번 주기 생활비</div>
+                <div className="mt-1 font-bold text-slate-200">{formatKRW(summary.livingBudget)}</div>
               </div>
               <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-2.5">
-                <div className="text-xs text-slate-400">설정할 용돈</div>
+                <div className="text-xs text-slate-400">설정할 생활비 한도</div>
                 <div className="mt-1 font-bold text-rose-300">{formatKRW(tempAllowanceLimit)}</div>
               </div>
               <div className={`rounded-lg border p-2.5 ${
@@ -946,7 +930,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
             {tempPlannedSavings < 0 && (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-200">
-                이번 달 수입과 고정비 기준으로 용돈 한도가 {formatKRW(-tempPlannedSavings)} 높습니다. 저장은 가능하지만 저축 예정액이 부족해집니다.
+                이번 주기 생활비보다 한도가 {formatKRW(-tempPlannedSavings)} 높습니다. 저장은 가능하지만 저축 예정액이 부족해집니다.
               </p>
             )}
           </div>

@@ -51,7 +51,7 @@ describe('financial calculations', () => {
     expect(summary.alertLevel).toBe('caution');
   });
 
-  it('does not make scheduled income spendable before it is deposited', () => {
+  it('plans on scheduled income before it is deposited, but keeps reported income at zero', () => {
     const incomeTemplate: RecurringTemplate = {
       id: 'salary-template', type: 'income', name: '급여', defaultAmount: 3_000_000,
       categoryId: 'salary', counterparty: '회사', frequency: 'monthly', dayOfMonth: 10,
@@ -67,8 +67,12 @@ describe('financial calculations', () => {
 
     const summary = calculateMonthSummary('2026-08', [], [scheduledIncome], budget, [incomeTemplate], now, 10);
     expect(summary.scheduledIncome).toBe(3_000_000);
+    // Reported income counts deposits only...
     expect(summary.totalIncome).toBe(0);
-    expect(summary.spendableLimit).toBe(0);
+    // ...while planning uses the scheduled deposit and says so.
+    expect(summary.isProjected).toBe(true);
+    expect(summary.planningIncome).toBe(3_000_000);
+    expect(summary.spendableLimit).toBe(budget.totalLimit);
   });
 
   it('reserves every active fixed expense in the salary cycle before its due date', () => {

@@ -24,14 +24,17 @@ import {
   RecurringOccurrence,
   RecurringTemplate
 } from '../types';
-import { AccountingPeriod, formatKRW, formatPeriodRange } from '../utils/calculations';
+import { AccountingPeriod, MonthSummary, formatKRW, formatPeriodRange } from '../utils/calculations';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
+import { ManualCardSettlementCandidate } from '../utils/cardSettlementPlans';
 
 interface RecurringPaymentViewProps {
   /** Period comes from the app-wide selector; this view no longer owns month state. */
   period: AccountingPeriod;
+  /** Single source of truth for cash-track totals. */
+  summary: MonthSummary;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
   categories: Category[];
@@ -40,6 +43,9 @@ interface RecurringPaymentViewProps {
   cardSettlementSummary: MonthlyCardSettlementSummary;
   onReloadRecurringPlan: () => Promise<void>;
   duplicateManualCardSettlementCount: number;
+  /** Items that look like a card bill but are still counted as a transfer. */
+  cardSettlementReviewItems: ManualCardSettlementCandidate[];
+  onResolveCardSettlementReview: (templateId: string, cardId: string | null) => void;
   onUpdateCardSettlementStatus: (cardId: string, status: 'scheduled' | 'paid') => void;
   onPostOccurrence: (
     occId: string,
@@ -60,6 +66,7 @@ interface RecurringPaymentViewProps {
 
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   period,
+  summary,
   recurringOccurrences,
   recurringTemplates,
   categories,
@@ -68,6 +75,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   cardSettlementSummary,
   onReloadRecurringPlan,
   duplicateManualCardSettlementCount,
+  cardSettlementReviewItems,
+  onResolveCardSettlementReview,
   onUpdateCardSettlementStatus,
   onPostOccurrence,
   onUpdateOccurrenceStatus,
@@ -173,27 +182,20 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), 0);
   const pendingIncomeAmount = totalScheduledIncome - totalPostedIncome;
 
-  const nonCardExpenseOccurrences = expenseOccurrences.filter(occurrence => {
-    const paymentMethod = occurrence.paymentMethodType || occurrence.tmpl?.paymentMethodType;
-    return paymentMethod !== 'card';
-  });
-  const totalScheduledExpense = nonCardExpenseOccurrences.filter(o => o.status !== 'skipped').reduce(
-    (sum, o) => sum + (o.actualAmount ?? o.expectedAmount),
-    cardSettlementSummary.totalAmount,
-  );
+  // Fixed-outflow totals come from the shared cash-track model so this screen,
+  // the dashboard and settings cannot drift apart.
+  const totalScheduledExpense = summary.accountFixedOutflow + summary.cardSettlementOutflow;
   const postedCardSettlementAmount = cardSettlementSummary.cards
     .filter(card => card.status === 'paid')
     .reduce((sum, card) => sum + card.amount, 0);
-  const totalPostedExpense = nonCardExpenseOccurrences
-    .filter((o) => o.status === 'posted')
-    .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), postedCardSettlementAmount);
+  const totalPostedExpense = summary.confirmedAccountFixedOutflow + postedCardSettlementAmount;
   const pendingExpenseAmount = totalScheduledExpense - totalPostedExpense;
   const cardSettlementItems = cardSettlementSummary.cards;
   const pendingCardSettlementCount = cardSettlementItems.filter(card => card.status !== 'paid').length;
   const paidCardSettlementCount = cardSettlementItems.filter(card => card.status === 'paid').length;
-  const [selectedYear, selectedMonth] = period.yearMonth.split('-').map(Number);
-  const previousMonthDate = new Date(selectedYear, selectedMonth - 2, 1);
-  const previousYearMonth = `${previousMonthDate.getFullYear()}-${String(previousMonthDate.getMonth() + 1).padStart(2, '0')}`;
+  // Cards with different billing days can charge different usage months.
+  const cardBillUsageMonths = [...new Set(cardSettlementItems.map(card => card.usageYearMonth))];
+  const cardBillUsageLabel = cardBillUsageMonths.length === 1 ? cardBillUsageMonths[0] : '직전 사용월';
 
   const handleReload = async () => {
     setIsReloading(true);
@@ -273,7 +275,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             남은 납부 예정: <strong className="text-amber-300">{formatKRW(pendingExpenseAmount)}</strong>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            계좌 고정지출 + 신용카드대금 {formatKRW(cardSettlementSummary.totalAmount)}
+            계좌 이체 {formatKRW(summary.accountFixedOutflow)} + 카드대금 {formatKRW(summary.cardSettlementOutflow)}
           </p>
         </div>
 
@@ -299,7 +301,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
               자동 생성 카드대금 고정출금 항목
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
-              {period.yearMonth} 결제 예정액은 {previousYearMonth}에 현재까지 등록된 카드 사용과 카드 결제 고정지출을 합산합니다. 카드 사용 거래를 다시 지출로 중복 저장하지 않고 결제계좌에서 확보할 출금액으로 반영합니다.
+              결제일이 {period.yearMonth} 주기 안에 있는 카드대금입니다. {cardBillUsageLabel} 사용분과 카드 결제 고정지출을 합산하며, 카드 사용 거래를 다시 지출로 중복 저장하지 않고 결제계좌에서 확보할 출금액으로만 반영합니다.
             </p>
           </div>
           <span className="shrink-0 text-base font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.linkedAccountTotal)}</span>
@@ -329,7 +331,11 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       {card.paymentDate ? `${card.paymentDate} 출금 예정` : '결제일 미지정'} · {linkedAccount ? `[${linkedAccount.bankName}] ${linkedAccount.accountName}` : '결제계좌 미지정'}
                     </div>
                     <div className="mt-1 text-[11px] text-indigo-300">
-                      {card.source === 'confirmed' ? '직접 저장한 월 결제액' : `${previousYearMonth} 현재 사용액 자동 계산`}
+                      {card.source === 'confirmed'
+                        ? '직접 저장한 월 결제액'
+                        : card.hasStatementWindow
+                          ? `${card.usageStartDate} ~ ${card.usageEndDate} 사용액 자동 계산`
+                          : `${card.usageYearMonth} 사용액 자동 계산 (이용기간 미설정)`}
                     </div>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">
@@ -356,6 +362,43 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           <p className="rounded-xl border border-sky-500/25 bg-sky-500/10 p-2.5 text-xs text-sky-200">
             동일 카드와 결제계좌로 등록된 기존 수동 카드대금 {duplicateManualCardSettlementCount}건은 자동 생성 항목으로 대체되어 고정지출 합계에서 제외했습니다.
           </p>
+        )}
+
+        {cardSettlementReviewItems.length > 0 && (
+          <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+              <AlertCircle className="h-3.5 w-3.5" />
+              <span>카드대금이 두 번 계산되고 있을 수 있습니다</span>
+            </div>
+            <p className="text-xs leading-relaxed text-slate-300">
+              아래 항목은 신용카드 결제계좌에서 나가는 고정지출로 등록돼 있고, 금액도 자동 생성된 카드대금과 비슷합니다.
+              카드대금이 맞다면 자동 항목으로 대체해 중복을 없애고, 별개 지출이라면 그대로 두세요.
+            </p>
+            <ul className="space-y-2">
+              {cardSettlementReviewItems.map(item => (
+                <li key={item.templateId} className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
+                  <div className="text-xs font-bold text-slate-100">{item.templateName}</div>
+                  <div className="mt-0.5 text-xs text-slate-400">{item.cardName} 카드대금과 중복 의심</div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onResolveCardSettlementReview(item.templateId, item.cardId)}
+                      className="min-h-9 flex-1 rounded-lg bg-amber-500 text-xs font-extrabold text-slate-950 transition-colors hover:bg-amber-600"
+                    >
+                      카드대금이 맞습니다
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onResolveCardSettlementReview(item.templateId, null)}
+                      className="min-h-9 flex-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
+                    >
+                      별개 지출입니다
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </div>
 

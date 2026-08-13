@@ -6,6 +6,12 @@ export type PostingMode = 'auto' | 'confirm';
 export type OccurrenceStatus = 'scheduled' | 'needs_confirmation' | 'posted' | 'skipped' | 'overdue';
 export type PaymentMethodType = 'account' | 'card' | 'cash' | 'other';
 export type CardPaymentStatus = 'scheduled' | 'paid';
+/**
+ * What a transaction represents. `normal` is spending or income; the others are
+ * money moving between places the user already owns or owes, so they must never
+ * reach the spend track (INV-2).
+ */
+export type TransactionRole = 'normal' | 'card_settlement' | 'transfer';
 
 export interface ReceiptLineItem {
   name: string;
@@ -53,6 +59,9 @@ export interface PaymentCard {
   cardType: 'credit' | 'debit'; // 신용카드 / 체크카드
   linkedAccountId?: string | null; // 출금 계좌 ID (BankAccount ID)
   billingDay?: number | null; // 결제일 (1~31)
+  /** 이용기간 마감일 (1~31). 예: 25일 결제 · 마감 11일 → 전월 12일~당월 11일 사용분 청구.
+   *  미설정 시 결제월 직전 달 사용분으로 추정한다. */
+  statementClosingDay?: number | null;
   monthlyPaymentAmounts?: Record<string, number>; // 결제월(YYYY-MM)별 확정 카드대금
   monthlyPaymentStatuses?: Record<string, CardPaymentStatus>; // 결제월별 납부 상태(금액 산식과 분리)
   memo?: string; // 비고
@@ -99,6 +108,10 @@ export interface Transaction {
   merchant: string;
   memo: string;
   source: 'manual' | 'ai' | 'receipt' | 'voice';
+  /** Defaults to 'normal' when absent. */
+  role?: TransactionRole;
+  /** Payment cycle (YYYY-MM) a card settlement transaction pays off. */
+  settlementYearMonth?: string | null;
   aiConfidence?: number | null;
   aiReviewed?: boolean;
   recurringTemplateId?: string | null;
@@ -145,6 +158,11 @@ export interface RecurringTemplate {
   endDate?: string | null;
   nextDueDate: string; // YYYY-MM-DD
   active: boolean;
+  /** Set when the user confirms this manual item is card X's bill. The generated
+   *  card settlement then stands in for it and planning skips this template. */
+  cardSettlementCardId?: string | null;
+  /** Set when the user has classified this item, either way, so the suggestion stops. */
+  cardSettlementReviewedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -164,6 +182,36 @@ export interface RecurringOccurrence {
   typeSnapshot?: TransactionType;
   categoryIdSnapshot?: string;
   templateRevision?: string;
+  /** Template amount when this occurrence last synced, so unrelated template
+   *  edits do not overwrite a carried-forward or month-specific amount. */
+  templateAmountSnapshot?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * The living budget a user commits to on payday, frozen for that cycle.
+ *
+ * Without this snapshot the remaining balance drifts whenever a fixed amount is
+ * edited or a card estimate moves, so yesterday's number stops matching what was
+ * actually spent since. Once locked, the plan changes only when the user accepts
+ * a change (see `docs/PRD-payday-cashflow-model.md` P0-3, INV-4).
+ */
+export interface CycleBaselineFigures {
+  confirmedIncome: number;
+  accountFixedOutflow: number;
+  cardSettlement: number;
+  savingsReserve: number;
+  /** confirmedIncome - accountFixedOutflow - cardSettlement - savingsReserve */
+  livingBudget: number;
+  lockedAt: string;
+}
+
+export interface CycleBaseline extends CycleBaselineFigures {
+  /** Payday cycle label (YYYY-MM). Also the document id: one active plan per cycle. */
+  yearMonth: string;
+  /** Plans this one replaced, newest last. Kept so a cycle's changes stay auditable. */
+  revisions: CycleBaselineFigures[];
   createdAt: string;
   updatedAt: string;
 }
@@ -184,6 +232,8 @@ export interface UserProfile {
   monthStartDay: number; // Salary/payday accounting cycle start (default 10)
   /** One-time persisted migration marker for the salary-day planning model. */
   paydayPlanningVersion?: number;
+  /** Set once the user has seen why the card bill changed their figures. */
+  cashflowModelNoticeSeenAt?: string | null;
   /** Last DB-saved allowance limit, used to seed a month that has no budget document yet. */
   defaultAllowanceLimit?: number;
   aiClassificationEnabled: boolean;

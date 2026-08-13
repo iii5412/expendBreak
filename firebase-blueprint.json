@@ -5,131 +5,385 @@
       "description": "Single-owner app preferences. PIN is kept only as a server-side secret hash.",
       "type": "object",
       "properties": {
-        "securityPinEnabled": { "type": "boolean" },
-        "updatedAt": { "type": "string" }
+        "securityPinEnabled": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
       },
-      "required": ["securityPinEnabled"]
+      "required": [
+        "securityPinEnabled"
+      ]
     },
     "transactions": {
       "title": "Transaction",
       "description": "Income and expense transactions",
       "type": "object",
       "properties": {
-        "type": { "type": "string" },
-        "amount": { "type": "number" },
-        "occurredAt": { "type": "string" },
-        "localDate": { "type": "string" },
-        "categoryId": { "type": "string" },
-        "merchant": { "type": "string" },
-        "memo": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } },
+        "type": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "occurredAt": {
+          "type": "string"
+        },
+        "localDate": {
+          "type": "string"
+        },
+        "categoryId": {
+          "type": "string"
+        },
+        "merchant": {
+          "type": "string"
+        },
+        "memo": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "receipt": {
           "type": "object",
           "description": "Owner-only receipt OCR record; the original image is kept in Firebase Storage.",
           "properties": {
-            "id": { "type": "string" },
-            "storagePath": { "type": "string" },
-            "receiptNumber": { "type": "string" },
-            "businessNumber": { "type": "string" },
-            "lineItems": { "type": "array" },
-            "rawText": { "type": "string" },
-            "ocrConfidence": { "type": "number" },
-            "scannedAt": { "type": "string" }
+            "id": {
+              "type": "string"
+            },
+            "storagePath": {
+              "type": "string"
+            },
+            "receiptNumber": {
+              "type": "string"
+            },
+            "businessNumber": {
+              "type": "string"
+            },
+            "lineItems": {
+              "type": "array"
+            },
+            "rawText": {
+              "type": "string"
+            },
+            "ocrConfidence": {
+              "type": "number"
+            },
+            "scannedAt": {
+              "type": "string"
+            }
           }
         },
         "voiceRecord": {
           "type": "object",
           "description": "Voice analysis record for voice-input transactions",
           "properties": {
-            "transcript": { "type": "string" },
-            "durationMs": { "type": "number" },
-            "mimeType": { "type": "string" },
-            "confidence": { "type": "number" },
-            "modelUsed": { "type": "string" },
-            "fallbackUsed": { "type": "boolean" },
-            "recordedAt": { "type": "string" }
+            "transcript": {
+              "type": "string"
+            },
+            "durationMs": {
+              "type": "number"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "number"
+            },
+            "modelUsed": {
+              "type": "string"
+            },
+            "fallbackUsed": {
+              "type": "boolean"
+            },
+            "recordedAt": {
+              "type": "string"
+            }
           }
         },
-        "source": { "type": "string" },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
+        "source": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "description": "normal | card_settlement | transfer. Absent means normal. Non-normal rows are cash movements, not spending."
+        },
+        "settlementYearMonth": {
+          "type": "string"
+        }
       },
-      "required": ["type", "amount", "localDate", "categoryId"]
+      "required": [
+        "type",
+        "amount",
+        "localDate",
+        "categoryId"
+      ]
     },
     "categories": {
       "title": "Category",
       "description": "Income and expense categories",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "type": { "type": "string" },
-        "icon": { "type": "string" },
-        "color": { "type": "string" },
-        "active": { "type": "boolean" }
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        }
       },
-      "required": ["name", "type"]
+      "required": [
+        "name",
+        "type"
+      ]
     },
     "recurringTemplates": {
       "title": "Recurring Template",
       "description": "Templates for recurring transactions",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "defaultAmount": { "type": "number" },
-        "categoryId": { "type": "string" }
+        "name": {
+          "type": "string"
+        },
+        "defaultAmount": {
+          "type": "number"
+        },
+        "categoryId": {
+          "type": "string"
+        },
+        "cardSettlementCardId": {
+          "type": "string",
+          "description": "Set when this manual item is confirmed to be a card's bill; the generated settlement replaces it."
+        },
+        "cardSettlementReviewedAt": {
+          "type": "string"
+        }
       },
-      "required": ["name", "defaultAmount", "categoryId"]
+      "required": [
+        "name",
+        "defaultAmount",
+        "categoryId"
+      ]
     },
     "budgets": {
       "title": "Budget",
       "description": "Monthly budget targets",
       "type": "object",
       "properties": {
-        "yearMonth": { "type": "string" },
-        "totalLimit": { "type": "number" }
+        "yearMonth": {
+          "type": "string"
+        },
+        "totalLimit": {
+          "type": "number"
+        }
       },
-      "required": ["yearMonth", "totalLimit"]
+      "required": [
+        "yearMonth",
+        "totalLimit"
+      ]
     },
     "merchantRules": {
       "title": "Merchant Rule",
       "description": "Auto-categorization rules",
       "type": "object",
       "properties": {
-        "pattern": { "type": "string" },
-        "categoryId": { "type": "string" }
+        "pattern": {
+          "type": "string"
+        },
+        "categoryId": {
+          "type": "string"
+        }
       },
-      "required": ["pattern", "categoryId"]
+      "required": [
+        "pattern",
+        "categoryId"
+      ]
     },
     "bankAccounts": {
       "title": "Bank Account",
       "description": "User bank accounts",
       "type": "object",
       "properties": {
-        "bankName": { "type": "string" },
-        "accountName": { "type": "string" },
-        "accountNumber": { "type": "string" },
-        "accountHolder": { "type": "string" },
-        "balance": { "type": "number" },
-        "balanceAsOf": { "type": "string" },
-        "balanceUpdatedAt": { "type": "string" },
-        "memo": { "type": "string" }
+        "bankName": {
+          "type": "string"
+        },
+        "accountName": {
+          "type": "string"
+        },
+        "accountNumber": {
+          "type": "string"
+        },
+        "accountHolder": {
+          "type": "string"
+        },
+        "balance": {
+          "type": "number"
+        },
+        "balanceAsOf": {
+          "type": "string"
+        },
+        "balanceUpdatedAt": {
+          "type": "string"
+        },
+        "memo": {
+          "type": "string"
+        }
       },
-      "required": ["bankName", "accountName", "accountNumber"]
+      "required": [
+        "bankName",
+        "accountName",
+        "accountNumber"
+      ]
     },
     "paymentCards": {
       "title": "Payment Card",
       "description": "User credit or debit cards",
       "type": "object",
       "properties": {
-        "cardName": { "type": "string" },
-        "cardCompany": { "type": "string" },
-        "cardType": { "type": "string" },
-        "linkedAccountId": { "type": "string" },
-        "billingDay": { "type": "number" },
-        "monthlyPaymentAmounts": { "type": "object" },
-        "memo": { "type": "string" }
+        "cardName": {
+          "type": "string"
+        },
+        "cardCompany": {
+          "type": "string"
+        },
+        "cardType": {
+          "type": "string"
+        },
+        "linkedAccountId": {
+          "type": "string"
+        },
+        "billingDay": {
+          "type": "number"
+        },
+        "monthlyPaymentAmounts": {
+          "type": "object"
+        },
+        "memo": {
+          "type": "string"
+        },
+        "statementClosingDay": {
+          "type": "number",
+          "description": "Last day of usage a bill covers. 25th payment closing on the 11th bills the previous month's 12th through this month's 11th."
+        },
+        "monthlyPaymentStatuses": {
+          "type": "object"
+        }
       },
-      "required": ["cardName", "cardCompany", "cardType"]
+      "required": [
+        "cardName",
+        "cardCompany",
+        "cardType"
+      ]
+    },
+    "recurringOccurrences": {
+      "title": "Recurring Occurrence",
+      "description": "One dated instance of a recurring template, with the amount planned for that month.",
+      "type": "object",
+      "properties": {
+        "templateId": {
+          "type": "string"
+        },
+        "occurrenceKey": {
+          "type": "string"
+        },
+        "scheduledDate": {
+          "type": "string"
+        },
+        "expectedAmount": {
+          "type": "number"
+        },
+        "actualAmount": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "transactionId": {
+          "type": "string"
+        },
+        "paymentMethodType": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "cardId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "templateId",
+        "scheduledDate",
+        "expectedAmount",
+        "status"
+      ]
+    },
+    "cycleBaselines": {
+      "title": "Cycle Baseline",
+      "description": "The living budget committed on payday, frozen for that cycle so the remaining balance only moves when money is spent.",
+      "type": "object",
+      "properties": {
+        "yearMonth": {
+          "type": "string"
+        },
+        "confirmedIncome": {
+          "type": "number"
+        },
+        "accountFixedOutflow": {
+          "type": "number"
+        },
+        "cardSettlement": {
+          "type": "number"
+        },
+        "savingsReserve": {
+          "type": "number"
+        },
+        "livingBudget": {
+          "type": "number"
+        },
+        "lockedAt": {
+          "type": "string"
+        },
+        "revisions": {
+          "type": "array",
+          "description": "Previous plans for this cycle, newest last."
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "yearMonth",
+        "livingBudget",
+        "lockedAt"
+      ]
     }
   }
 }

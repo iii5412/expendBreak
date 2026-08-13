@@ -1082,18 +1082,26 @@ app.post('/api/ai/feedback', async (req, res) => {
       });
     }
 
-    const summaryPrompt = `Analyze these deterministic financial stats for a Korean household app:
-- Month: ${monthSummary.yearMonth}
-- Expected Total Income: ${monthSummary.totalIncome} KRW
-- Total Expected Fixed Expenses: ${monthSummary.totalExpectedFixedExpenses} KRW
-- User-set Monthly Allowance Limit: ${monthSummary.allowanceLimit} KRW
-- Confirmed Allowance Spending: ${monthSummary.confirmedVariableExpenses} KRW
-- Remaining Allowance: ${monthSummary.remainingAllowance} KRW
-- Planned Savings (income - fixed expenses - allowance limit): ${monthSummary.plannedSavings} KRW
-- Daily Safe Allowance: ${monthSummary.dailySafeAllowance} KRW
-- Allowance Usage: ${monthSummary.budgetUsagePercent}%
+    const summaryPrompt = `Analyze these deterministic financial stats for a Korean household app.
+The app plans on a payday cycle with two separate tracks. Cash track: salary in,
+account transfers and credit-card bills out, settled on payday. Spend track: what
+the user actually spent this cycle. A card purchase belongs to the spend track of
+the cycle it happened in; its bill belongs to the cash track of the cycle that pays
+it. Never add the two together and never treat the card bill as new spending.
+- Cycle: ${monthSummary.yearMonth}
+- Income Used For Planning: ${monthSummary.planningIncome} KRW${monthSummary.isProjected ? ' (scheduled, not yet deposited)' : ' (deposited)'}
+- Account Fixed Transfers: ${monthSummary.accountFixedOutflow} KRW
+- Credit Card Bills Due This Cycle: ${monthSummary.cardSettlementOutflow} KRW (last cycle's purchases)
+- Savings Reserve: ${monthSummary.savingsReserve} KRW
+- Living Budget For This Cycle: ${monthSummary.livingBudget} KRW
+- Spent So Far This Cycle: ${monthSummary.confirmedVariableExpenses} KRW
+- Remaining Living Budget: ${monthSummary.remainingLivingBudget} KRW
+- User-set Spending Cap (0 means none): ${monthSummary.allowanceLimit} KRW
+- Planned Savings: ${monthSummary.plannedSavings} KRW
+- Daily Safe Spend: ${monthSummary.dailySafeAllowance} KRW
+- Usage: ${monthSummary.budgetUsagePercent}%
 - Alert Level: ${monthSummary.alertLevel}
-- Top Allowance Category Breakdown: ${JSON.stringify(categoryBreakdown?.slice(0, 5) || [])}
+- Top Spending Category Breakdown: ${JSON.stringify(categoryBreakdown?.slice(0, 5) || [])}
 
 Provide empathetic, actionable, non-shaming financial feedback strictly in Korean in JSON format.
 Rules:

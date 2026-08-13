@@ -9,6 +9,9 @@ import { AccountsView } from './components/AccountsView';
 import { RecurringPaymentView } from './components/RecurringPaymentView';
 import { AddTransactionModal } from './components/AddTransactionModal';
 import { AppLockModal } from './components/AppLockModal';
+import { PaydaySetupSheet } from './components/PaydaySetupSheet';
+import { CashflowModelNotice } from './components/CashflowModelNotice';
+import { CycleClosingCard } from './components/CycleClosingCard';
 
 import {
   subscribeToStorage,
@@ -27,6 +30,9 @@ import {
   updateBankAccount,
   deleteBankAccount,
   getPaymentCards,
+  getCycleBaseline,
+  saveCycleBaseline,
+  setCardSettlementPaid,
   savePaymentCard,
   updatePaymentCard,
   deletePaymentCard,
@@ -62,12 +68,13 @@ import {
   getCurrentYearMonth,
   getYearMonthString,
   getLocalDateString,
+  shiftYearMonth,
   formatKRW,
   normalizeMonthStartDay,
 } from './utils/calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
-import { BankAccount, Budget, Category, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
+import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
 import { logoutOwner, onSessionStateChanged } from './utils/auth';
 import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
@@ -75,7 +82,10 @@ import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndic
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { OnboardingResult, OnboardingSheet } from './components/OnboardingSheet';
-import { getDuplicateManualCardSettlementTemplateIds } from './utils/cardSettlementPlans';
+import { findManualCardSettlementCandidates } from './utils/cardSettlementPlans';
+import { calculateFutureCommitments } from './utils/futureCommitments';
+import { buildCycleClosingReport } from './utils/cycleClosing';
+import { buildCashflowTimeline } from './utils/cashflowTimeline';
 
 type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
@@ -105,6 +115,11 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [paymentCards, setPaymentCards] = useState<PaymentCard[]>([]);
+  const [cycleBaseline, setCycleBaseline] = useState<CycleBaseline | null>(null);
+  const [isPaydaySheetOpen, setIsPaydaySheetOpen] = useState<boolean>(false);
+  /** Reset whenever the drift changes, so "그대로 두기" hides one notice, not all of them. */
+  const [dismissedDelta, setDismissedDelta] = useState<number | null>(null);
+  const [dismissedClosingYM, setDismissedClosingYM] = useState<string | null>(null);
 
   // Reload state from storage
   const refreshAppData = () => {
@@ -121,6 +136,7 @@ export default function App() {
     setMerchantRules(getMerchantRules());
     setBankAccounts(getBankAccounts());
     setPaymentCards(getPaymentCards());
+    setCycleBaseline(getCycleBaseline(currentYM));
   };
 
   useEffect(() => startNetworkWatch(), []);
@@ -174,6 +190,7 @@ export default function App() {
     setMerchantRules([]);
     setBankAccounts([]);
     setPaymentCards([]);
+    setCycleBaseline(null);
     setUserProfile(INITIAL_USER_PROFILE);
     setBootState('locked');
   };
@@ -240,9 +257,29 @@ export default function App() {
       .join('|'),
     [recurringTemplates],
   );
+  // Detection needs the generated bill amounts, which in turn need the card list
+  // only — no dependency on planning, so this stays above the planning memos.
+  const rawCardSettlementSummary = useMemo(
+    () => calculateMonthlyCardSettlementSummary(currentYM, transactions, paymentCards, monthStartDay),
+    [currentYM, transactions, paymentCards, monthStartDay],
+  );
+  const cardSettlementCandidates = useMemo(
+    () => findManualCardSettlementCandidates(recurringTemplates, paymentCards, {
+      cardSettlementAmounts: Object.fromEntries(
+        rawCardSettlementSummary.cards.map(card => [card.cardId, card.amount]),
+      ),
+    }),
+    [recurringTemplates, paymentCards, rawCardSettlementSummary],
+  );
   const duplicateCardSettlementTemplateIds = useMemo(
-    () => getDuplicateManualCardSettlementTemplateIds(recurringTemplates, paymentCards),
-    [recurringTemplates, paymentCards],
+    () => new Set(cardSettlementCandidates
+      .filter(candidate => candidate.status === 'replaced')
+      .map(candidate => candidate.templateId)),
+    [cardSettlementCandidates],
+  );
+  const cardSettlementReviewItems = useMemo(
+    () => cardSettlementCandidates.filter(candidate => candidate.status === 'needs_review'),
+    [cardSettlementCandidates],
   );
   const planningRecurringTemplates = useMemo(
     () => recurringTemplates.filter(template => !duplicateCardSettlementTemplateIds.has(template.id)),
@@ -283,7 +320,20 @@ export default function App() {
     setCurrentYM(getCurrentYearMonth(monthStartDay));
   }, [bootState, monthStartDay]);
 
-  // Calculations
+  // Calculations. The card bill is part of the cash track, so it has to be
+  // resolved before the month summary that spends against it.
+  const cardSettlementSummary = useMemo(
+    () => calculateMonthlyCardSettlementSummary(
+      currentYM,
+      transactions,
+      paymentCards,
+      monthStartDay,
+      planningAllRecurringOccurrences,
+      planningRecurringTemplates,
+    ),
+    [currentYM, transactions, paymentCards, monthStartDay, planningAllRecurringOccurrences, planningRecurringTemplates],
+  );
+
   const summary = useMemo(() => {
     return calculateMonthSummary(
       currentYM,
@@ -293,8 +343,9 @@ export default function App() {
       planningRecurringTemplates,
       new Date(),
       monthStartDay,
+      { cardSettlementOutflow: cardSettlementSummary.totalAmount, baseline: cycleBaseline },
     );
-  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay]);
+  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay, cardSettlementSummary, cycleBaseline]);
 
   const categoryMap = useMemo(() => {
     return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
@@ -316,22 +367,62 @@ export default function App() {
     [currentYM, transactions, paymentCards, monthStartDay, planningAllRecurringOccurrences, planningRecurringTemplates],
   );
 
-  const cardSettlementSummary = useMemo(
-    () => calculateMonthlyCardSettlementSummary(
+  const futureCommitments = useMemo(
+    () => calculateFutureCommitments(
       currentYM,
       transactions,
+      planningRecurringTemplates,
+      planningAllRecurringOccurrences,
       paymentCards,
       monthStartDay,
-      planningAllRecurringOccurrences,
-      planningRecurringTemplates,
     ),
-    [currentYM, transactions, paymentCards, monthStartDay, planningAllRecurringOccurrences, planningRecurringTemplates],
+    [currentYM, transactions, planningRecurringTemplates, planningAllRecurringOccurrences, paymentCards, monthStartDay],
+  );
+
+  // The report only makes sense once the cycle it covers is over and the user
+  // has moved on to the next one.
+  const previousYearMonth = useMemo(() => shiftYearMonth(currentYM, -1), [currentYM]);
+  const cycleClosingReport = useMemo(() => {
+    if (currentYM !== currentPeriodYM || dismissedClosingYM === previousYearMonth) return null;
+    return buildCycleClosingReport(
+      previousYearMonth,
+      getCycleBaseline(previousYearMonth),
+      planningTransactions,
+      planningAllRecurringOccurrences,
+      categories,
+      monthStartDay,
+    );
+  }, [currentYM, currentPeriodYM, previousYearMonth, dismissedClosingYM, planningTransactions,
+    planningAllRecurringOccurrences, categories, monthStartDay, cycleBaseline]);
+
+  const cashflowTimeline = useMemo(
+    () => buildCashflowTimeline(
+      period,
+      planningTransactions,
+      planningRecurringOccurrences,
+      planningRecurringTemplates,
+      bankAccounts,
+      cardSettlementSummary,
+      summary.forecastAverageDailyVariable,
+    ),
+    [period, planningTransactions, planningRecurringOccurrences, planningRecurringTemplates,
+      bankAccounts, cardSettlementSummary, summary.forecastAverageDailyVariable],
   );
 
   const classificationIssues = useMemo(
     () => getClassificationIssueSummary(),
     [transactions, categories, recurringTemplates, recurringOccurrences],
   );
+
+  const showCashflowNotice = bootState === 'ready'
+    && !userProfile.cashflowModelNoticeSeenAt
+    && summary.cardSettlementOutflow > 0;
+
+  // Prompt for the payday routine only once the cycle has actually begun and
+  // there is something to plan with. A future cycle has nothing to confirm yet.
+  const showPaydayPrompt = !cycleBaseline
+    && currentYM <= currentPeriodYM
+    && (summary.planningIncome > 0 || summary.accountFixedOutflow > 0 || summary.cardSettlementOutflow > 0);
 
   // Next Payday badge
   const nextPaydayText = useMemo(() => {
@@ -355,18 +446,83 @@ export default function App() {
 
   const handleCardSettlementStatus = (cardId: string, status: 'scheduled' | 'paid') => {
     const card = paymentCards.find(candidate => candidate.id === cardId);
-    if (!card) return;
-    updatePaymentCard(cardId, {
-      monthlyPaymentStatuses: {
-        ...(card.monthlyPaymentStatuses || {}),
-        [currentYM]: status,
-      },
+    const settlement = cardSettlementSummary.cards.find(candidate => candidate.cardId === cardId);
+    if (!card || !settlement) return;
+
+    setCardSettlementPaid(
+      cardId,
+      currentYM,
+      settlement.amount,
+      settlement.paymentDate || getLocalDateString(),
+      status === 'paid',
+    );
+    refreshAppData();
+    showToast({
+      message: status === 'paid'
+        ? `${card.cardName} 카드대금을 납부 완료로 표시했습니다.`
+        : `${card.cardName} 카드대금을 미납부 상태로 되돌렸습니다.`,
+      description: status === 'paid'
+        ? `${formatKRW(settlement.amount)} 출금 기록을 남겼습니다. 이미 쓴 돈이라 생활비 사용에는 더하지 않습니다.`
+        : '출금 기록을 되돌렸습니다.',
+      tone: 'success',
+    });
+  };
+
+  /** Records the user's answer on a suspected duplicate card bill, either way. */
+  const handleResolveCardSettlementReview = (templateId: string, cardId: string | null) => {
+    updateRecurringTemplate(templateId, {
+      cardSettlementCardId: cardId,
+      cardSettlementReviewedAt: new Date().toISOString(),
     });
     refreshAppData();
     showToast({
-      message: status === 'paid' ? `${card.cardName} 카드대금을 납부 완료로 표시했습니다.` : `${card.cardName} 카드대금을 미납부 상태로 되돌렸습니다.`,
+      message: cardId
+        ? '자동 생성 카드대금으로 대체했습니다.'
+        : '별개 고정지출로 유지합니다.',
+      description: cardId ? '고정 이체 합계에서 제외되어 중복 계산이 사라집니다.' : undefined,
       tone: 'success',
     });
+  };
+
+  /** Locks (or re-locks) the cycle's living budget. */
+  const handleConfirmBaseline = async (savingsReserve: number) => {
+    const livingBudget = Math.max(
+      0,
+      summary.planningIncome - summary.accountFixedOutflow - summary.cardSettlementOutflow - savingsReserve,
+    );
+    try {
+      await saveCycleBaseline(currentYM, {
+        confirmedIncome: summary.planningIncome,
+        accountFixedOutflow: summary.accountFixedOutflow,
+        cardSettlement: summary.cardSettlementOutflow,
+        savingsReserve,
+        livingBudget,
+      });
+      setDismissedDelta(null);
+      refreshAppData();
+      showToast({
+        message: `${currentYM} 주기 생활비를 확정했습니다.`,
+        description: `${formatKRW(livingBudget)} · 하루 ${formatKRW(Math.floor(livingBudget / Math.max(1, period.daysInMonth)))}`,
+        tone: 'success',
+      });
+    } catch (error) {
+      refreshAppData();
+      showToast({
+        message: '생활비 계획을 DB에 저장하지 못했습니다.',
+        description: error instanceof Error ? error.message : undefined,
+        tone: 'error',
+      });
+    }
+  };
+
+  const handleSaveCardSettlementAmount = (cardId: string, amount: number) => {
+    const card = paymentCards.find(candidate => candidate.id === cardId);
+    if (!card) return;
+    updatePaymentCard(cardId, {
+      monthlyPaymentAmounts: { ...(card.monthlyPaymentAmounts || {}), [currentYM]: Math.max(0, Math.round(amount)) },
+    });
+    refreshAppData();
+    showToast({ message: `${card.cardName} 카드대금을 저장했습니다.`, tone: 'success' });
   };
 
   const handleReloadRecurringPlan = async () => {
@@ -585,12 +741,29 @@ export default function App() {
             onConfirmOccurrence={handlePostOccurrence}
             showSetupPrompt={recurringTemplates.length === 0 && !userProfile.onboardingCompletedAt}
             onStartSetup={() => setIsOnboardingOpen(true)}
+            showPaydayPrompt={showPaydayPrompt}
+            onStartPayday={() => setIsPaydaySheetOpen(true)}
+            onRefreshBaseline={() => void handleConfirmBaseline(summary.savingsReserve)}
+            onDismissBaselineChange={() => setDismissedDelta(summary.unplannedDelta)}
+            baselineChangeDismissed={dismissedDelta === summary.unplannedDelta}
+            cycleClosingSlot={cycleClosingReport && (
+              <CycleClosingCard
+                report={cycleClosingReport}
+                onDismiss={() => setDismissedClosingYM(cycleClosingReport.yearMonth)}
+                onReviewUnresolved={() => {
+                  setCurrentYM(cycleClosingReport.yearMonth);
+                  handleNavigateTab('recurring_payment');
+                }}
+                onCarryLeftoverToSavings={amount => void handleConfirmBaseline(amount)}
+              />
+            )}
           />
         )}
 
         {activeTab === 'recurring_payment' && (
           <RecurringPaymentView
             period={period}
+            summary={summary}
             recurringOccurrences={planningRecurringOccurrences}
             recurringTemplates={planningRecurringTemplates}
             categories={categories}
@@ -599,6 +772,8 @@ export default function App() {
             cardSettlementSummary={cardSettlementSummary}
             onReloadRecurringPlan={handleReloadRecurringPlan}
             duplicateManualCardSettlementCount={duplicateCardSettlementTemplateIds.size}
+            cardSettlementReviewItems={cardSettlementReviewItems}
+            onResolveCardSettlementReview={handleResolveCardSettlementReview}
             onUpdateCardSettlementStatus={handleCardSettlementStatus}
             onPostOccurrence={async (occId, amt, pType, accId, cId) => {
               await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
@@ -688,6 +863,8 @@ export default function App() {
         {activeTab === 'analytics' && (
           <AnalyticsView
             summary={summary}
+            futureCommitments={futureCommitments}
+            cashflowTimeline={cashflowTimeline}
             period={period}
             transactions={transactions}
             categories={categories}
@@ -743,6 +920,44 @@ export default function App() {
         aiClassificationEnabled={userProfile.aiClassificationEnabled}
         onSaveTransaction={handleSaveTransaction}
         onSaveMerchantRule={saveMerchantRule}
+        onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
+          await postOccurrenceToTransaction(occId, amount, pType, accId, cardId);
+          refreshAppData();
+          showToast({ message: '정기 항목을 확정했습니다.', tone: 'success' });
+        }}
+      />
+
+      {/* One-time explanation of why the numbers moved. Only for users who
+          actually have a card bill to reconcile. */}
+      <CashflowModelNotice
+        isOpen={showCashflowNotice}
+        summary={summary}
+        onAcknowledge={() => {
+          updateUserProfile({ cashflowModelNoticeSeenAt: new Date().toISOString() });
+          refreshAppData();
+        }}
+      />
+
+      <PaydaySetupSheet
+        isOpen={isPaydaySheetOpen}
+        onClose={() => setIsPaydaySheetOpen(false)}
+        period={period}
+        summary={summary}
+        recurringOccurrences={planningRecurringOccurrences}
+        recurringTemplates={planningRecurringTemplates}
+        bankAccounts={bankAccounts}
+        paymentCards={paymentCards}
+        cardSettlementSummary={cardSettlementSummary}
+        onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
+          await postOccurrenceToTransaction(occId, amount, pType, accId, cardId);
+          refreshAppData();
+        }}
+        onSaveCardSettlementAmount={handleSaveCardSettlementAmount}
+        onConfirmBaseline={handleConfirmBaseline}
+        onCopyText={(text, message) => {
+          void navigator.clipboard.writeText(text);
+          showToast({ message, tone: 'success' });
+        }}
       />
 
       <OnboardingSheet

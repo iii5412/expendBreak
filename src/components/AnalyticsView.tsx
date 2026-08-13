@@ -22,11 +22,17 @@ import {
   isDateInPeriod,
 } from '../utils/calculations';
 import { Transaction, Category, AIFeedbackResult } from '../types';
+import { FutureCommitmentSummary } from '../utils/futureCommitments';
+import { FutureCommitmentsCard } from './FutureCommitmentsCard';
+import { CashflowTimeline } from '../utils/cashflowTimeline';
+import { CashflowTimelineCard } from './CashflowTimelineCard';
 import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
+  futureCommitments: FutureCommitmentSummary;
+  cashflowTimeline: CashflowTimeline;
   period: AccountingPeriod;
   transactions: Transaction[];
   categories: Category[];
@@ -35,6 +41,8 @@ interface AnalyticsViewProps {
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   summary,
+  futureCommitments,
+  cashflowTimeline,
   period,
   transactions,
   categories,
@@ -45,11 +53,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   const catMap = new Map<string, Category>(categories.map(c => [c.id, c]));
 
-  // 1. Income, fixed commitments, and allowance spending
+  // 1. Cash track (income, committed outflows) beside spend track (living expenses)
   const incomeVsExpenseData = [
-    { name: '이번 달 수입', amount: summary.totalIncome, fill: '#10B981' },
-    { name: '이번 달 고정지출', amount: summary.totalExpectedFixedExpenses, fill: '#6366F1' },
-    { name: '용돈사용', amount: summary.confirmedVariableExpenses, fill: '#F43F5E' },
+    { name: '수입', amount: summary.planningIncome, fill: '#10B981' },
+    { name: '계좌 고정 이체', amount: summary.accountFixedOutflow, fill: '#64748B' },
+    { name: '카드대금', amount: summary.cardSettlementOutflow, fill: '#6366F1' },
+    { name: '생활비 사용', amount: summary.confirmedVariableExpenses, fill: '#F43F5E' },
   ];
 
   // 2. Allowance category breakdown (fixed recurring expenses stay separate)
@@ -88,7 +97,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     cumulativeData.push({
       day: `${dayDate.getDate()}일`,
       spend: runningTotal,
-      limit: summary.allowanceLimit,
+      limit: summary.spendableLimit,
     });
   }
 
@@ -214,9 +223,13 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         )}
       </div>
 
+      <CashflowTimelineCard timeline={cashflowTimeline} />
+
+      <FutureCommitmentsCard summary={futureCommitments} />
+
       {/* 1. Income vs Expense Overview Chart */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">수입·고정비·용돈 구조</h3>
+        <h3 className="text-sm font-bold text-slate-200 mb-3">수입·고정 출금·생활비 구조</h3>
         <div className="h-52 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={incomeVsExpenseData}>
@@ -234,7 +247,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* 2. Donut Category Breakdown Chart */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 용돈 사용 비중</h3>
+        <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 생활비 사용 비중</h3>
         {categoryPieData.length === 0 ? (
           <div className="text-center py-10 text-xs text-slate-400">지출 기록이 없습니다.</div>
         ) : (
@@ -277,7 +290,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* 3. Cumulative Daily Allowance Spend vs Allowance Limit */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">일별 누적 용돈 사용 vs 월 용돈</h3>
+        <h3 className="text-sm font-bold text-slate-200 mb-3">일별 누적 생활비 사용 vs 사용 가능액</h3>
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={cumulativeData}>
@@ -285,8 +298,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               <XAxis dataKey="day" stroke="#94A3B8" fontSize={10} />
               <YAxis stroke="#94A3B8" fontSize={10} tickFormatter={v => `${v / 10000}만`} />
               <Tooltip formatter={(val: any) => formatKRW(val)} />
-              <Line type="monotone" dataKey="spend" name="누적 용돈 사용" stroke="#F43F5E" strokeWidth={3} dot={false} />
-              <Line type="monotone" dataKey="limit" name="월 용돈" stroke="#10B981" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+              <Line type="monotone" dataKey="spend" name="누적 생활비 사용" stroke="#F43F5E" strokeWidth={3} dot={false} />
+              <Line type="monotone" dataKey="limit" name="사용 가능 생활비" stroke="#10B981" strokeWidth={2} strokeDasharray="5 5" dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

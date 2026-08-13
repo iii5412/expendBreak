@@ -1,5 +1,5 @@
 import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
-import { getAccountingPeriod, isDateInPeriod } from './calculations';
+import { getAccountingPeriod, getLocalDateString, getMonthlyDueDateInPeriod, isDateInPeriod, shiftYearMonth } from './calculations';
 import { getInstallmentCharge } from './installments';
 
 export interface CreditCardPaymentEstimate {
@@ -40,6 +40,12 @@ export interface MonthlyCardSettlement {
   cardCompany: string;
   linkedAccountId: string | null;
   paymentDate: string | null;
+  /** Calendar month of the card usage this bill charges. */
+  usageYearMonth: string;
+  usageStartDate: string;
+  usageEndDate: string;
+  /** False when the window is the calendar-month fallback, i.e. an estimate. */
+  hasStatementWindow: boolean;
   amount: number;
   estimatedAmount: number;
   source: 'confirmed' | 'estimated';
@@ -80,6 +86,96 @@ function getPreviousYearMonth(yearMonth: string): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+export interface CardSettlementSchedule {
+  /** Withdrawal date, or null when the card has no billing day configured. */
+  paymentDate: string | null;
+  /** Calendar month whose card usage this bill charges. Anchors installment rounds. */
+  usageYearMonth: string;
+  /** Inclusive start of the usage this bill covers. */
+  usageStartDate: string;
+  /** Inclusive end of the usage this bill covers. */
+  usageEndDate: string;
+  /** True when the window comes from a real statement closing day, not the fallback. */
+  hasStatementWindow: boolean;
+}
+
+const addDays = (localDate: string, days: number) => {
+  const [year, month, day] = localDate.split('-').map(Number);
+  return getLocalDateString(new Date(year, month - 1, day + days));
+};
+
+/** `dayOfMonth` inside `yearMonth`, clamped to months that are shorter. */
+function dateInMonth(yearMonth: string, dayOfMonth: number): string {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+  const day = Math.min(lastDay, Math.max(1, Math.trunc(dayOfMonth)));
+  return `${yearMonth}-${String(day).padStart(2, '0')}`;
+}
+
+/**
+ * Which bill of a card lands in the given payday cycle.
+ *
+ * The bill belongs to the cycle that contains its payment date (INV-3), not to
+ * a calendar month. With a salary day of 10 and a billing day of 5, the bill
+ * withdrawn on 9/5 belongs to the 8/10~9/9 cycle and charges August usage —
+ * the calendar-month shortcut used to attribute it to the wrong cycle entirely.
+ *
+ * With `statementClosingDay` set, the window is the real one the issuer bills:
+ * Shinhan's 25th payment closes on the 11th, so the August bill covers 7/12~8/11.
+ * Without it, the calendar month before the payment month is the best guess and
+ * `hasStatementWindow` is false so the UI can label the figure as an estimate.
+ */
+export function getCardSettlementSchedule(
+  paymentYearMonth: string,
+  billingDay: number | null | undefined,
+  monthStartDay: number = 1,
+  statementClosingDay?: number | null,
+): CardSettlementSchedule {
+  const period = getAccountingPeriod(paymentYearMonth, monthStartDay);
+  const paymentDate = billingDay ? getMonthlyDueDateInPeriod(billingDay, period) : null;
+  // Without a payment date the cycle's own starting month is the best anchor.
+  const paymentMonth = paymentDate ? paymentDate.slice(0, 7) : period.startDate.slice(0, 7);
+
+  if (!statementClosingDay || !paymentDate) {
+    const usageYearMonth = getPreviousYearMonth(paymentMonth);
+    const [year, month] = usageYearMonth.split('-').map(Number);
+    return {
+      paymentDate,
+      usageYearMonth,
+      usageStartDate: `${usageYearMonth}-01`,
+      usageEndDate: `${usageYearMonth}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`,
+      hasStatementWindow: false,
+    };
+  }
+
+  // The window ends at the most recent closing date strictly before payment, so
+  // a closing day later in the month than the billing day still resolves.
+  let usageEndDate = dateInMonth(paymentMonth, statementClosingDay);
+  if (usageEndDate >= paymentDate) {
+    usageEndDate = dateInMonth(getPreviousYearMonth(paymentMonth), statementClosingDay);
+  }
+  const usageStartDate = addDays(
+    dateInMonth(getPreviousYearMonth(usageEndDate.slice(0, 7)), statementClosingDay),
+    1,
+  );
+
+  return {
+    paymentDate,
+    // Installment rounds are keyed by month; the closing month is the round this
+    // statement bills.
+    usageYearMonth: usageEndDate.slice(0, 7),
+    usageStartDate,
+    usageEndDate,
+    hasStatementWindow: true,
+  };
+}
+
+/** Explicit date range to bill, overriding the accounting-period default. */
+export interface CardUsageWindow {
+  startDate: string;
+  endDate: string;
+}
+
 export function calculateCardPaymentSummary(
   yearMonth: string,
   transactions: Transaction[],
@@ -87,8 +183,13 @@ export function calculateCardPaymentSummary(
   monthStartDay: number = 1,
   recurringOccurrences: RecurringOccurrence[] = [],
   recurringTemplates: RecurringTemplate[] = [],
+  usageWindow?: CardUsageWindow,
 ): CardPaymentSummary {
-  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  // A real statement window rarely aligns to any month, so callers that know it
+  // pass the dates and `yearMonth` stays the installment-round anchor only.
+  const period = usageWindow
+    ? { ...getAccountingPeriod(yearMonth, monthStartDay), startDate: usageWindow.startDate, endDate: usageWindow.endDate }
+    : getAccountingPeriod(yearMonth, monthStartDay);
   const cardMap = new Map(paymentCards.map(card => [card.id, card]));
   const creditCards = new Map<string, CreditCardPaymentEstimate>();
 
@@ -118,7 +219,9 @@ export function calculateCardPaymentSummary(
 
   transactions
     .filter(transaction => transaction.type === 'expense'
-      && transaction.paymentMethodType === 'card')
+      && transaction.paymentMethodType === 'card'
+      // Paying the bill is not card usage; it would otherwise re-bill itself.
+      && (transaction.role ?? 'normal') === 'normal')
     .forEach(transaction => {
       const installmentCharge = getInstallmentCharge(transaction.amount, transaction.installment, yearMonth);
       if (transaction.installment) {
@@ -205,34 +308,103 @@ export function calculateCardPaymentSummary(
   };
 }
 
+export interface CardSettlementAccuracy {
+  /** Cycles compared, newest first. */
+  samples: Array<{ yearMonth: string; estimated: number; confirmed: number }>;
+  /** Mean absolute error as a percentage of the confirmed amount. */
+  averageErrorPercent: number;
+}
+
+/**
+ * How close recent estimates landed to the amounts the user actually confirmed.
+ *
+ * The bill is a projection built on assumptions the app cannot verify, so it
+ * should say how much to trust it rather than presenting one number flatly.
+ */
+export function calculateCardSettlementAccuracy(
+  card: PaymentCard,
+  transactions: Transaction[],
+  currentYearMonth: string,
+  monthStartDay: number = 1,
+  lookbackCycles: number = 6,
+): CardSettlementAccuracy {
+  const samples: CardSettlementAccuracy['samples'] = [];
+
+  for (let offset = 1; offset <= lookbackCycles; offset += 1) {
+    const yearMonth = shiftYearMonth(currentYearMonth, -offset);
+    const confirmed = card.monthlyPaymentAmounts?.[yearMonth];
+    if (!Number.isFinite(confirmed) || Number(confirmed) <= 0) continue;
+
+    const schedule = getCardSettlementSchedule(
+      yearMonth, card.billingDay, monthStartDay, card.statementClosingDay,
+    );
+    const estimate = calculateCardPaymentSummary(
+      schedule.usageYearMonth, transactions, [card], 1, [], [],
+      { startDate: schedule.usageStartDate, endDate: schedule.usageEndDate },
+    ).creditCards.find(candidate => candidate.cardId === card.id);
+
+    samples.push({
+      yearMonth,
+      estimated: Math.round(estimate?.totalAmount || 0),
+      confirmed: Math.round(Number(confirmed)),
+    });
+  }
+
+  const averageErrorPercent = samples.length === 0
+    ? 0
+    : Math.round(
+      samples.reduce(
+        (sum, sample) => sum + Math.abs(sample.estimated - sample.confirmed) / sample.confirmed,
+        0,
+      ) / samples.length * 100,
+    );
+
+  return { samples, averageErrorPercent };
+}
+
 /**
  * Card settlement is an account cash outflow, not a second expense.
- * When a month has no confirmed amount, the previous calendar month's card usage is used.
- * Card settlement months intentionally do not follow the payday accounting cycle:
- * September's estimate is based on August 1 through August 31.
+ * When a cycle has no confirmed amount, the charged month's card usage is used.
+ *
+ * A bill belongs to the payday cycle containing its payment date (INV-3), so
+ * cards with different billing days can charge different usage months within
+ * the same cycle. Each distinct usage month is computed once and shared.
  */
 export function calculateMonthlyCardSettlementSummary(
   paymentYearMonth: string,
   transactions: Transaction[],
   paymentCards: PaymentCard[],
-  _monthStartDay: number = 1,
+  monthStartDay: number = 1,
   recurringOccurrences: RecurringOccurrence[] = [],
   recurringTemplates: RecurringTemplate[] = [],
 ): MonthlyCardSettlementSummary {
-  const previousMonthUsage = calculateCardPaymentSummary(
-    getPreviousYearMonth(paymentYearMonth),
-    transactions,
-    paymentCards,
-    1,
-    recurringOccurrences,
-    recurringTemplates,
-  );
-  const estimateMap = new Map(previousMonthUsage.creditCards.map(card => [card.cardId, card]));
+  // Cards can close on different days, so each distinct window is computed once.
+  const usageSummaries = new Map<string, CardPaymentSummary>();
+  const getUsageSummary = (schedule: CardSettlementSchedule) => {
+    const key = `${schedule.usageYearMonth}|${schedule.usageStartDate}|${schedule.usageEndDate}`;
+    const cached = usageSummaries.get(key);
+    if (cached) return cached;
+    const summary = calculateCardPaymentSummary(
+      schedule.usageYearMonth,
+      transactions,
+      paymentCards,
+      1,
+      recurringOccurrences,
+      recurringTemplates,
+      { startDate: schedule.usageStartDate, endDate: schedule.usageEndDate },
+    );
+    usageSummaries.set(key, summary);
+    return summary;
+  };
 
   const cards = paymentCards
     .filter(card => card.cardType === 'credit')
     .map(card => {
-      const estimate = estimateMap.get(card.id);
+      const schedule = getCardSettlementSchedule(
+        paymentYearMonth, card.billingDay, monthStartDay, card.statementClosingDay,
+      );
+      const estimate = getUsageSummary(schedule)
+        .creditCards.find(candidate => candidate.cardId === card.id);
       const confirmedAmount = card.monthlyPaymentAmounts?.[paymentYearMonth];
       const hasConfirmedAmount = Number.isFinite(confirmedAmount) && Number(confirmedAmount) >= 0;
       const estimatedAmount = Math.round(estimate?.totalAmount || 0);
@@ -243,7 +415,11 @@ export function calculateMonthlyCardSettlementSummary(
         cardName: card.cardName,
         cardCompany: card.cardCompany,
         linkedAccountId: card.linkedAccountId ?? null,
-        paymentDate: estimate?.estimatedPaymentDate ?? null,
+        paymentDate: schedule.paymentDate,
+        usageYearMonth: schedule.usageYearMonth,
+        usageStartDate: schedule.usageStartDate,
+        usageEndDate: schedule.usageEndDate,
+        hasStatementWindow: schedule.hasStatementWindow,
         amount,
         estimatedAmount,
         source: hasConfirmedAmount ? 'confirmed' as const : 'estimated' as const,

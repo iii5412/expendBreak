@@ -117,6 +117,10 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
 
+      match /cycleBaselines/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+
       match /migrations/{documentId} {
         allow read: if isOwner(userId);
         allow write: if false;

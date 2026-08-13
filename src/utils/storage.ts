@@ -7,6 +7,8 @@ import {
   MerchantRule,
   UserProfile,
   AIFeedbackResult,
+  CycleBaseline,
+  CycleBaselineFigures,
 } from '../types';
 import {
   DEFAULT_EXPENSE_CATEGORIES,
@@ -35,6 +37,8 @@ import {
   deleteBankAccountFromFirestore,
   syncPaymentCardToFirestore,
   deletePaymentCardFromFirestore,
+  syncCycleBaselineToFirestore,
+  deleteCycleBaselineFromFirestore,
   clearFirestoreAllData,
   hydrateFirestoreFromCloud,
   stopFirestoreSync,
@@ -59,6 +63,7 @@ const STORAGE_KEYS = {
   USER_PROFILE: 'brake_user_profile',
   BANK_ACCOUNTS: 'brake_bank_accounts',
   PAYMENT_CARDS: 'brake_payment_cards',
+  CYCLE_BASELINES: 'brake_cycle_baselines',
   AI_INSIGHTS: 'brake_ai_insights',
 };
 
@@ -130,6 +135,7 @@ export function initializeStorageAfterLogin() {
       localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(generateSampleTransactionsForMonth(currentYM)));
       localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
       localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
+      localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify({}));
 
       const initializationWrites = await Promise.all([
         syncCategoriesToFirestore(categories),
@@ -230,6 +236,7 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
           accountId: tmpl.accountId,
           cardId: tmpl.cardId,
           templateRevision: tmpl.updatedAt,
+          templateAmountSnapshot: tmpl.defaultAmount,
           createdAt: now,
           updatedAt: now,
         };
@@ -241,7 +248,14 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
           || existingOccurrence.status === 'overdue')
         && existingOccurrence.templateRevision !== tmpl.updatedAt
       ) {
-        existingOccurrence.expectedAmount = tmpl.defaultAmount;
+        // Any template edit bumps `updatedAt`, so only adopt the template amount
+        // when the amount itself moved. Renaming an item or switching its card
+        // must not wipe the amount carried forward or set for this month.
+        const previousTemplateAmount = existingOccurrence.templateAmountSnapshot;
+        if (previousTemplateAmount === undefined || previousTemplateAmount !== tmpl.defaultAmount) {
+          existingOccurrence.expectedAmount = tmpl.defaultAmount;
+        }
+        existingOccurrence.templateAmountSnapshot = tmpl.defaultAmount;
         existingOccurrence.typeSnapshot = tmpl.type;
         existingOccurrence.categoryIdSnapshot = tmpl.categoryId;
         existingOccurrence.paymentMethodType = tmpl.paymentMethodType;
@@ -922,6 +936,130 @@ export async function postOccurrenceToTransaction(
 
   notifyListeners();
   return newTx;
+}
+
+/**
+ * Records a card bill as paid: a `card_settlement` transaction plus the card's
+ * status for that cycle.
+ *
+ * The transaction exists so the withdrawal appears in history and in the account
+ * ledger, but it carries `role: 'card_settlement'` and is therefore excluded
+ * from every spend total — the purchases behind it were already counted in the
+ * cycle they happened (INV-2). Un-marking removes it again.
+ */
+export function setCardSettlementPaid(
+  cardId: string,
+  yearMonth: string,
+  amount: number,
+  paymentDate: string,
+  paid: boolean,
+): Transaction | null {
+  const card = getPaymentCards().find(candidate => candidate.id === cardId);
+  if (!card) return null;
+
+  const transactionId = `tx_card_settlement_${cardId}_${yearMonth}`;
+  const transactions = getTransactions().filter(transaction => transaction.id !== transactionId);
+
+  updatePaymentCard(cardId, {
+    monthlyPaymentStatuses: {
+      ...(card.monthlyPaymentStatuses || {}),
+      [yearMonth]: paid ? 'paid' : 'scheduled',
+    },
+  });
+
+  if (!paid) {
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+    deleteTransactionFromFirestore(transactionId);
+    notifyListeners();
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const settlement: Transaction = {
+    id: transactionId,
+    type: 'expense',
+    amount: Math.max(0, Math.round(amount)),
+    occurredAt: `${paymentDate}T12:00:00.000Z`,
+    localDate: paymentDate,
+    categoryId: getDefaultCategoryIdForType(getCategories(), 'expense') || 'etc_expense',
+    merchant: `${card.cardName} 카드대금`,
+    memo: `[카드대금] ${yearMonth} 결제분`,
+    source: 'manual',
+    role: 'card_settlement',
+    settlementYearMonth: yearMonth,
+    paymentMethodType: 'account',
+    accountId: card.linkedAccountId ?? null,
+    cardId,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  transactions.unshift(settlement);
+  transactions.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  syncTransactionToFirestore(settlement);
+  notifyListeners();
+  return settlement;
+}
+
+// Cycle baseline: the living budget frozen on payday (INV-4).
+export function getCycleBaselines(): Record<string, CycleBaseline> {
+  initializeStorageIfEmpty();
+  return readJson<Record<string, CycleBaseline>>(STORAGE_KEYS.CYCLE_BASELINES, {});
+}
+
+export function getCycleBaseline(yearMonth: string): CycleBaseline | null {
+  return getCycleBaselines()[yearMonth] || null;
+}
+
+/**
+ * Locks a cycle's plan. Re-locking keeps the previous figures as a revision so
+ * the user can see what changed and when, rather than the number silently moving.
+ */
+export async function saveCycleBaseline(
+  yearMonth: string,
+  figures: Omit<CycleBaselineFigures, 'lockedAt'>,
+): Promise<CycleBaseline> {
+  const baselines = getCycleBaselines();
+  const existing = baselines[yearMonth];
+  const now = new Date().toISOString();
+  const baseline: CycleBaseline = {
+    yearMonth,
+    ...figures,
+    lockedAt: now,
+    revisions: existing
+      ? [...(existing.revisions || []), {
+          confirmedIncome: existing.confirmedIncome,
+          accountFixedOutflow: existing.accountFixedOutflow,
+          cardSettlement: existing.cardSettlement,
+          savingsReserve: existing.savingsReserve,
+          livingBudget: existing.livingBudget,
+          lockedAt: existing.lockedAt,
+        }]
+      : [],
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+
+  baselines[yearMonth] = baseline;
+  localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselines));
+  notifyListeners();
+
+  const saved = await syncCycleBaselineToFirestore(baseline);
+  if (!saved) {
+    throw new Error('이번 주기 생활비 계획을 이 기기에 저장했지만 DB 반영은 완료하지 못했습니다. 연결이 복구되면 자동으로 다시 저장합니다.');
+  }
+  return baseline;
+}
+
+/** Reopens a cycle so the payday flow can run again. */
+export async function clearCycleBaseline(yearMonth: string): Promise<void> {
+  const baselines = getCycleBaselines();
+  if (!baselines[yearMonth]) return;
+  delete baselines[yearMonth];
+  localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselines));
+  notifyListeners();
+  await deleteCycleBaselineFromFirestore(yearMonth);
 }
 
 export function getMerchantRules(): MerchantRule[] {

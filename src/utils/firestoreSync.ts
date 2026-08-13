@@ -19,6 +19,7 @@ import {
   RecurringTemplate,
   RecurringOccurrence,
   MerchantRule,
+  CycleBaseline,
   UserProfile
 } from '../types';
 import {
@@ -42,6 +43,7 @@ const COLLECTION_RECURRING_OCCURRENCES = 'recurringOccurrences';
 const COLLECTION_MERCHANT_RULES = 'merchantRules';
 const COLLECTION_BANK_ACCOUNTS = 'bankAccounts';
 const COLLECTION_PAYMENT_CARDS = 'paymentCards';
+const COLLECTION_CYCLE_BASELINES = 'cycleBaselines';
 const FIRESTORE_OUTBOX_KEY = 'brake_firestore_outbox';
 
 interface PendingFirestoreWrite {
@@ -85,6 +87,7 @@ const COLLECTION_LABELS: Record<string, string> = {
   merchantRules: '분류 규칙',
   bankAccounts: '계좌',
   paymentCards: '카드',
+  cycleBaselines: '주기 생활비 계획',
   appSettings: '앱 설정',
 };
 
@@ -205,6 +208,7 @@ const STORAGE_KEYS = {
   USER_PROFILE: 'brake_user_profile',
   BANK_ACCOUNTS: 'brake_bank_accounts',
   PAYMENT_CARDS: 'brake_payment_cards',
+  CYCLE_BASELINES: 'brake_cycle_baselines',
 };
 
 type SyncNotifyCallback = () => void;
@@ -259,6 +263,7 @@ export async function hydrateFirestoreFromCloud() {
     merchantRules,
     bankAccounts,
     paymentCards,
+    cycleBaselines,
   ] = await Promise.all([
     getDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS)),
     readCollection<Category>(COLLECTION_CATEGORIES),
@@ -269,6 +274,7 @@ export async function hydrateFirestoreFromCloud() {
     readCollection<MerchantRule>(COLLECTION_MERCHANT_RULES),
     readCollection<BankAccount>(COLLECTION_BANK_ACCOUNTS),
     readCollection<PaymentCard>(COLLECTION_PAYMENT_CARDS),
+    readCollection<CycleBaseline>(COLLECTION_CYCLE_BASELINES),
   ]);
 
   transactions.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
@@ -284,6 +290,12 @@ export async function hydrateFirestoreFromCloud() {
   localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(merchantRules));
   localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(bankAccounts));
   localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(paymentCards));
+  localStorage.setItem(
+    STORAGE_KEYS.CYCLE_BASELINES,
+    JSON.stringify(Object.fromEntries(
+      cycleBaselines.filter(baseline => baseline.yearMonth).map(baseline => [baseline.yearMonth, baseline]),
+    )),
+  );
   if (profileSnapshot.exists()) {
     localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profileSnapshot.data()));
   } else {
@@ -293,7 +305,7 @@ export async function hydrateFirestoreFromCloud() {
   return {
     hasCloudData: profileSnapshot.exists()
       || categories.length + transactions.length + budgets.length + templates.length + occurrences.length
-        + merchantRules.length + bankAccounts.length + paymentCards.length > 0,
+        + merchantRules.length + bankAccounts.length + paymentCards.length + cycleBaselines.length > 0,
   };
 }
 
@@ -340,6 +352,15 @@ export function initFirestoreSync(onNotify: SyncNotifyCallback) {
     subscribeArray<MerchantRule>(COLLECTION_MERCHANT_RULES, STORAGE_KEYS.MERCHANT_RULES),
     subscribeArray<BankAccount>(COLLECTION_BANK_ACCOUNTS, STORAGE_KEYS.BANK_ACCOUNTS),
     subscribeArray<PaymentCard>(COLLECTION_PAYMENT_CARDS, STORAGE_KEYS.PAYMENT_CARDS),
+    onSnapshot(scopedCollection(COLLECTION_CYCLE_BASELINES), snapshot => {
+      const baselineMap: Record<string, CycleBaseline> = {};
+      snapshot.docs.forEach(document => {
+        const baseline = { ...document.data() } as CycleBaseline;
+        baselineMap[baseline.yearMonth || document.id] = baseline;
+      });
+      localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselineMap));
+      onNotify();
+    }, snapshotError),
   ];
 }
 
@@ -451,6 +472,19 @@ export async function commitRecurringPosting(tx: Transaction, occurrence: Recurr
   });
 }
 
+export async function syncCycleBaselineToFirestore(baseline: CycleBaseline) {
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_CYCLE_BASELINES, documentId: baseline.yearMonth,
+    data: baseline as unknown as Record<string, unknown>,
+  }, 'Failed to sync cycle baseline to Firestore');
+}
+
+export async function deleteCycleBaselineFromFirestore(yearMonth: string) {
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_CYCLE_BASELINES, documentId: yearMonth,
+  }, 'Failed to delete cycle baseline from Firestore');
+}
+
 export async function syncMerchantRuleToFirestore(rule: MerchantRule) {
   return persistFirestoreWrite({
     operation: 'set', collectionName: COLLECTION_MERCHANT_RULES, documentId: rule.id,
@@ -495,6 +529,7 @@ export async function clearFirestoreAllData() {
       COLLECTION_MERCHANT_RULES,
       COLLECTION_BANK_ACCOUNTS,
       COLLECTION_PAYMENT_CARDS,
+      COLLECTION_CYCLE_BASELINES,
     ];
 
     for (const colName of collectionsToClear) {

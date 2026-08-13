@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { BankAccount, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { formatKRW } from '../utils/calculations';
+import { findCardIssuerPreset } from '../data/cardIssuerPresets';
 import { calculateMonthlyCardSettlementSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { Modal } from './ui/Modal';
@@ -89,6 +90,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [cardType, setCardType] = useState<'credit' | 'debit'>('credit');
   const [cardLinkedAccountId, setCardLinkedAccountId] = useState<string>('');
   const [cardBillingDay, setCardBillingDay] = useState<number>(25);
+  const [cardStatementClosingDay, setCardStatementClosingDay] = useState<number | null>(null);
   const [cardMemo, setCardMemo] = useState('');
   const [cardError, setCardError] = useState<string | null>(null);
   const [cardPaymentMonth, setCardPaymentMonth] = useState(currentYM);
@@ -183,6 +185,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setCardType(card.cardType || 'credit');
       setCardLinkedAccountId(card.linkedAccountId || '');
       setCardBillingDay(card.billingDay || 25);
+      setCardStatementClosingDay(card.statementClosingDay ?? null);
       setCardMemo(card.memo || '');
     } else {
       setEditingCardId(null);
@@ -191,6 +194,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setCardType('credit');
       setCardLinkedAccountId(bankAccounts[0]?.id || '');
       setCardBillingDay(25);
+      setCardStatementClosingDay(findCardIssuerPreset('신한카드', 25)?.statementClosingDay ?? null);
       setCardMemo('');
     }
     setIsCardModalOpen(true);
@@ -212,6 +216,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         cardType,
         linkedAccountId: cardLinkedAccountId || null,
         billingDay: Number(cardBillingDay) || null,
+        statementClosingDay: cardStatementClosingDay,
         memo: cardMemo,
       });
     } else {
@@ -221,6 +226,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         cardType,
         linkedAccountId: cardLinkedAccountId || null,
         billingDay: Number(cardBillingDay) || null,
+        statementClosingDay: cardStatementClosingDay,
         memo: cardMemo,
       });
     }
@@ -964,19 +970,53 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 )}
               </div>
 
-              <div>
-                <label className="block font-medium text-slate-300 mb-1">결제일 (매월 몇 일)</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-400">매월</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={31}
-                    value={cardBillingDay || ''}
-                    onChange={(e) => setCardBillingDay(Number(e.target.value))}
-                    className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-indigo-500"
-                  />
-                  <span className="text-slate-400">일</span>
+              <div className="space-y-2">
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">결제일 (매월 몇 일)</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400">매월</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={cardBillingDay || ''}
+                      onChange={(e) => {
+                        const nextBillingDay = Number(e.target.value);
+                        setCardBillingDay(nextBillingDay);
+                        // Filling the window from the issuer saves the common case;
+                        // the field below stays editable for anything unusual.
+                        const preset = findCardIssuerPreset(cardCompany, nextBillingDay);
+                        if (preset) setCardStatementClosingDay(preset.statementClosingDay);
+                      }}
+                      className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-indigo-500"
+                    />
+                    <span className="text-slate-400">일</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">이용기간 마감일</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400">매월</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      placeholder="미설정"
+                      value={cardStatementClosingDay ?? ''}
+                      onChange={(e) => {
+                        const value = Number(e.target.value);
+                        setCardStatementClosingDay(value >= 1 && value <= 31 ? value : null);
+                      }}
+                      className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                    />
+                    <span className="text-slate-400">일까지 쓴 금액이 청구</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    {cardStatementClosingDay
+                      ? `전월 ${cardStatementClosingDay + 1}일 ~ 당월 ${cardStatementClosingDay}일 사용분이 결제일에 빠져나갑니다.`
+                      : '비워 두면 결제월 직전 달 사용분으로 추정합니다. 실제 청구와 한 달 어긋날 수 있습니다.'}
+                  </p>
                 </div>
               </div>
 
