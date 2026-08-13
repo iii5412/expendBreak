@@ -22,6 +22,7 @@ import {
   getRecurringTemplates,
   getRecurringOccurrences,
   getAllRecurringOccurrences,
+  createOccurrenceForPeriod,
   ensureRecurringOccurrences,
   getMerchantRules,
   getUserProfile,
@@ -842,6 +843,13 @@ export default function App() {
             paymentCards={paymentCards}
             cardSettlementSummary={cardSettlementSummary}
             hiddenExpenseItems={hiddenExpenseItems}
+            onCreateOccurrence={templateId => {
+              const created = createOccurrenceForPeriod(templateId, currentYM, monthStartDay);
+              refreshAppData();
+              showToast(created
+                ? { message: `${created.scheduledDate} 일정을 만들었습니다.`, tone: 'success' }
+                : { message: '이번 주기에 만들 일정이 없습니다.', tone: 'warning' });
+            }}
             onReloadRecurringPlan={handleReloadRecurringPlan}
             duplicateManualCardSettlementCount={duplicateCardSettlementTemplateIds.size}
             cardSettlementReviewItems={cardSettlementReviewItems}

@@ -22,6 +22,8 @@ import {
   getAccountingPeriod,
   getCurrentYearMonth,
   getLocalDateString,
+  getMonthlyDueDateInPeriod,
+  getScheduledDatesInPeriod,
   getYearMonthForDate,
   getYearMonthString,
   isDateInPeriod,
@@ -877,6 +879,65 @@ export function ensureRecurringOccurrences(yearMonth: string, monthStartDay: num
     removedCount: startResult.removedCount + endResult.removedCount,
     upsertedCount: startResult.upsertedCount + endResult.upsertedCount,
   };
+}
+
+/**
+ * Forces this period's row for one registered item.
+ *
+ * Generation skips an item for several legitimate reasons, and for a few
+ * illegitimate ones that only old data can still carry. Rather than leave the
+ * user re-registering an item that already exists, this puts the missing row
+ * back on its due date. Returns null when nothing was missing.
+ */
+export function createOccurrenceForPeriod(
+  templateId: string,
+  yearMonth: string,
+  monthStartDay: number = 1,
+): RecurringOccurrence | null {
+  initializeStorageIfEmpty();
+  const template = getRecurringTemplates().find(item => item.id === templateId);
+  if (!template || !template.active) return null;
+
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  // Already covered — never stack a second row on the same cycle.
+  if (occurrences.some(occurrence => occurrence.templateId === templateId
+    && isDateInPeriod(occurrence.scheduledDate, period))) return null;
+
+  const scheduledDate = getScheduledDatesInPeriod(template, period)[0]
+    ?? (template.frequency === 'monthly'
+      ? getMonthlyDueDateInPeriod(template.dayOfMonth, period)
+      : null);
+  if (!scheduledDate) return null;
+
+  const now = new Date().toISOString();
+  const occurrenceKey = `${template.id}_${scheduledDate}`;
+  const created: RecurringOccurrence = {
+    id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+    templateId: template.id,
+    occurrenceKey,
+    scheduledDate,
+    expectedAmount: getCarriedRecurringAmount(
+      template.id, template.defaultAmount, scheduledDate, occurrences,
+    ),
+    actualAmount: null,
+    status: template.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
+    typeSnapshot: template.type,
+    categoryIdSnapshot: template.categoryId,
+    paymentMethodType: template.paymentMethodType,
+    accountId: template.accountId,
+    cardId: template.cardId,
+    templateRevision: template.updatedAt,
+    templateAmountSnapshot: template.defaultAmount,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  occurrences.push(created);
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  if (storageReady) syncRecurringOccurrencesToFirestore([created]);
+  notifyListeners();
+  return created;
 }
 
 export function updateOccurrenceStatus(

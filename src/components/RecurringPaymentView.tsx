@@ -56,6 +56,8 @@ interface RecurringPaymentViewProps {
   cardSettlementSummary: MonthlyCardSettlementSummary;
   /** Registered fixed expenses with no row in this cycle, and why. */
   hiddenExpenseItems: HiddenRecurringItem[];
+  /** Puts a missing row back on its due date without re-registering the item. */
+  onCreateOccurrence: (templateId: string) => void;
   onReloadRecurringPlan: () => Promise<void>;
   duplicateManualCardSettlementCount: number;
   /** Items that look like a card bill but are still counted as a transfer. */
@@ -89,6 +91,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   paymentCards,
   cardSettlementSummary,
   hiddenExpenseItems,
+  onCreateOccurrence,
   onReloadRecurringPlan,
   duplicateManualCardSettlementCount,
   cardSettlementReviewItems,
@@ -460,8 +463,19 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                     <span>매월 {item.dayOfMonth}일</span>
                     {item.reason === 'not_started' && <span>· 시작일 {item.startDate}</span>}
                     {item.otherCycleDate && <span>· 가까운 회차 {item.otherCycleDate}</span>}
-                    {item.reason === 'not_generated' && <span>· 위의 새로 불러오기를 눌러 주세요</span>}
                   </div>
+                  {/* 꺼두거나 끝난 항목까지 되살리면 사용자가 지운 결정을 뒤집게 된다. */}
+                  {item.reason !== 'inactive'
+                    && item.reason !== 'ended'
+                    && item.reason !== 'card_settlement_replaced' && (
+                    <button
+                      type="button"
+                      onClick={() => onCreateOccurrence(item.templateId)}
+                      className="mt-2 min-h-9 w-full rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs font-bold text-emerald-300 transition-colors hover:bg-emerald-500/20"
+                    >
+                      이번 주기 일정 만들기
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
