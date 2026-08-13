@@ -49,6 +49,12 @@ interface DashboardViewProps {
   cycleClosingSlot?: React.ReactNode;
 }
 
+/** `2026-08-01` -> `8/1`. */
+const shortDate = (localDate: string) => {
+  const [, month, day] = localDate.split('-').map(Number);
+  return `${month}/${day}`;
+};
+
 /**
  * An aggregate that opens to show what it is made of. Every figure on this
  * screen is derived from several others, and "why is it that number" is the
@@ -311,7 +317,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <Zap className="w-4 h-4 text-amber-400" />
               오늘 쓸 수 있는 돈
             </span>
-            <span className="text-xs text-slate-400">(남은 생활비 / 남은 {summary.daysRemaining}일)</span>
+            <span className="text-xs text-slate-400">(남은 생활비 / 남은 {summary.spendDaysRemaining}일)</span>
           </div>
           <div className="flex items-baseline justify-between">
             <div className="text-3xl font-extrabold text-white tracking-tight">
@@ -333,7 +339,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* Budget Usage Progress Bar */}
         <div className="space-y-2 mb-4">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400">이번 주기 생활비 사용</span>
+            <span className="text-slate-400">
+              생활비 사용 ({shortDate(summary.spendPeriodStartDate)}~{shortDate(summary.spendPeriodEndDate)})
+            </span>
             <div className="text-slate-200 font-semibold">
               <span className="text-white font-bold">{formatKRW(summary.confirmedVariableExpenses)}</span>
               <span className="text-slate-400"> / 사용 가능 {formatKRW(summary.spendableLimit)}</span>
@@ -361,7 +369,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </p>
 
           {/* Pace: the diagnosis, not just the plan. */}
-          {summary.daysPassed >= 3 && (
+          {summary.spendDaysPassed >= 3 && (
             <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2.5 text-xs">
               <div className="flex items-center justify-between text-slate-400">
                 <span>기간 {summary.periodProgressPercent}% 지남</span>
@@ -392,7 +400,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {summary.requiredDailyPace > 0 && (
                     <>
                       <br />
-                      하루 {formatKRW(summary.requiredDailyPace)}로 줄이면 {summary.daysRemaining}일을 채울 수 있습니다.
+                      하루 {formatKRW(summary.requiredDailyPace)}로 줄이면 {summary.spendDaysRemaining}일을 채울 수 있습니다.
                     </>
                   )}
                 </p>

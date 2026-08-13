@@ -45,6 +45,8 @@ interface PaydaySetupSheetProps {
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
   cardSettlementSummary: MonthlyCardSettlementSummary;
+  /** Manual "카드대금" items the generated bill stands in for, so they are not listed. */
+  replacedCardSettlementCount: number;
   onPostOccurrence: (
     occurrenceId: string,
     amount?: number,
@@ -67,6 +69,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   bankAccounts,
   paymentCards,
   cardSettlementSummary,
+  replacedCardSettlementCount,
   onPostOccurrence,
   onSaveCardSettlementAmount,
   onConfirmBaseline,
@@ -106,6 +109,15 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   const transferOccurrences = useMemo(
     () => recurringOccurrences
       .filter(occurrence => typeOf(occurrence) === 'expense' && methodOf(occurrence) !== 'card')
+      .sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)),
+    [recurringOccurrences, templateMap],
+  );
+
+  // Fixed expenses that are real, just not transfers. Listing them by name is
+  // what turns "왜 항목이 모자라지?" into an answer the user can check.
+  const cardPaidOccurrences = useMemo(
+    () => recurringOccurrences
+      .filter(occurrence => typeOf(occurrence) === 'expense' && methodOf(occurrence) === 'card')
       .sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)),
     [recurringOccurrences, templateMap],
   );
@@ -420,6 +432,41 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                 {formatKRW(summary.scheduledAccountFixedOutflow)} · {pendingTransfers.length}건
               </span>
             </div>
+
+            {/* The checklist is shorter than the settings list on purpose. Saying
+                which items were left out, and why, is what makes that checkable. */}
+            {(cardPaidOccurrences.length > 0 || replacedCardSettlementCount > 0) && (
+              <details className="rounded-xl border border-slate-800 bg-slate-950/40">
+                <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-300 marker:content-['']">
+                  이 목록에 없는 고정지출 {cardPaidOccurrences.length + replacedCardSettlementCount}건
+                </summary>
+                <div className="space-y-2 border-t border-slate-800 px-3 py-2 text-xs">
+                  {cardPaidOccurrences.length > 0 && (
+                    <div>
+                      <p className="text-slate-400">카드로 결제되어 다음 단계 카드대금에 포함됩니다.</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {cardPaidOccurrences.map(occurrence => (
+                          <li key={occurrence.id} className="flex items-center justify-between gap-3 text-slate-300">
+                            <span className="truncate">
+                              {templateMap.get(occurrence.templateId)?.name || '고정지출'}
+                            </span>
+                            <span className="shrink-0 font-semibold text-slate-200">
+                              {formatKRW(Math.round(occurrence.actualAmount ?? occurrence.expectedAmount))}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {replacedCardSettlementCount > 0 && (
+                    <p className="text-slate-400">
+                      직접 등록한 카드대금 항목 {replacedCardSettlementCount}건은 자동 계산된 카드대금으로 대체되어
+                      이중으로 잡히지 않습니다.
+                    </p>
+                  )}
+                </div>
+              </details>
+            )}
           </section>
         )}
 

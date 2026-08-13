@@ -29,6 +29,7 @@ import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { ManualCardSettlementCandidate } from '../utils/cardSettlementPlans';
+import { CategoryIcon } from './ui/CategoryIcon';
 
 interface RecurringPaymentViewProps {
   /** Period comes from the app-wide selector; this view no longer owns month state. */
@@ -507,7 +508,9 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       border: `1px solid ${isIncome ? '#10B98140' : ((cat?.color || '#e11d48') + '40')}`,
                     }}
                   >
-                    {isIncome ? '💰' : (cat?.icon || '💳')}
+                    {isIncome
+                      ? <TrendingUp className="w-5 h-5" aria-hidden />
+                      : <CategoryIcon name={cat?.icon} fallback={<CreditCard className="w-5 h-5" aria-hidden />} />}
                   </div>
 
                   <div className="space-y-1">

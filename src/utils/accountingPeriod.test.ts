@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Budget, Transaction } from '../types';
+import { Budget, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import {
   calculateMonthSummary,
   formatPeriodRange,
@@ -8,6 +8,7 @@ import {
   getCurrentYearMonth,
   getMonthDaysInfo,
   getMonthlyDueDateInPeriod,
+  getScheduledDatesInPeriod,
   getYearMonthForDate,
   normalizeMonthStartDay,
   shiftYearMonth,
@@ -93,6 +94,36 @@ describe('accounting period', () => {
   });
 });
 
+describe('one monthly item per cycle', () => {
+  const salary: RecurringTemplate = {
+    id: 'salary', type: 'income', name: '급여', defaultAmount: 3_000_000, categoryId: 'salary',
+    counterparty: '회사', frequency: 'monthly', dayOfMonth: 10,
+    holidayPolicy: 'previous_business_day', postingMode: 'confirm', allowAmountChange: true,
+    startDate: '2026-01-01', nextDueDate: '2026-09-10', active: true,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  };
+
+  it('does not schedule a second salary when a weekend shift crosses the boundary', () => {
+    // 10/10 is a Saturday: shifting it back to 10/09 used to land it inside the
+    // 9/10~10/9 cycle alongside 9/10, doubling that cycle's income.
+    const cycle = getAccountingPeriod('2026-09', 10, now);
+    expect(cycle.endDate).toBe('2026-10-09');
+    expect(getScheduledDatesInPeriod(salary, cycle)).toEqual(['2026-09-10']);
+  });
+
+  it('counts the salary once in the cycle summary', () => {
+    const cycle = getAccountingPeriod('2026-09', 10, now);
+    const occurrences: RecurringOccurrence[] = getScheduledDatesInPeriod(salary, cycle).map(date => ({
+      id: `occ_${date}`, templateId: salary.id, occurrenceKey: `${salary.id}_${date}`,
+      scheduledDate: date, expectedAmount: salary.defaultAmount, status: 'needs_confirmation',
+      typeSnapshot: 'income', createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    }));
+
+    const summary = calculateMonthSummary('2026-09', [], occurrences, budget, [salary], now, 10);
+    expect(summary.scheduledIncome).toBe(3_000_000);
+  });
+});
+
 describe('period-aware aggregation', () => {
   const transactions = [
     tx({ id: 'before', localDate: '2026-08-20', amount: 50_000 }),
@@ -101,9 +132,13 @@ describe('period-aware aggregation', () => {
     tx({ id: 'afterEnd', localDate: '2026-09-25', amount: 90_000 }),
   ];
 
-  it('counts only transactions inside the payday cycle', () => {
+  // Living-expense spending is bucketed by calendar month even when the cash
+  // cycle starts on payday, because that is the window a card statement bills.
+  it('counts spending by calendar month regardless of the payday cycle', () => {
     const summary = calculateMonthSummary('2026-08', transactions, [], budget, [], new Date(2026, 8, 1), 25);
-    expect(summary.confirmedVariableExpenses).toBe(100_000); // 26일 70,000 + 9/5 30,000
+    expect(summary.confirmedVariableExpenses).toBe(120_000); // 8/20 50,000 + 8/26 70,000
+    expect(summary.spendPeriodStartDate).toBe('2026-08-01');
+    expect(summary.spendPeriodEndDate).toBe('2026-08-31');
   });
 
   it('produces the same totals as before when the start day is 1', () => {

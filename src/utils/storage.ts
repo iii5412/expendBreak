@@ -18,7 +18,14 @@ import {
   getSampleRecurringTemplates,
   getSampleBudget,
 } from '../data/initialData';
-import { getAccountingPeriod, getLocalDateString, getYearMonthString, isDateInPeriod } from './calculations';
+import {
+  getAccountingPeriod,
+  getCurrentYearMonth,
+  getLocalDateString,
+  getYearMonthString,
+  isDateInPeriod,
+  normalizeMonthStartDay,
+} from './calculations';
 import {
   initFirestoreSync,
   syncUserProfileToFirestore,
@@ -192,11 +199,20 @@ export function shutdownStorage() {
 /**
  * Generate recurring occurrences for a given YYYY-MM based on templates
  */
-function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemplate[]) {
+function generateOccurrencesForMonth(
+  yearMonth: string,
+  templates: RecurringTemplate[],
+  monthStartDay: number = 1,
+) {
   let occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   const changedOccurrences: RecurringOccurrence[] = [];
 
-  const normalized = normalizeRecurringOccurrencesForMonth(occurrences, getRecurringTemplates(), yearMonth);
+  const normalized = normalizeRecurringOccurrencesForMonth(
+    occurrences,
+    getRecurringTemplates(),
+    yearMonth,
+    monthStartDay,
+  );
   occurrences = normalized.occurrences;
 
   for (const tmpl of templates) {
@@ -208,7 +224,7 @@ function generateOccurrencesForMonth(yearMonth: string, templates: RecurringTemp
         && occurrence.status === 'posted');
     if (alreadyPostedThisMonth) continue;
 
-    for (const scheduledDate of getScheduledDatesForMonth(tmpl, yearMonth)) {
+    for (const scheduledDate of getScheduledDatesForMonth(tmpl, yearMonth, monthStartDay)) {
       const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
       const existingOccurrence = occurrences.find(o => o.occurrenceKey === occurrenceKey);
       if (!existingOccurrence) {
@@ -679,9 +695,9 @@ export async function reloadRecurringOccurrences(
   if (resetIds.length > 0) await deleteRecurringOccurrencesFromFirestore(resetIds);
 
   const templates = getRecurringTemplates();
-  generateOccurrencesForMonth(period.startDate.slice(0, 7), templates);
+  generateOccurrencesForMonth(period.startDate.slice(0, 7), templates, period.monthStartDay);
   if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
-    generateOccurrencesForMonth(period.endDate.slice(0, 7), templates);
+    generateOccurrencesForMonth(period.endDate.slice(0, 7), templates, period.monthStartDay);
   }
 
   const loadedCount = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
@@ -694,6 +710,51 @@ export async function reloadRecurringOccurrences(
 export function getRecurringTemplates(): RecurringTemplate[] {
   initializeStorageIfEmpty();
   return readJson<RecurringTemplate[]>(STORAGE_KEYS.RECURRING_TEMPLATES, []);
+}
+
+/**
+ * Pushes a template edit onto the monthly plans that have not happened yet.
+ *
+ * The lists show the occurrence amount, not `defaultAmount`, so without this an
+ * edited price stayed invisible: the occurrence kept whatever it carried
+ * forward. A changed amount therefore also drops the month-specific override —
+ * the user just said what this item costs now. Past cycles and posted items are
+ * history and stay untouched.
+ */
+function applyTemplateToPendingOccurrences(
+  template: RecurringTemplate,
+  previousAmount: number,
+  monthStartDay: number,
+) {
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const fromDate = getAccountingPeriod(getCurrentYearMonth(monthStartDay), monthStartDay).startDate;
+  const amountChanged = Math.round(previousAmount) !== Math.round(template.defaultAmount);
+  const now = new Date().toISOString();
+  const changed: RecurringOccurrence[] = [];
+
+  occurrences.forEach(occurrence => {
+    if (occurrence.templateId !== template.id) return;
+    if (occurrence.status === 'posted' || occurrence.status === 'skipped') return;
+    if (occurrence.scheduledDate < fromDate) return;
+
+    if (amountChanged) {
+      occurrence.expectedAmount = Math.round(template.defaultAmount);
+      occurrence.actualAmount = null;
+    }
+    occurrence.templateAmountSnapshot = template.defaultAmount;
+    occurrence.typeSnapshot = template.type;
+    occurrence.categoryIdSnapshot = template.categoryId;
+    occurrence.paymentMethodType = template.paymentMethodType;
+    occurrence.accountId = template.accountId;
+    occurrence.cardId = template.cardId;
+    occurrence.templateRevision = template.updatedAt;
+    occurrence.updatedAt = now;
+    changed.push(occurrence);
+  });
+
+  if (changed.length === 0) return;
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  void syncRecurringOccurrencesToFirestore(changed);
 }
 
 export function saveRecurringTemplate(tmpl: Omit<RecurringTemplate, 'id' | 'createdAt' | 'updatedAt'>): RecurringTemplate {
@@ -710,8 +771,15 @@ export function saveRecurringTemplate(tmpl: Omit<RecurringTemplate, 'id' | 'crea
   localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(newTmpl);
 
-  // Auto-generate occurrence for current month
-  generateOccurrencesForMonth(getYearMonthString(), [newTmpl]);
+  // Materialize the plan for the salary cycle in progress. That cycle can span
+  // two calendar months, and a due date early in the month belongs to the later
+  // one, so both are generated.
+  const monthStartDay = normalizeMonthStartDay(getUserProfile().monthStartDay);
+  const period = getAccountingPeriod(getCurrentYearMonth(monthStartDay), monthStartDay);
+  generateOccurrencesForMonth(period.startDate.slice(0, 7), [newTmpl], monthStartDay);
+  if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
+    generateOccurrencesForMonth(period.endDate.slice(0, 7), [newTmpl], monthStartDay);
+  }
 
   notifyListeners();
   return newTmpl;
@@ -726,6 +794,7 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
   const nextCategoryId = updates.categoryId ?? tmpls[idx].categoryId;
   assertCategoryMatchesType(nextType, nextCategoryId);
 
+  const previousAmount = tmpls[idx].defaultAmount;
   tmpls[idx] = {
     ...tmpls[idx],
     ...updates,
@@ -734,6 +803,11 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
 
   localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(tmpls[idx]);
+  applyTemplateToPendingOccurrences(
+    tmpls[idx],
+    previousAmount,
+    normalizeMonthStartDay(getUserProfile().monthStartDay),
+  );
   notifyListeners();
   return tmpls[idx];
 }
@@ -786,9 +860,11 @@ export function ensureRecurringOccurrences(yearMonth: string, monthStartDay: num
   initializeStorageIfEmpty();
   const period = getAccountingPeriod(yearMonth, monthStartDay);
   const templates = getRecurringTemplates();
-  const startResult = generateOccurrencesForMonth(period.startDate.slice(0, 7), templates);
+  const startResult = generateOccurrencesForMonth(
+    period.startDate.slice(0, 7), templates, period.monthStartDay,
+  );
   const endResult = period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)
-    ? generateOccurrencesForMonth(period.endDate.slice(0, 7), templates)
+    ? generateOccurrencesForMonth(period.endDate.slice(0, 7), templates, period.monthStartDay)
     : { changed: false, removedCount: 0, upsertedCount: 0 };
   if (startResult.changed || endResult.changed) notifyListeners();
   return {
@@ -959,12 +1035,24 @@ export function setCardSettlementPaid(
 
   const transactionId = `tx_card_settlement_${cardId}_${yearMonth}`;
   const transactions = getTransactions().filter(transaction => transaction.id !== transactionId);
+  const paidAmount = Math.max(0, Math.round(amount));
 
   updatePaymentCard(cardId, {
     monthlyPaymentStatuses: {
       ...(card.monthlyPaymentStatuses || {}),
       [yearMonth]: paid ? 'paid' : 'scheduled',
     },
+    // A paid bill is a fact, not a forecast. Without pinning the amount the
+    // screens keep re-estimating it from card usage, so the recorded withdrawal
+    // and the bill shown for that cycle drift apart.
+    ...(paid
+      ? {
+          monthlyPaymentAmounts: {
+            ...(card.monthlyPaymentAmounts || {}),
+            [yearMonth]: paidAmount,
+          },
+        }
+      : {}),
   });
 
   if (!paid) {
@@ -978,7 +1066,7 @@ export function setCardSettlementPaid(
   const settlement: Transaction = {
     id: transactionId,
     type: 'expense',
-    amount: Math.max(0, Math.round(amount)),
+    amount: paidAmount,
     occurredAt: `${paymentDate}T12:00:00.000Z`,
     localDate: paymentDate,
     categoryId: getDefaultCategoryIdForType(getCategories(), 'expense') || 'etc_expense',

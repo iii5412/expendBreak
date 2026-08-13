@@ -689,6 +689,31 @@ describe('settlement transactions stay off the spend track', () => {
     expect(summary.confirmedExpenses).toBe(30_000);
   });
 
+  // What "납부 완료" writes: an account withdrawal tagged as a card settlement,
+  // carrying the card id so it shows in that card's history. It must never come
+  // back as usage on the next bill.
+  it('does not re-bill a paid bill into the following cycle', () => {
+    const card = { ...CREDIT_CARD, billingDay: 10 };
+    const augustBillPaid = makeTransaction({
+      id: 'tx_card_settlement_card_shinhan_2026-08',
+      amount: 2_850_000, localDate: '2026-08-10',
+      role: 'card_settlement', settlementYearMonth: '2026-08',
+      paymentMethodType: 'account', accountId: 'acc_main', cardId: card.id,
+    });
+    const augustUsage = makeTransaction({
+      amount: 900_000, localDate: '2026-08-20',
+      paymentMethodType: 'card', cardId: card.id,
+    });
+
+    const september = calculateMonthlyCardSettlementSummary(
+      '2026-09', [augustBillPaid, augustUsage], [card], SALARY_DAY,
+    );
+
+    expect(september.cards[0].usageStartDate).toBe('2026-08-01');
+    expect(september.cards[0].usageEndDate).toBe('2026-08-31');
+    expect(september.totalAmount).toBe(900_000);
+  });
+
   it('does not re-bill a settlement as card usage', () => {
     const settlement = makeTransaction({
       amount: 900_000, localDate: '2026-08-25', role: 'card_settlement',
@@ -707,7 +732,7 @@ describe('spending pace', () => {
     categoryId: 'salary', recurringTemplateId: 't_salary',
   });
 
-  /** Day 8 of a 31-day cycle (8/10~9/9), so the pace window has data. */
+  /** 8/17: day 17 of the 31-day spending window (8/1~8/31), so the pace has data. */
   const day8 = new Date(2026, 7, 17);
 
   const paceOn = (dailySpend: number) => {
@@ -720,13 +745,16 @@ describe('spending pace', () => {
     );
   };
 
-  it('reports how far through the cycle the user is', () => {
-    expect(paceOn(10_000).periodProgressPercent).toBe(26);
+  // Pace is measured over the spending window (the calendar month), not the
+  // cash cycle, so it lines up with the spending it is compared against.
+  it('reports how far through the spending window the user is', () => {
+    expect(paceOn(10_000).periodProgressPercent).toBe(55); // 8/17 of 8/1~8/31
   });
 
   it('projects a depletion date and shortfall when spending outruns the days', () => {
-    // 3M budget, 7 days at 200k → 1.4M spent, 1.6M left, ~200k/day.
-    const summary = paceOn(200_000);
+    // 3M budget, 7 days at 300k → 2.1M spent, 900k left, ~150k/day over the
+    // 14-day window, so the remainder runs out well before 8/31.
+    const summary = paceOn(300_000);
 
     expect(summary.projectedDepletionDate).not.toBeNull();
     expect(summary.projectedShortfallDays).toBeGreaterThan(0);
@@ -740,11 +768,13 @@ describe('spending pace', () => {
     expect(summary.projectedShortfallDays).toBe(0);
   });
 
-  it('holds off until there is enough of the cycle to measure', () => {
+  it('holds off until there is enough of the window to measure', () => {
+    const early = makeTransaction({ amount: 500_000, localDate: '2026-08-01' });
     const summary = calculateMonthSummary(
-      '2026-08', [income], [], budgetWithLimit(0), [salary], new Date(2026, 7, 11), SALARY_DAY,
+      '2026-08', [income, early], [], budgetWithLimit(0), [salary], new Date(2026, 7, 2), SALARY_DAY,
     );
 
+    expect(summary.spendDaysPassed).toBe(2);
     expect(summary.projectedDepletionDate).toBeNull();
   });
 
@@ -761,9 +791,9 @@ describe('spending pace', () => {
   it('gives a required pace that spends exactly the remainder', () => {
     const summary = paceOn(50_000);
 
-    expect(summary.requiredDailyPace * summary.daysRemaining)
+    expect(summary.requiredDailyPace * summary.spendDaysRemaining)
       .toBeLessThanOrEqual(summary.remainingAllowance);
-    expect((summary.requiredDailyPace + 1) * summary.daysRemaining)
+    expect((summary.requiredDailyPace + 1) * summary.spendDaysRemaining)
       .toBeGreaterThan(summary.remainingAllowance);
   });
 });

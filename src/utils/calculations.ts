@@ -44,6 +44,13 @@ export interface MonthSummary {
   confirmedFixedExpenses: number;
   confirmedVariableExpenses: number;
   remainingScheduledExpenses: number;
+  /** Inclusive window the living-expense spending is measured over (calendar month). */
+  spendPeriodStartDate: string;
+  spendPeriodEndDate: string;
+  spendDaysInMonth: number;
+  spendDaysPassed: number;
+  /** Days left in the spending window, including today. Pairs with {@link dailySafeAllowance}. */
+  spendDaysRemaining: number;
 
   // Cash track (INV-1)
   /** Recurring expenses transferred from an account. Card-paid ones are excluded. */
@@ -245,7 +252,9 @@ export function getScheduledDatesInPeriod(
   period: AccountingPeriod,
 ): string[] {
   const calendarMonths = [...new Set([period.startDate.slice(0, 7), period.endDate.slice(0, 7)])];
-  const dates = calendarMonths.flatMap(yearMonth => getScheduledDatesForMonth(template, yearMonth));
+  const dates = calendarMonths.flatMap(
+    yearMonth => getScheduledDatesForMonth(template, yearMonth, period.monthStartDay),
+  );
   return [...new Set(dates)]
     .filter(date => isDateInPeriod(date, period)
       && date >= template.startDate
@@ -300,6 +309,12 @@ export function calculateMonthSummary(
 ): MonthSummary {
   const period = getAccountingPeriod(yearMonth, monthStartDay, now);
   const { daysInMonth, daysPassed, daysRemaining } = period;
+  // The two tracks are bucketed differently on purpose. Cash (salary in, fixed
+  // transfers and the card bill out) follows the payday cycle. Spending follows
+  // the calendar month, because that is the window a card statement bills: money
+  // spent on the 1st through the 9th is part of this month's usage, so it has to
+  // count against this month's living budget rather than the previous cycle's.
+  const spendPeriod = getAccountingPeriod(yearMonth, 1, now);
   const templateMap = new Map(templates.map(t => [t.id, t]));
   const cardSettlementOutflow = Math.max(0, Math.round(options.cardSettlementOutflow ?? 0));
   // A locked plan carries the reserve the user committed to; an explicit option
@@ -357,7 +372,7 @@ export function calculateMonthSummary(
     if (!isSpending(transaction)) return false;
     return transaction.installment
       ? Boolean(getInstallmentCharge(transaction.amount, transaction.installment, yearMonth))
-      : isDateInPeriod(transaction.localDate, period);
+      : isDateInPeriod(transaction.localDate, spendPeriod);
   });
   const chargeFor = (transaction: Transaction) => transaction.installment
     ? getInstallmentCharge(transaction.amount, transaction.installment, yearMonth)?.amount ?? 0
@@ -480,8 +495,12 @@ export function calculateMonthSummary(
   const simpleRemainingLimit = remainingAllowance;
   const safetyBalance = remainingAllowance;
   
-  // Daily Safe Spending Allowance: max(0, floor(remainingAllowance / daysRemaining))
-  const dailySafeAllowance = Math.max(0, Math.floor(remainingAllowance / Math.max(1, daysRemaining)));
+  // Daily Safe Spending Allowance. Divided over the days left in the spending
+  // window, since that is the window `remainingAllowance` is measured against.
+  const dailySafeAllowance = Math.max(
+    0,
+    Math.floor(remainingAllowance / Math.max(1, spendPeriod.daysRemaining)),
+  );
   
   // Allowance Usage %
   const budgetUsagePercent = spendableLimit > 0
@@ -503,18 +522,19 @@ export function calculateMonthSummary(
   // Installments are excluded: their rounds are already committed for the whole
   // cycle, so folding them into a daily rate would forecast them twice.
   const variableTxs = variableTransactions.filter(
-    transaction => !transaction.installment && isDateInPeriod(transaction.localDate, period),
+    transaction => !transaction.installment && isDateInPeriod(transaction.localDate, spendPeriod),
   );
   let forecastMonthEndSpend: number | null = null;
   let forecastVariableSpend: number | null = null;
   let forecastAverageDailyVariable = 0;
   
-  if (daysPassed >= 3) {
-    // Recent 14-day window measured from the period start, not the calendar month.
-    const endOffset = Math.min(daysInMonth, daysPassed);
+  if (spendPeriod.daysPassed >= 3) {
+    // Recent 14-day window, measured over the same calendar month the spending
+    // itself is bucketed into.
+    const endOffset = Math.min(spendPeriod.daysInMonth, spendPeriod.daysPassed);
     const startOffset = Math.max(1, endOffset - 13);
     const dayFromPeriodStart = (offset: number) => {
-      const [year, month, day] = period.startDate.split('-').map(Number);
+      const [year, month, day] = spendPeriod.startDate.split('-').map(Number);
       return getLocalDateString(new Date(year, month - 1, day + offset - 1));
     };
     const recentStart = dayFromPeriodStart(startOffset);
@@ -524,30 +544,37 @@ export function calculateMonthSummary(
       .reduce((sum, transaction) => sum + Math.round(transaction.amount), 0);
     const observedDays = endOffset - startOffset + 1;
     forecastAverageDailyVariable = Math.round(recentVariableSpend / observedDays);
-    
-    forecastVariableSpend = confirmedVariableExpenses + Math.round(forecastAverageDailyVariable * (daysRemaining - 1));
+
+    forecastVariableSpend = confirmedVariableExpenses
+      + Math.round(forecastAverageDailyVariable * (spendPeriod.daysRemaining - 1));
     forecastMonthEndSpend = totalExpectedFixedExpenses + forecastVariableSpend;
   }
   
   // Pace. "Runs out on the 2nd, 7 days short" lands harder than a daily average,
   // and the required pace tells the user what to do about it.
-  const periodProgressPercent = Math.min(100, Math.round((daysPassed / daysInMonth) * 100));
-  const requiredDailyPace = Math.max(0, Math.floor(remainingAllowance / Math.max(1, daysRemaining)));
+  const periodProgressPercent = Math.min(
+    100,
+    Math.round((spendPeriod.daysPassed / spendPeriod.daysInMonth) * 100),
+  );
+  const requiredDailyPace = Math.max(
+    0,
+    Math.floor(remainingAllowance / Math.max(1, spendPeriod.daysRemaining)),
+  );
 
   let projectedDepletionDate: string | null = null;
   let projectedShortfallDays = 0;
-  if (daysPassed >= 3 && forecastAverageDailyVariable > 0 && remainingAllowance > 0) {
+  if (spendPeriod.daysPassed >= 3 && forecastAverageDailyVariable > 0 && remainingAllowance > 0) {
     const daysUntilEmpty = Math.floor(remainingAllowance / forecastAverageDailyVariable);
-    if (daysUntilEmpty < daysRemaining - 1) {
-      const [year, month, day] = period.startDate.split('-').map(Number);
+    if (daysUntilEmpty < spendPeriod.daysRemaining - 1) {
+      const [year, month, day] = spendPeriod.startDate.split('-').map(Number);
       projectedDepletionDate = getLocalDateString(
-        new Date(year, month - 1, day + daysPassed + daysUntilEmpty),
+        new Date(year, month - 1, day + spendPeriod.daysPassed + daysUntilEmpty),
       );
-      projectedShortfallDays = daysRemaining - 1 - daysUntilEmpty;
+      projectedShortfallDays = spendPeriod.daysRemaining - 1 - daysUntilEmpty;
     }
-  } else if (daysPassed >= 3 && remainingAllowance <= 0) {
+  } else if (spendPeriod.daysPassed >= 3 && remainingAllowance <= 0) {
     projectedDepletionDate = getLocalDateString(now);
-    projectedShortfallDays = Math.max(0, daysRemaining - 1);
+    projectedShortfallDays = Math.max(0, spendPeriod.daysRemaining - 1);
   }
 
   const forecastSavings = forecastMonthEndSpend === null ? null : planningIncome - forecastMonthEndSpend;
@@ -569,6 +596,11 @@ export function calculateMonthSummary(
     confirmedFixedExpenses,
     confirmedVariableExpenses,
     remainingScheduledExpenses,
+    spendPeriodStartDate: spendPeriod.startDate,
+    spendPeriodEndDate: spendPeriod.endDate,
+    spendDaysInMonth: spendPeriod.daysInMonth,
+    spendDaysPassed: spendPeriod.daysPassed,
+    spendDaysRemaining: spendPeriod.daysRemaining,
     accountFixedOutflow,
     confirmedAccountFixedOutflow,
     scheduledAccountFixedOutflow,

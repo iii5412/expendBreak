@@ -351,9 +351,11 @@ export default function App() {
     return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
   }, [categories]);
 
+  // Living-expense spending is bucketed by calendar month (see calculateMonthSummary),
+  // so the category mix has to use the same window or the two disagree.
   const categoryBreakdown = useMemo(() => {
-    return getCategoryBreakdown(currentYM, transactions, categoryMap, { variableOnly: true, monthStartDay });
-  }, [currentYM, transactions, categoryMap, monthStartDay]);
+    return getCategoryBreakdown(currentYM, transactions, categoryMap, { variableOnly: true, monthStartDay: 1 });
+  }, [currentYM, transactions, categoryMap]);
 
   const cardPaymentSummary = useMemo(
     () => calculateCardPaymentSummary(
@@ -948,6 +950,7 @@ export default function App() {
         bankAccounts={bankAccounts}
         paymentCards={paymentCards}
         cardSettlementSummary={cardSettlementSummary}
+        replacedCardSettlementCount={duplicateCardSettlementTemplateIds.size}
         onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
           await postOccurrenceToTransaction(occId, amount, pType, accId, cardId);
           refreshAppData();

@@ -16,7 +16,48 @@ const adjustForWeekend = (dateText: string, policy: RecurringTemplate['holidayPo
   return toLocalDate(date);
 };
 
-export function getScheduledDatesForMonth(template: RecurringTemplate, yearMonth: string): string[] {
+/**
+ * Which salary cycle a date belongs to. Duplicated from `calculations` on
+ * purpose: that module already imports this one, and the rule is four lines.
+ */
+const cycleOf = (dateText: string, monthStartDay: number) => {
+  const startDay = Math.min(28, Math.max(1, Math.trunc(monthStartDay) || 1));
+  const [year, month] = dateText.split('-').map(Number);
+  const day = Number(dateText.slice(8, 10));
+  if (day >= startDay) return dateText.slice(0, 7);
+  const previous = new Date(year, month - 2, 1);
+  return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
+};
+
+/**
+ * A weekend shift moves the payment date, never the cycle it belongs to.
+ *
+ * With payday on the 10th, salary due 2026-10-10 (Saturday) shifted back to
+ * 10-09 and landed inside the 9/10~10/9 cycle, which already held 9/10: the
+ * cycle counted the salary twice and the next one lost it. When the configured
+ * policy would cross the boundary the date moves the other way instead.
+ */
+const adjustWithinCycle = (
+  nominalDate: string,
+  policy: RecurringTemplate['holidayPolicy'],
+  monthStartDay: number,
+) => {
+  const adjusted = adjustForWeekend(nominalDate, policy);
+  const cycle = cycleOf(nominalDate, monthStartDay);
+  if (cycleOf(adjusted, monthStartDay) === cycle) return adjusted;
+
+  const reversed = adjustForWeekend(
+    nominalDate,
+    policy === 'previous_business_day' ? 'next_business_day' : 'previous_business_day',
+  );
+  return cycleOf(reversed, monthStartDay) === cycle ? reversed : nominalDate;
+};
+
+export function getScheduledDatesForMonth(
+  template: RecurringTemplate,
+  yearMonth: string,
+  monthStartDay: number = 1,
+): string[] {
   const [year, month] = yearMonth.split('-').map(Number);
   const monthStart = `${yearMonth}-01`;
   const lastDay = new Date(year, month, 0).getDate();
@@ -34,7 +75,7 @@ export function getScheduledDatesForMonth(template: RecurringTemplate, yearMonth
     while (toLocalDate(cursor) <= monthEnd) {
       const dateText = toLocalDate(cursor);
       if (!template.endDate || dateText <= template.endDate) {
-        dates.push(adjustForWeekend(dateText, template.holidayPolicy));
+        dates.push(adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay));
       }
       cursor.setDate(cursor.getDate() + 7);
     }
@@ -44,7 +85,7 @@ export function getScheduledDatesForMonth(template: RecurringTemplate, yearMonth
   const clampedDay = Math.min(Math.max(1, template.dayOfMonth), lastDay);
   const dateText = `${yearMonth}-${String(clampedDay).padStart(2, '0')}`;
   if (dateText < template.startDate || (template.endDate && dateText > template.endDate)) return [];
-  return [adjustForWeekend(dateText, template.holidayPolicy)];
+  return [adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay)];
 }
 
 export interface NormalizedRecurringOccurrences {
@@ -60,6 +101,7 @@ export function normalizeRecurringOccurrencesForMonth(
   occurrences: RecurringOccurrence[],
   templates: RecurringTemplate[],
   yearMonth: string,
+  monthStartDay: number = 1,
 ): NormalizedRecurringOccurrences {
   const templateMap = new Map(templates.map(template => [template.id, template]));
   const removedIds = new Set<string>();
@@ -70,7 +112,9 @@ export function normalizeRecurringOccurrencesForMonth(
   templateIds.forEach(templateId => {
     const template = templateMap.get(templateId);
     const candidates = monthOccurrences.filter(occurrence => occurrence.templateId === templateId);
-    const canonicalDates = new Set(template ? getScheduledDatesForMonth(template, yearMonth) : []);
+    const canonicalDates = new Set(
+      template ? getScheduledDatesForMonth(template, yearMonth, monthStartDay) : [],
+    );
 
     if (!template || !template.active) {
       candidates.filter(occurrence => occurrence.status !== 'posted').forEach(occurrence => removedIds.add(occurrence.id));
