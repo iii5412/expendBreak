@@ -91,6 +91,44 @@ describe('financial calculations', () => {
     expect(summary.spendableLimit).toBe(1_000_000);
   });
 
+  it('spends the same money whether a fixed expense leaves early or late in the cycle', () => {
+    // Only cycle membership matters to "what is left": a bill due 8/28 and one
+    // due 9/10 both leave the 8/25~9/24 cycle, and paying one changes nothing
+    // either, because it was already reserved.
+    const salaryDay = 25;
+    const utility = (dayOfMonth: number): RecurringTemplate => ({
+      id: 'utility', type: 'expense', name: '관리비', defaultAmount: 300_000,
+      categoryId: 'food', counterparty: '관리사무소', expenseNature: 'fixed', frequency: 'monthly',
+      dayOfMonth, holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true,
+      paymentMethodType: 'account', startDate: '2026-01-01', nextDueDate: '2026-09-10', active: true,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    });
+    const due = (scheduledDate: string, status: RecurringOccurrence['status']): RecurringOccurrence => ({
+      id: `utility_${scheduledDate}`, templateId: 'utility', occurrenceKey: `utility_${scheduledDate}`,
+      scheduledDate, expectedAmount: 300_000, status, typeSnapshot: 'expense',
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    });
+    const salary = tx({ id: 'salary', type: 'income', categoryId: 'salary', amount: 3_000_000, localDate: '2026-08-25' });
+    const summaryOf = (
+      transactions: Transaction[], occurrence: RecurringOccurrence, dayOfMonth: number,
+    ) => calculateMonthSummary(
+      '2026-08', transactions, [occurrence], budget, [utility(dayOfMonth)], now, salaryDay,
+    );
+
+    const summaries = [
+      summaryOf([salary], due('2026-08-28', 'needs_confirmation'), 28),
+      summaryOf([salary], due('2026-09-10', 'needs_confirmation'), 10),
+      summaryOf(
+        [salary, tx({ id: 'paid', amount: 300_000, localDate: '2026-08-28', recurringTemplateId: 'utility' })],
+        due('2026-08-28', 'posted'),
+        28,
+      ),
+    ];
+
+    expect(summaries.map(summary => summary.accountFixedOutflow)).toEqual([300_000, 300_000, 300_000]);
+    expect(summaries.map(summary => summary.disposableAfterFixed)).toEqual([2_700_000, 2_700_000, 2_700_000]);
+  });
+
   it('keeps fixed expenses outside the user allowance and derives planned savings', () => {
     const fixedTemplate: RecurringTemplate = {
       id: 'rent',

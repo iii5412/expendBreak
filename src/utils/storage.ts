@@ -22,6 +22,7 @@ import {
   getAccountingPeriod,
   getCurrentYearMonth,
   getLocalDateString,
+  getYearMonthForDate,
   getYearMonthString,
   isDateInPeriod,
   normalizeMonthStartDay,
@@ -218,13 +219,18 @@ function generateOccurrencesForMonth(
   for (const tmpl of templates) {
     if (!tmpl.active) continue;
 
-    const alreadyPostedThisMonth = tmpl.frequency === 'monthly'
-      && occurrences.some(occurrence => occurrence.templateId === tmpl.id
-        && occurrence.scheduledDate.startsWith(`${yearMonth}-`)
-        && occurrence.status === 'posted');
-    if (alreadyPostedThisMonth) continue;
+    // A monthly item is paid once per salary cycle, not once per calendar month.
+    // Scoping this to the calendar month silently swallowed the new cycle: an
+    // item paid on the 5th blocked the one due on the 10th, the first day of the
+    // cycle that follows it, and the payment never appeared anywhere.
+    const postedCycles = tmpl.frequency === 'monthly'
+      ? new Set(occurrences
+        .filter(occurrence => occurrence.templateId === tmpl.id && occurrence.status === 'posted')
+        .map(occurrence => getYearMonthForDate(occurrence.scheduledDate, monthStartDay)))
+      : new Set<string>();
 
     for (const scheduledDate of getScheduledDatesForMonth(tmpl, yearMonth, monthStartDay)) {
+      if (postedCycles.has(getYearMonthForDate(scheduledDate, monthStartDay))) continue;
       const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
       const existingOccurrence = occurrences.find(o => o.occurrenceKey === occurrenceKey);
       if (!existingOccurrence) {

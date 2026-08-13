@@ -204,6 +204,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return '직접 결제 / 기타';
   };
 
+  // Once the transfers are done, "얼마 냈는지"는 더 볼 일이 없다. 남은 질문은
+  // 통장에 아직 묶여 있는 돈, 즉 결제일이 오지 않은 카드대금이다.
+  const unpaidCardBills = cardSettlementSummary.cards.filter(card => card.status !== 'paid');
+  const reservedCardBill = unpaidCardBills.reduce((sum, card) => sum + card.amount, 0);
+  const nextCardBillDate = unpaidCardBills
+    .map(card => card.paymentDate)
+    .filter((date): date is string => Boolean(date))
+    .sort()[0];
+  const fixedTransfersDone = summary.scheduledAccountFixedOutflow <= 0;
+
   const showBaselineChange = summary.isBaselineLocked
     && summary.unplannedDelta !== 0
     && !baselineChangeDismissed;
@@ -512,18 +522,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 border-t border-slate-800 pt-3 text-xs sm:grid-cols-2">
-          <div className="bg-slate-950/40 rounded-xl p-3 border border-slate-800/60">
-            <div className="text-slate-400 mb-1 flex items-center justify-between">
-              <span>고정 출금 처리 현황</span>
-              <Lock className="w-3.5 h-3.5 text-indigo-400" />
+          {/* 이체가 남았으면 할 일을, 끝났으면 아직 못 쓰는 돈을 보여준다. */}
+          {!fixedTransfersDone ? (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3">
+              <div className="mb-1 flex items-center justify-between text-slate-400">
+                <span>아직 이체하지 않은 고정지출</span>
+                <Clock className="h-3.5 w-3.5 text-amber-400" />
+              </div>
+              <div className="text-sm font-bold text-amber-300">
+                {formatKRW(summary.scheduledAccountFixedOutflow)}
+              </div>
+              <div className="mt-0.5 text-xs text-slate-400">
+                이체 완료 {formatKRW(summary.confirmedAccountFixedOutflow)} / 전체 {formatKRW(summary.accountFixedOutflow)}
+              </div>
             </div>
-            <div className="font-bold text-sm text-indigo-300">
-              {formatKRW(summary.accountFixedOutflow + summary.cardSettlementOutflow)}
+          ) : (
+            <div className="rounded-xl border border-indigo-500/25 bg-indigo-500/5 p-3">
+              <div className="mb-1 flex items-center justify-between text-slate-400">
+                <span>통장에 묶어둔 돈</span>
+                <Lock className="h-3.5 w-3.5 text-indigo-400" />
+              </div>
+              <div className="text-sm font-bold text-indigo-300">{formatKRW(reservedCardBill)}</div>
+              <div className="mt-0.5 text-xs text-slate-400">
+                {reservedCardBill > 0
+                  ? `${nextCardBillDate ? `${nextCardBillDate}부터 ` : ''}카드대금 출금 예정 · 쓰면 안 되는 돈`
+                  : '고정 출금과 카드대금이 모두 끝났습니다'}
+              </div>
             </div>
-            <div className="text-xs text-slate-400 mt-0.5">
-              이체 완료 {formatKRW(summary.confirmedAccountFixedOutflow)} | 남은 이체 {formatKRW(summary.scheduledAccountFixedOutflow)}
-            </div>
-          </div>
+          )}
 
           <div className={`rounded-xl p-3 border ${
             summary.plannedSavings >= 0

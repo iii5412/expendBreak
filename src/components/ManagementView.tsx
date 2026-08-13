@@ -693,7 +693,14 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                                   {formatKRW(occ ? (occ.actualAmount ?? occ.expectedAmount) : tmpl.defaultAmount)}
                                 </span>
 
-                                {occ && occ.status !== 'posted' ? (
+                                {!occ ? (
+                                  // No row this cycle. Calling that "완료" told the
+                                  // user it was paid when nothing had happened.
+                                  <span className="flex items-center gap-1 rounded border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-xs font-bold text-slate-400">
+                                    <AlertCircle className="h-3.5 w-3.5" />
+                                    <span>이번 주기 일정 없음</span>
+                                  </span>
+                                ) : occ.status !== 'posted' ? (
                                   <button
                                     onClick={() => onPostOccurrence(occ.id)}
                                     className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 font-bold text-xs px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1"

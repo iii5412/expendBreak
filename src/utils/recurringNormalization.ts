@@ -63,7 +63,8 @@ export function getScheduledDatesForMonth(
   const lastDay = new Date(year, month, 0).getDate();
   const monthEnd = `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
 
-  if (!template.active || (template.endDate && template.endDate < monthStart) || template.startDate > monthEnd) {
+  const startsAfterThisMonth = cycleOf(monthEnd, monthStartDay) < cycleOf(template.startDate, monthStartDay);
+  if (!template.active || (template.endDate && template.endDate < monthStart) || startsAfterThisMonth) {
     return [];
   }
 
@@ -84,7 +85,12 @@ export function getScheduledDatesForMonth(
 
   const clampedDay = Math.min(Math.max(1, template.dayOfMonth), lastDay);
   const dateText = `${yearMonth}-${String(clampedDay).padStart(2, '0')}`;
-  if (dateText < template.startDate || (template.endDate && dateText > template.endDate)) return [];
+  // A monthly item starts with the cycle it was registered in, not with the
+  // exact day it was typed. Comparing dates dropped the first payment whenever
+  // the due day sat earlier in the cycle than the registration date — and
+  // lowering the payday setting recreated that gap for existing items.
+  if (cycleOf(dateText, monthStartDay) < cycleOf(template.startDate, monthStartDay)) return [];
+  if (template.endDate && dateText > template.endDate) return [];
   return [adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay)];
 }
 
@@ -122,10 +128,17 @@ export function normalizeRecurringOccurrencesForMonth(
     }
 
     // A completed monthly item remains historical even if its configured day
-    // changes later. Do not add a second occurrence for the same calendar month.
-    if (template.frequency === 'monthly' && candidates.some(occurrence => occurrence.status === 'posted')) {
-      candidates.filter(occurrence => occurrence.status !== 'posted').forEach(occurrence => removedIds.add(occurrence.id));
-      return;
+    // changes later. Only the salary cycle it was paid in is closed, though:
+    // scoping this to the calendar month made an item paid on the 5th cancel the
+    // one due on the 10th, which opens the very next cycle.
+    if (template.frequency === 'monthly') {
+      const closedCycles = new Set(candidates
+        .filter(occurrence => occurrence.status === 'posted')
+        .map(occurrence => cycleOf(occurrence.scheduledDate, monthStartDay)));
+      candidates
+        .filter(occurrence => occurrence.status !== 'posted'
+          && closedCycles.has(cycleOf(occurrence.scheduledDate, monthStartDay)))
+        .forEach(occurrence => removedIds.add(occurrence.id));
     }
 
     candidates

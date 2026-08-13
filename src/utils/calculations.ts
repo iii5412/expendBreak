@@ -255,10 +255,11 @@ export function getScheduledDatesInPeriod(
   const dates = calendarMonths.flatMap(
     yearMonth => getScheduledDatesForMonth(template, yearMonth, period.monthStartDay),
   );
+  // `getScheduledDatesForMonth` already applies the term, and it does so per
+  // cycle. Re-filtering by raw date here would drop a first payment whose due
+  // day precedes the day the item was registered inside the same cycle.
   return [...new Set(dates)]
-    .filter(date => isDateInPeriod(date, period)
-      && date >= template.startDate
-      && (!template.endDate || date <= template.endDate))
+    .filter(date => isDateInPeriod(date, period))
     .sort();
 }
 

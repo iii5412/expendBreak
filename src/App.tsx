@@ -84,6 +84,7 @@ import { PeriodSelector } from './components/PeriodSelector';
 import { OnboardingResult, OnboardingSheet } from './components/OnboardingSheet';
 import { findManualCardSettlementCandidates } from './utils/cardSettlementPlans';
 import { calculateFutureCommitments } from './utils/futureCommitments';
+import { findHiddenRecurringItems } from './utils/hiddenRecurring';
 import { buildCycleClosingReport } from './utils/cycleClosing';
 import { buildCashflowTimeline } from './utils/cashflowTimeline';
 import {
@@ -417,6 +418,17 @@ export default function App() {
     ),
     [period, planningTransactions, planningRecurringOccurrences, planningRecurringTemplates,
       bankAccounts, cardSettlementSummary, summary.forecastAverageDailyVariable],
+  );
+
+  // Registered fixed expenses that produce no row this cycle. The settings screen
+  // counts templates and the recurring screen counts occurrences, so the two
+  // disagree for good reasons; this names each one instead of leaving a gap.
+  const hiddenExpenseItems = useMemo(
+    () => findHiddenRecurringItems(recurringTemplates, planningRecurringOccurrences, period, {
+      type: 'expense',
+      replacedTemplateIds: duplicateCardSettlementTemplateIds,
+    }),
+    [recurringTemplates, planningRecurringOccurrences, period, duplicateCardSettlementTemplateIds],
   );
 
   const classificationIssues = useMemo(
@@ -829,6 +841,7 @@ export default function App() {
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
             cardSettlementSummary={cardSettlementSummary}
+            hiddenExpenseItems={hiddenExpenseItems}
             onReloadRecurringPlan={handleReloadRecurringPlan}
             duplicateManualCardSettlementCount={duplicateCardSettlementTemplateIds.size}
             cardSettlementReviewItems={cardSettlementReviewItems}

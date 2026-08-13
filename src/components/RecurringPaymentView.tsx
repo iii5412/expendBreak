@@ -9,8 +9,9 @@ import {
   Wallet,
   ArrowRightLeft,
   DollarSign,
-  Filter,
   Check,
+  ChevronDown,
+  ChevronUp,
   X,
   TrendingUp,
   TrendingDown,
@@ -29,7 +30,18 @@ import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { ManualCardSettlementCandidate } from '../utils/cardSettlementPlans';
+import { HiddenRecurringItem } from '../utils/hiddenRecurring';
 import { CategoryIcon } from './ui/CategoryIcon';
+
+/** Why a registered fixed expense produces no row in the selected cycle. */
+const HIDDEN_REASON_LABELS: Record<HiddenRecurringItem['reason'], string> = {
+  card_settlement_replaced: '카드대금 자동 항목으로 대체',
+  inactive: '사용 안 함으로 꺼둠',
+  ended: '종료일이 지난 항목',
+  not_started: '다음 주기부터 반영',
+  other_cycle: '이번 주기에 해당하는 회차 없음',
+  not_generated: '일정이 아직 생성되지 않음',
+};
 
 interface RecurringPaymentViewProps {
   /** Period comes from the app-wide selector; this view no longer owns month state. */
@@ -42,6 +54,8 @@ interface RecurringPaymentViewProps {
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
   cardSettlementSummary: MonthlyCardSettlementSummary;
+  /** Registered fixed expenses with no row in this cycle, and why. */
+  hiddenExpenseItems: HiddenRecurringItem[];
   onReloadRecurringPlan: () => Promise<void>;
   duplicateManualCardSettlementCount: number;
   /** Items that look like a card bill but are still counted as a transfer. */
@@ -74,6 +88,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   bankAccounts,
   paymentCards,
   cardSettlementSummary,
+  hiddenExpenseItems,
   onReloadRecurringPlan,
   duplicateManualCardSettlementCount,
   cardSettlementReviewItems,
@@ -93,6 +108,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
+  const [showHiddenItems, setShowHiddenItems] = useState(false);
 
   const periodRange = formatPeriodRange(period);
   const templateMap = new Map<string, RecurringTemplate>(recurringTemplates.map((t) => [t.id, t]));
@@ -109,7 +125,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     const amount = occ.actualAmount ?? occ.expectedAmount ?? tmpl?.defaultAmount ?? 0;
     setPaymentAmount(amount);
 
-    const isIncome = tmpl?.type === 'income';
+    const isIncome = (occ.typeSnapshot ?? tmpl?.type) === 'income';
     const defaultPType = occ.paymentMethodType || tmpl?.paymentMethodType || (isIncome ? 'account' : 'card');
     setPaymentMethodType(defaultPType);
 
@@ -165,9 +181,12 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   };
 
   // Map Occurrences with template type
+  // The snapshot leads: an occurrence whose template was deleted still knows
+  // what it was, and the month summary already reads it that way. Falling back
+  // to the template alone filed a posted salary under 고정 지출.
   const occurrencesWithTemplates = recurringOccurrences.map((occ) => {
     const tmpl = templateMap.get(occ.templateId);
-    const type = tmpl?.type || 'expense';
+    const type = occ.typeSnapshot ?? tmpl?.type ?? 'expense';
     return { ...occ, type, tmpl };
   });
 
@@ -403,6 +422,53 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
         )}
       </div>
 
+      {/* Why the settings screen counts more items than this list does. */}
+      {hiddenExpenseItems.length > 0 && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/60">
+          <button
+            type="button"
+            onClick={() => setShowHiddenItems(value => !value)}
+            aria-expanded={showHiddenItems}
+            className="flex w-full items-center justify-between gap-3 p-4 text-left"
+          >
+            <span className="min-w-0">
+              <span className="flex items-center gap-2 text-sm font-bold text-slate-200">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+                이번 주기 목록에 없는 고정지출 {hiddenExpenseItems.length}건
+              </span>
+              <span className="mt-1 block text-xs leading-relaxed text-slate-400">
+                설정에 등록한 항목 수와 이 목록의 건수가 다르면 아래에서 이유를 확인하세요.
+              </span>
+            </span>
+            {showHiddenItems
+              ? <ChevronUp className="h-4 w-4 shrink-0 text-slate-400" />
+              : <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />}
+          </button>
+
+          {showHiddenItems && (
+            <ul className="space-y-2 border-t border-slate-800 p-4">
+              {hiddenExpenseItems.map(item => (
+                <li key={item.templateId} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-bold text-slate-100">{item.name}</span>
+                    <span className="shrink-0 text-slate-300">{formatKRW(item.amount)}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-slate-400">
+                    <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-bold text-amber-200">
+                      {HIDDEN_REASON_LABELS[item.reason]}
+                    </span>
+                    <span>매월 {item.dayOfMonth}일</span>
+                    {item.reason === 'not_started' && <span>· 시작일 {item.startDate}</span>}
+                    {item.otherCycleDate && <span>· 가까운 회차 {item.otherCycleDate}</span>}
+                    {item.reason === 'not_generated' && <span>· 위의 새로 불러오기를 눌러 주세요</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* Filter Tabs */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -515,7 +581,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
 
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-base text-white">{tmpl?.name || '정기 항목'}</span>
+                      <span className="font-bold text-base text-white">{tmpl?.name || '삭제된 정기 항목'}</span>
                       {isIncome ? (
                         <span className="text-xs font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1">
                           <TrendingUp className="w-3 h-3" /> 고정 수입
@@ -636,7 +702,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       >
         {selectedOcc && (() => {
               const tmpl = templateMap.get(selectedOcc.templateId);
-              const isIncome = tmpl?.type === 'income';
+              const isIncome = (selectedOcc.typeSnapshot ?? tmpl?.type) === 'income';
 
               return (
                 <>
@@ -672,7 +738,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       <div>
                         <span className="text-slate-400 text-xs">항목명</span>
                         <p className="font-bold text-sm text-white">
-                          {tmpl?.name || '정기 항목'}
+                          {tmpl?.name || '삭제된 정기 항목'}
                         </p>
                       </div>
                       <div className="text-right">

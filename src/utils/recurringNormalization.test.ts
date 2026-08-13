@@ -34,6 +34,44 @@ describe('recurring occurrence normalization', () => {
     expect(result.occurrences.map(item => item.id)).toEqual(['paid-15th']);
     expect(result.removedIds).toEqual(['duplicate-10th']);
   });
+
+  it('keeps the next cycle alive after a payment made earlier in the same month', () => {
+    // Payday is the 10th, so 8/05 closes the 7/10~8/9 cycle and 8/10 opens the
+    // next one. Treating both as "August, already paid" deleted the new cycle's
+    // row: the item vanished from the transfer list with nothing in history.
+    const result = normalizeRecurringOccurrencesForMonth([
+      occurrence('paid-5th', '2026-08-05', 'posted'),
+      occurrence('due-10th', '2026-08-10'),
+    ], [template], '2026-08', 10);
+
+    expect(result.occurrences.map(item => item.id)).toEqual(['paid-5th', 'due-10th']);
+    expect(result.removedIds).toEqual([]);
+  });
+
+  it('generates the first payment of an item registered later in its own cycle', () => {
+    // Payday moved from the 13th to the 10th. An item registered on 8/13 with a
+    // due day of the 10th then had a start date after its own due date, so the
+    // 8/10 payment was never generated and the item silently skipped a cycle.
+    const registeredMidCycle = { ...template, startDate: '2026-08-13' };
+
+    expect(getScheduledDatesForMonth(registeredMidCycle, '2026-08', 10)).toEqual(['2026-08-10']);
+  });
+
+  it('does not backfill a cycle that closed before the item existed', () => {
+    const registeredLater = { ...template, startDate: '2026-08-13' };
+
+    expect(getScheduledDatesForMonth(registeredLater, '2026-07', 10)).toEqual([]);
+  });
+
+  it('still drops a duplicate inside the cycle that was already paid', () => {
+    const result = normalizeRecurringOccurrencesForMonth([
+      occurrence('paid-12th', '2026-08-12', 'posted'),
+      occurrence('duplicate-10th', '2026-08-10'),
+    ], [template], '2026-08', 10);
+
+    expect(result.occurrences.map(item => item.id)).toEqual(['paid-12th']);
+    expect(result.removedIds).toEqual(['duplicate-10th']);
+  });
 });
 
 describe('holiday shifts stay inside their salary cycle', () => {
