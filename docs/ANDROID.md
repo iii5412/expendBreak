@@ -63,6 +63,26 @@ npm run android:release
 
 산출물은 `android/app/build/outputs/apk/release/app-release.apk`이다. 배포 전 `apksigner verify --verbose`와 실제 기기 설치를 확인한다.
 
+## 앱 안에서 APK 업데이트
+
+버전 1.2.0(빌드 3)부터 설정의 `Android 앱과 위젯` 카드에서 새 APK를 확인하고 설치할 수 있다. 새 릴리스를 만들 때마다 다음을 지킨다.
+
+1. `android/app/build.gradle`의 `versionCode`를 반드시 증가시키고 `versionName`을 변경한다.
+2. 최초 릴리스와 동일한 keystore 및 alias로 `npm run android:release`를 실행한다.
+3. 운영 서버가 읽을 수 있는 영구 경로에 서명된 APK를 업로드한다.
+4. 운영 서버에 아래 환경 변수를 적용하고 재시작한다.
+
+```dotenv
+APP_UPDATE_APK_PATH=/absolute/server/path/expendbreak-v1.2.0-3.apk
+APP_UPDATE_VERSION_CODE=3
+APP_UPDATE_VERSION_NAME=1.2.0
+APP_UPDATE_RELEASE_NOTES=APK 업데이트 기능과 안정성 개선
+```
+
+서버의 `/api/app-update`는 APK 크기와 SHA-256을 계산해 제공하고, `/api/app-update/apk`는 실제 파일을 전송한다. 앱은 설치된 `versionCode`보다 큰 업데이트만 표시하며 다운로드 완료 후 SHA-256이 일치할 때만 Android 패키지 설치 화면을 연다. Android 8 이상에서는 최초 업데이트 때 `이 출처의 앱 허용` 설정이 한 번 필요하다.
+
+업데이트가 기존 앱 위에 설치되려면 APK의 application ID와 서명키가 기존 앱과 같아야 하며 `versionCode`는 더 커야 한다. 서명키를 분실하거나 바꾸면 앱 내부 데이터가 유지되는 덮어쓰기가 불가능하다.
+
 ## 위젯 사용
 
 1. 앱에 PIN으로 로그인한다.

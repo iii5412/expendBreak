@@ -142,6 +142,8 @@ export default function App() {
   const [quickEntries, setQuickEntries] = useState<QuickEntry[]>([]);
   /** Suggestions turned down in this session, keyed by merchant + category. */
   const [dismissedSuggestions, setDismissedSuggestions] = useState<string[]>([]);
+  /** Variable-amount chip tapped on the home-screen widget, awaiting its amount. */
+  const [pendingWidgetQuickEntryId, setPendingWidgetQuickEntryId] = useState<string | null>(null);
   const [nativeDestination, setNativeDestination] = useState<NativeDestination | null>(null);
 
   // Reload state from storage
@@ -502,10 +504,22 @@ export default function App() {
 
   useEffect(() => {
     if (!nativeDestination || bootState !== 'ready') return;
-    if (nativeDestination === 'transaction/new') {
+    if (nativeDestination.kind === 'transaction/new') {
       setIsAddModalOpen(true);
-    } else if (nativeDestination === 'settings/widget') {
+    } else if (nativeDestination.kind === 'settings/widget') {
       handleNavigateTab('management', 'settings');
+    } else if (nativeDestination.kind === 'quick-entry') {
+      handleNavigateTab('home');
+      // A widget chip with a fixed amount records straight away; a variable one
+      // has nothing to record yet, so the home bar opens its amount prompt.
+      const entry = getQuickEntries().find(candidate => candidate.id === nativeDestination.quickEntryId);
+      if (!entry) {
+        showToast({ message: '퀵등록 항목을 찾지 못했습니다.', tone: 'error' });
+      } else if (entry.amount === null) {
+        setPendingWidgetQuickEntryId(entry.id);
+      } else {
+        handlePostQuickEntry(entry.id);
+      }
     } else {
       handleNavigateTab('home');
     }
@@ -518,7 +532,18 @@ export default function App() {
       return;
     }
     if (bootState !== 'ready') return;
-    const snapshot = buildWidgetSnapshot(currentYM, period.endDate, summary, userProfile);
+    const snapshot = buildWidgetSnapshot(
+      currentYM,
+      period.endDate,
+      summary,
+      userProfile,
+      new Date(),
+      // Most-used first: the widget shows only a handful, so they should be the
+      // ones actually worth a home-screen slot.
+      [...quickEntries]
+        .sort((left, right) => right.useCount - left.useCount || left.sortOrder - right.sortOrder)
+        .map(entry => ({ id: entry.id, label: entry.label, amount: entry.amount })),
+    );
     void publishWidgetSnapshot(snapshot).catch(error => console.error('Widget snapshot update failed:', error));
   }, [
     bootState,
@@ -532,6 +557,7 @@ export default function App() {
     summary.alertLevel,
     userProfile.idleLockMinutes,
     userProfile.widgetPrivacyMode,
+    quickEntries,
   ]);
 
   const handlePostOccurrence = async (occId: string) => {
@@ -945,6 +971,8 @@ export default function App() {
                 onAcceptSuggestion={handleAcceptQuickEntrySuggestion}
                 onDismissSuggestion={handleDismissQuickEntrySuggestion}
                 onManage={() => handleNavigateTab('management', 'quick_entries')}
+                pendingAmountPromptId={pendingWidgetQuickEntryId}
+                onPendingAmountPromptHandled={() => setPendingWidgetQuickEntryId(null)}
               />
             )}
           />

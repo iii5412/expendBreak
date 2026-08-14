@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, Settings2, Zap } from 'lucide-react';
 import { Category, QuickEntry } from '../types';
 import { QuickEntrySuggestion } from '../utils/quickEntrySuggestions';
@@ -15,6 +15,13 @@ interface QuickEntryBarProps {
   onAcceptSuggestion: (suggestion: QuickEntrySuggestion) => void;
   onDismissSuggestion: (suggestion: QuickEntrySuggestion) => void;
   onManage: () => void;
+  /**
+   * Id of a variable-amount chip tapped on the home-screen widget. The widget
+   * cannot collect an amount itself, so it hands the entry over and this bar
+   * opens the same number pad the in-app chip would have.
+   */
+  pendingAmountPromptId?: string | null;
+  onPendingAmountPromptHandled?: () => void;
 }
 
 /**
@@ -32,6 +39,8 @@ export const QuickEntryBar: React.FC<QuickEntryBarProps> = ({
   onAcceptSuggestion,
   onDismissSuggestion,
   onManage,
+  pendingAmountPromptId = null,
+  onPendingAmountPromptHandled,
 }) => {
   const [amountPrompt, setAmountPrompt] = useState<QuickEntry | null>(null);
   const [promptAmount, setPromptAmount] = useState<number>(0);
@@ -50,8 +59,12 @@ export const QuickEntryBar: React.FC<QuickEntryBarProps> = ({
     setAmountPrompt(null);
   };
 
-  const hasAnything = entries.length > 0 || suggestions.length > 0;
-  if (!hasAnything) return null;
+  useEffect(() => {
+    if (!pendingAmountPromptId) return;
+    const entry = entries.find(candidate => candidate.id === pendingAmountPromptId);
+    if (entry) openAmountPrompt(entry);
+    onPendingAmountPromptHandled?.();
+  }, [pendingAmountPromptId, entries]);
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
@@ -87,10 +100,16 @@ export const QuickEntryBar: React.FC<QuickEntryBarProps> = ({
         </ul>
       )}
 
+      {/* The bar used to hide itself entirely while empty, which left the only
+          way to create a first chip buried in the settings screen. */}
       {entries.length === 0 && (
-        <p className="text-xs leading-relaxed text-slate-400">
-          자주 쓰는 내역을 등록해 두면 한 번 눌러 기록할 수 있습니다.
-        </p>
+        <button
+          onClick={onManage}
+          className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-700 px-3 text-xs font-semibold text-slate-400 transition-colors hover:border-rose-500/50 hover:text-slate-200"
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          자주 쓰는 내역 만들기
+        </button>
       )}
 
       {suggestions.length > 0 && (

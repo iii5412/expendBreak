@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
@@ -47,6 +48,23 @@ import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 
+/** Chips beyond this do not fit any widget size worth rendering. */
+private const val MAX_QUICK_ENTRY_CHIPS = 4
+
+/** 2x2 and smaller: only the headline figure fits. */
+private val SMALL_WIDGET = DpSize(110.dp, 110.dp)
+/** 4x2: room for the actions row. */
+private val MEDIUM_WIDGET = DpSize(240.dp, 110.dp)
+/** 4x3 and larger: room for quick entry chips too. */
+private val LARGE_WIDGET = DpSize(240.dp, 180.dp)
+
+data class WidgetQuickEntry(
+    val id: String,
+    val label: String,
+    /** null records nothing on its own; the app collects the amount first. */
+    val amount: Long?,
+)
+
 data class WidgetViewData(
     val state: String,
     val dailySafeAllowance: Long = 0,
@@ -54,10 +72,16 @@ data class WidgetViewData(
     val daysRemaining: Int = 0,
     val alertLevel: String = "safe",
     val calculatedAt: String = "",
+    val quickEntries: List<WidgetQuickEntry> = emptyList(),
 )
 
 class ExpendBreakWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Exact
+    // Exact mode recomposes for every pixel size the launcher reports, which
+    // made one fixed layout overflow the small sizes. Responsive lets each
+    // bucket state its own type scale and padding instead of clipping.
+    override val sizeMode = SizeMode.Responsive(
+        setOf(SMALL_WIDGET, MEDIUM_WIDGET, LARGE_WIDGET),
+    )
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val data = deriveWidgetViewData(WidgetStore.read(context))
@@ -115,67 +139,190 @@ fun deriveWidgetViewData(payload: StoredWidgetPayload?, now: Instant = Instant.n
         daysRemaining = daysRemaining,
         alertLevel = snapshot.optString("alertLevel", "safe"),
         calculatedAt = calculatedAt,
+        quickEntries = parseQuickEntries(snapshot),
     )
+}
+
+/**
+ * Reads the quick entry chips out of a snapshot.
+ *
+ * Older snapshots have no `quickEntries` key at all, and a widget that survives
+ * an app downgrade still has to render, so anything unparseable is simply
+ * dropped rather than failing the whole payload.
+ */
+private fun parseQuickEntries(snapshot: JSONObject): List<WidgetQuickEntry> {
+    val array = snapshot.optJSONArray("quickEntries") ?: return emptyList()
+    val entries = mutableListOf<WidgetQuickEntry>()
+    for (index in 0 until minOf(array.length(), MAX_QUICK_ENTRY_CHIPS)) {
+        val item = array.optJSONObject(index) ?: continue
+        val id = item.optString("id")
+        val label = item.optString("label")
+        if (id.isBlank() || label.isBlank()) continue
+        entries.add(
+            WidgetQuickEntry(
+                id = id,
+                label = label,
+                amount = if (item.isNull("amount")) null else item.optLong("amount"),
+            ),
+        )
+    }
+    return entries
+}
+
+private fun deepLinkIntent(context: Context, uri: String) = Intent(context, MainActivity::class.java).apply {
+    setData(Uri.parse(uri))
+    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
 }
 
 @Composable
 private fun WidgetContent(context: Context, data: WidgetViewData) {
-    val wide = LocalSize.current.width >= 240.dp
+    val size = LocalSize.current
+    val wide = size.width >= MEDIUM_WIDGET.width
+    val tall = size.height >= LARGE_WIDGET.height
     val colors = GlanceTheme.colors
-    val homeIntent = Intent(context, MainActivity::class.java).apply {
-        setData(Uri.parse("expendbreak://home"))
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
-    val addIntent = Intent(context, MainActivity::class.java).apply {
-        setData(Uri.parse("expendbreak://transaction/new"))
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
+
+    // Everything scales off the bucket. The old layout used one 14dp padding and
+    // one type scale at every size, so a 2x2 widget clipped its own figure.
+    val pad = if (wide) 14.dp else 10.dp
+    val gap = if (tall) 10.dp else 6.dp
 
     Column(
-        modifier = GlanceModifier.fillMaxSize().background(colors.widgetBackground).padding(14.dp).clickable(actionStartActivity(homeIntent)),
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .background(colors.widgetBackground)
+            .padding(pad)
+            .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://home"))),
     ) {
         Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
-            Text("지출브레이크", style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 13.sp))
-            Spacer(modifier = GlanceModifier.width(8.dp))
-            Text(statusLabel(data), style = TextStyle(color = statusColor(data), fontSize = 11.sp))
+            Text(
+                if (wide) "지출브레이크" else "지출",
+                style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
+                maxLines = 1,
+            )
+            Spacer(modifier = GlanceModifier.defaultWeight())
+            Text(
+                statusLabel(data),
+                style = TextStyle(color = statusColor(data), fontSize = 11.sp),
+                maxLines = 1,
+            )
         }
-        Spacer(modifier = GlanceModifier.height(10.dp))
+        Spacer(modifier = GlanceModifier.height(gap))
 
         when (data.state) {
             "no_data" -> EmptyState("앱을 열어 설정해 주세요")
             "locked" -> EmptyState("잠금 해제 후 확인")
             "hidden" -> EmptyState("금액 숨김 · 앱에서 확인")
             else -> {
-                Text("오늘 안전", style = TextStyle(color = colors.onSurfaceVariant, fontSize = 12.sp))
-                Text(formatKrw(data.dailySafeAllowance), style = TextStyle(color = statusColor(data), fontWeight = FontWeight.Bold, fontSize = if (wide) 28.sp else 23.sp))
-                Spacer(modifier = GlanceModifier.height(4.dp))
-                Text("남은 ${formatKrw(data.remainingAllowance)} · ${data.daysRemaining}일", style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp), maxLines = 1)
+                Text(
+                    "오늘 안전",
+                    style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp),
+                    maxLines = 1,
+                )
+                Text(
+                    formatKrw(data.dailySafeAllowance),
+                    style = TextStyle(
+                        color = statusColor(data),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = if (wide) 26.sp else 19.sp,
+                    ),
+                    maxLines = 1,
+                )
+                Text(
+                    "남은 ${formatKrw(data.remainingAllowance)} · ${data.daysRemaining}일",
+                    style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp),
+                    maxLines = 1,
+                )
+
+                if (tall && data.quickEntries.isNotEmpty()) {
+                    Spacer(modifier = GlanceModifier.height(gap))
+                    QuickEntryChips(context, data.quickEntries)
+                }
+
                 if (wide) {
-                    Spacer(modifier = GlanceModifier.height(10.dp))
-                    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
-                        Text(
-                            "＋ 지출",
-                            modifier = GlanceModifier.background(colors.surfaceVariant).padding(horizontal = 12.dp, vertical = 8.dp).clickable(actionStartActivity(addIntent)),
-                            style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
-                        )
-                        Spacer(modifier = GlanceModifier.width(8.dp))
-                        Text(
-                            "새로고침",
-                            modifier = GlanceModifier.background(colors.surfaceVariant).padding(horizontal = 12.dp, vertical = 8.dp).clickable(actionRunCallback<RefreshWidgetAction>()),
-                            style = TextStyle(color = colors.onSurfaceVariant, fontSize = 12.sp),
-                        )
-                    }
+                    Spacer(modifier = GlanceModifier.height(gap))
+                    ActionRow(context)
                 }
             }
         }
     }
 }
 
+/**
+ * Up to two chips per row. Glance has no wrapping layout, so the rows are built
+ * explicitly rather than relying on a flow.
+ */
+@Composable
+private fun QuickEntryChips(context: Context, entries: List<WidgetQuickEntry>) {
+    entries.chunked(2).forEachIndexed { rowIndex, row ->
+        if (rowIndex > 0) Spacer(modifier = GlanceModifier.height(6.dp))
+        Row(modifier = GlanceModifier.fillMaxWidth()) {
+            row.forEachIndexed { columnIndex, entry ->
+                if (columnIndex > 0) Spacer(modifier = GlanceModifier.width(6.dp))
+                Text(
+                    entry.label,
+                    modifier = GlanceModifier
+                        .defaultWeight()
+                        .background(GlanceTheme.colors.surfaceVariant)
+                        .padding(horizontal = 8.dp, vertical = 7.dp)
+                        .clickable(
+                            actionStartActivity(
+                                deepLinkIntent(context, "expendbreak://quick/${entry.id}"),
+                            ),
+                        ),
+                    style = TextStyle(
+                        color = GlanceTheme.colors.onSurface,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                    ),
+                    maxLines = 1,
+                )
+            }
+            // A lone chip should not stretch across the whole widget.
+            if (row.size == 1) {
+                Spacer(modifier = GlanceModifier.width(6.dp))
+                Spacer(modifier = GlanceModifier.defaultWeight())
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionRow(context: Context) {
+    val colors = GlanceTheme.colors
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+        Text(
+            "＋ 지출",
+            modifier = GlanceModifier
+                .background(colors.surfaceVariant)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://transaction/new"))),
+            style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
+            maxLines = 1,
+        )
+        Spacer(modifier = GlanceModifier.width(8.dp))
+        Text(
+            "새로고침",
+            modifier = GlanceModifier
+                .background(colors.surfaceVariant)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .clickable(actionRunCallback<RefreshWidgetAction>()),
+            style = TextStyle(color = colors.onSurfaceVariant, fontSize = 12.sp),
+            maxLines = 1,
+        )
+    }
+}
+
 @Composable
 private fun EmptyState(message: String) {
-    Spacer(modifier = GlanceModifier.height(12.dp))
-    Text(message, style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 14.sp), maxLines = 2)
-    Spacer(modifier = GlanceModifier.height(12.dp))
+    Text(
+        message,
+        style = TextStyle(
+            color = GlanceTheme.colors.onSurfaceVariant,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+        ),
+        maxLines = 3,
+    )
 }
 
 private fun statusLabel(data: WidgetViewData): String = when (data.state) {

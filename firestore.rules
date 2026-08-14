@@ -1,8 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // The client scopes every document under users/owner, while the server mints
+    // its custom token with OWNER_UID. Those two can disagree, so the fixed
+    // 'owner' path stays allowed -- but only for a request that authenticated.
+    // Leaving `userId == 'owner'` outside this auth check made the whole ledger
+    // world-readable and world-writable.
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return request.auth != null && (request.auth.uid == userId || userId == 'owner');
     }
 
     function validTransactionType() {
@@ -114,7 +119,8 @@ service cloud.firestore {
         allow create, update: if isOwner(userId)
           && validTransactionType()
           && request.resource.data.label is string
-          && (request.resource.data.amount == null
+          && (!('amount' in request.resource.data)
+              || request.resource.data.amount == null
               || (request.resource.data.amount is number && request.resource.data.amount > 0))
           && categoryMatches(userId);
       }
