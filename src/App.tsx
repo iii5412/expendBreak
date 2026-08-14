@@ -705,11 +705,11 @@ export default function App() {
         description: '카테고리가 바뀌었을 수 있습니다. 관리에서 항목을 확인해 주세요.',
         tone: 'error',
       });
-      return;
+      return false;
     }
     if (!result) {
       showToast({ message: '퀵등록 항목을 기록하지 못했습니다.', tone: 'error' });
-      return;
+      return false;
     }
     const { transaction, synced } = result;
     const label = `${transaction.merchant || '거래'} ${formatKRW(transaction.amount)}`;
@@ -724,6 +724,7 @@ export default function App() {
             },
       );
     });
+    return true;
   };
 
   const handleAcceptQuickEntrySuggestion = (suggestion: QuickEntrySuggestion) => {
@@ -1157,6 +1158,12 @@ export default function App() {
         aiClassificationEnabled={userProfile.aiClassificationEnabled}
         onSaveTransaction={handleSaveTransaction}
         onSaveMerchantRule={saveMerchantRule}
+        quickEntries={quickEntries}
+        onPostQuickEntry={handlePostQuickEntry}
+        onManageQuickEntries={() => {
+          setIsAddModalOpen(false);
+          handleNavigateTab('management', 'quick_entries');
+        }}
         onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
           await postOccurrenceToTransaction(occId, amount, pType, accId, cardId);
           refreshAppData();

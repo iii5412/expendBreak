@@ -5,6 +5,7 @@ build/
 dist/
 server-dist/
 coverage/
+artifacts/
 .DS_Store
 *.log
 .env*

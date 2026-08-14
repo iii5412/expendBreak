@@ -73,10 +73,10 @@ npm run android:release
 4. 운영 서버에 아래 환경 변수를 적용하고 재시작한다.
 
 ```dotenv
-APP_UPDATE_APK_PATH=/absolute/server/path/expendbreak-v1.2.0-3.apk
-APP_UPDATE_VERSION_CODE=3
-APP_UPDATE_VERSION_NAME=1.2.0
-APP_UPDATE_RELEASE_NOTES=APK 업데이트 기능과 안정성 개선
+APP_UPDATE_APK_PATH=/absolute/server/path/expendbreak-v1.3.0-4.apk
+APP_UPDATE_VERSION_CODE=4
+APP_UPDATE_VERSION_NAME=1.3.0
+APP_UPDATE_RELEASE_NOTES=지출 추가 화면과 4x2 위젯의 퀵등록 개선
 ```
 
 서버의 `/api/app-update`는 APK 크기와 SHA-256을 계산해 제공하고, `/api/app-update/apk`는 실제 파일을 전송한다. 앱은 설치된 `versionCode`보다 큰 업데이트만 표시하며 다운로드 완료 후 SHA-256이 일치할 때만 Android 패키지 설치 화면을 연다. Android 8 이상에서는 최초 업데이트 때 `이 출처의 앱 허용` 설정이 한 번 필요하다.

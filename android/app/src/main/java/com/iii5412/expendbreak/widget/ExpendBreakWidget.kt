@@ -53,9 +53,9 @@ private const val MAX_QUICK_ENTRY_CHIPS = 4
 
 /** 2x2 and smaller: only the headline figure fits. */
 private val SMALL_WIDGET = DpSize(110.dp, 110.dp)
-/** 4x2: room for the actions row. */
+/** 4x2: budget on the left, two quick entries on the right. */
 private val MEDIUM_WIDGET = DpSize(240.dp, 110.dp)
-/** 4x3 and larger: room for quick entry chips too. */
+/** 4x3 and larger: room for four quick entry chips. */
 private val LARGE_WIDGET = DpSize(240.dp, 180.dp)
 
 data class WidgetQuickEntry(
@@ -181,10 +181,8 @@ private fun WidgetContent(context: Context, data: WidgetViewData) {
     val tall = size.height >= LARGE_WIDGET.height
     val colors = GlanceTheme.colors
 
-    // Everything scales off the bucket. The old layout used one 14dp padding and
-    // one type scale at every size, so a 2x2 widget clipped its own figure.
-    val pad = if (wide) 14.dp else 10.dp
-    val gap = if (tall) 10.dp else 6.dp
+    val pad = if (wide) 12.dp else 10.dp
+    val gap = if (tall) 7.dp else 5.dp
 
     Column(
         modifier = GlanceModifier
@@ -193,19 +191,7 @@ private fun WidgetContent(context: Context, data: WidgetViewData) {
             .padding(pad)
             .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://home"))),
     ) {
-        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
-            Text(
-                if (wide) "지출브레이크" else "지출",
-                style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
-                maxLines = 1,
-            )
-            Spacer(modifier = GlanceModifier.defaultWeight())
-            Text(
-                statusLabel(data),
-                style = TextStyle(color = statusColor(data), fontSize = 11.sp),
-                maxLines = 1,
-            )
-        }
+        WidgetHeader(context, data, wide)
         Spacer(modifier = GlanceModifier.height(gap))
 
         when (data.state) {
@@ -213,34 +199,132 @@ private fun WidgetContent(context: Context, data: WidgetViewData) {
             "locked" -> EmptyState("잠금 해제 후 확인")
             "hidden" -> EmptyState("금액 숨김 · 앱에서 확인")
             else -> {
-                Text(
-                    "오늘 안전",
-                    style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp),
-                    maxLines = 1,
-                )
-                Text(
-                    formatKrw(data.dailySafeAllowance),
-                    style = TextStyle(
-                        color = statusColor(data),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = if (wide) 26.sp else 19.sp,
-                    ),
-                    maxLines = 1,
-                )
-                Text(
-                    "남은 ${formatKrw(data.remainingAllowance)} · ${data.daysRemaining}일",
-                    style = TextStyle(color = colors.onSurfaceVariant, fontSize = 11.sp),
-                    maxLines = 1,
-                )
+                if (wide && !tall) {
+                    MediumContent(context, data)
+                } else {
+                    BudgetSummary(data, wide)
+                }
 
                 if (tall && data.quickEntries.isNotEmpty()) {
                     Spacer(modifier = GlanceModifier.height(gap))
+                    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+                        Text(
+                            "빠른 지출",
+                            style = TextStyle(
+                                color = colors.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                            ),
+                            maxLines = 1,
+                        )
+                        Spacer(modifier = GlanceModifier.defaultWeight())
+                        Text(
+                            "${data.quickEntries.size}개",
+                            style = TextStyle(color = colors.onSurfaceVariant, fontSize = 9.sp),
+                            maxLines = 1,
+                        )
+                    }
+                    Spacer(modifier = GlanceModifier.height(4.dp))
                     QuickEntryChips(context, data.quickEntries)
                 }
-
-                if (wide) {
+                if (tall && data.quickEntries.isEmpty()) {
                     Spacer(modifier = GlanceModifier.height(gap))
                     ActionRow(context)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WidgetHeader(context: Context, data: WidgetViewData, wide: Boolean) {
+    val colors = GlanceTheme.colors
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+        Text(
+            if (wide) "⚡ 지출브레이크" else "⚡ 지출",
+            style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
+            maxLines = 1,
+        )
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Text(
+            statusLabel(data),
+            modifier = GlanceModifier
+                .background(colors.surfaceVariant)
+                .padding(horizontal = 7.dp, vertical = 3.dp)
+                .clickable(actionRunCallback<RefreshWidgetAction>()),
+            style = TextStyle(color = statusColor(data), fontWeight = FontWeight.Bold, fontSize = 9.sp),
+            maxLines = 1,
+        )
+        if (wide) {
+            Spacer(modifier = GlanceModifier.width(5.dp))
+            Text(
+                "＋",
+                modifier = GlanceModifier
+                    .background(colors.primary)
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                    .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://transaction/new"))),
+                style = TextStyle(color = colors.onPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BudgetSummary(data: WidgetViewData, wide: Boolean) {
+    val colors = GlanceTheme.colors
+    Text(
+        "오늘 써도 되는 돈",
+        style = TextStyle(color = colors.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 10.sp),
+        maxLines = 1,
+    )
+    Text(
+        formatKrw(data.dailySafeAllowance),
+        style = TextStyle(
+            color = statusColor(data),
+            fontWeight = FontWeight.Bold,
+            fontSize = if (wide) 24.sp else 19.sp,
+        ),
+        maxLines = 1,
+    )
+    Text(
+        "잔액 ${formatKrw(data.remainingAllowance)}  ·  ${data.daysRemaining}일",
+        style = TextStyle(color = colors.onSurfaceVariant, fontSize = 10.sp),
+        maxLines = 1,
+    )
+}
+
+/** 4x2 has only one row of vertical space, so information and actions share it. */
+@Composable
+private fun MediumContent(context: Context, data: WidgetViewData) {
+    val colors = GlanceTheme.colors
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+        Column(modifier = GlanceModifier.defaultWeight()) {
+            BudgetSummary(data, true)
+        }
+        Spacer(modifier = GlanceModifier.width(10.dp))
+        Column(modifier = GlanceModifier.defaultWeight()) {
+            Text(
+                "바로 기록",
+                style = TextStyle(color = colors.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 9.sp),
+                maxLines = 1,
+            )
+            Spacer(modifier = GlanceModifier.height(3.dp))
+            if (data.quickEntries.isEmpty()) {
+                Text(
+                    "＋ 지출 입력",
+                    modifier = GlanceModifier
+                        .fillMaxWidth()
+                        .background(colors.primary)
+                        .padding(horizontal = 8.dp, vertical = 7.dp)
+                        .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://transaction/new"))),
+                    style = TextStyle(color = colors.onPrimary, fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                    maxLines = 1,
+                )
+            } else {
+                data.quickEntries.take(2).forEachIndexed { index, entry ->
+                    if (index > 0) Spacer(modifier = GlanceModifier.height(4.dp))
+                    QuickEntryChip(context, entry, compact = true, modifier = GlanceModifier.fillMaxWidth())
                 }
             }
         }
@@ -258,24 +342,7 @@ private fun QuickEntryChips(context: Context, entries: List<WidgetQuickEntry>) {
         Row(modifier = GlanceModifier.fillMaxWidth()) {
             row.forEachIndexed { columnIndex, entry ->
                 if (columnIndex > 0) Spacer(modifier = GlanceModifier.width(6.dp))
-                Text(
-                    entry.label,
-                    modifier = GlanceModifier
-                        .defaultWeight()
-                        .background(GlanceTheme.colors.surfaceVariant)
-                        .padding(horizontal = 8.dp, vertical = 7.dp)
-                        .clickable(
-                            actionStartActivity(
-                                deepLinkIntent(context, "expendbreak://quick/${entry.id}"),
-                            ),
-                        ),
-                    style = TextStyle(
-                        color = GlanceTheme.colors.onSurface,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                    ),
-                    maxLines = 1,
-                )
+                QuickEntryChip(context, entry, compact = false, modifier = GlanceModifier.defaultWeight())
             }
             // A lone chip should not stretch across the whole widget.
             if (row.size == 1) {
@@ -284,6 +351,33 @@ private fun QuickEntryChips(context: Context, entries: List<WidgetQuickEntry>) {
             }
         }
     }
+}
+
+@Composable
+private fun QuickEntryChip(
+    context: Context,
+    entry: WidgetQuickEntry,
+    compact: Boolean,
+    modifier: GlanceModifier = GlanceModifier,
+) {
+    val colors = GlanceTheme.colors
+    Text(
+        "${if (entry.amount == null) "₩" else "＋"} ${entry.label}",
+        modifier = modifier
+            .background(colors.primaryContainer)
+            .padding(horizontal = if (compact) 7.dp else 9.dp, vertical = if (compact) 5.dp else 6.dp)
+            .clickable(
+                actionStartActivity(
+                    deepLinkIntent(context, "expendbreak://quick/${entry.id}"),
+                ),
+            ),
+        style = TextStyle(
+            color = colors.onPrimaryContainer,
+            fontWeight = FontWeight.Bold,
+            fontSize = if (compact) 9.sp else 10.sp,
+        ),
+        maxLines = 1,
+    )
 }
 
 @Composable

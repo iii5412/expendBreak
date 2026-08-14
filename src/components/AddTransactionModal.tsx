@@ -11,6 +11,8 @@ import {
   Mic,
   RotateCcw,
   Volume2,
+  Zap,
+  Settings2,
 } from 'lucide-react';
 import {
   Category,
@@ -24,6 +26,7 @@ import {
   PaymentMethodType,
   RecurringOccurrence,
   RecurringTemplate,
+  QuickEntry,
 } from '../types';
 import { formatKRW, getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
@@ -59,6 +62,10 @@ interface AddTransactionModalProps {
   aiClassificationEnabled?: boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
+  quickEntries?: QuickEntry[];
+  /** Runs the same one-tap path used by the home screen and widget. */
+  onPostQuickEntry?: (id: string, amountOverride?: number) => boolean;
+  onManageQuickEntries?: () => void;
   /** Settles a recurring item directly when this entry turns out to be one. */
   onPostOccurrence?: (
     occurrenceId: string,
@@ -84,6 +91,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   aiClassificationEnabled = true,
   onSaveTransaction,
   onSaveMerchantRule,
+  quickEntries = [],
+  onPostQuickEntry,
+  onManageQuickEntries,
   onPostOccurrence,
 }) => {
   const [activeMode, setActiveMode] = useState<'receipt' | 'voice' | 'ai' | 'manual'>('voice');
@@ -138,6 +148,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [recoverableDraft, setRecoverableDraft] = useState<TransactionDraft | null>(null);
   /** Pending "is this your rent?" question, blocking the save until answered. */
   const [recurringMatchPrompt, setRecurringMatchPrompt] = useState<RecurringMatchCandidate | null>(null);
+  const [quickAmountEntry, setQuickAmountEntry] = useState<QuickEntry | null>(null);
+  const [quickAmount, setQuickAmount] = useState(0);
 
   /**
    * Mode changes the user asked for, which become the remembered default. The
@@ -167,6 +179,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setVoiceResult(null);
       setSaveError(null);
       setRecurringMatchPrompt(null);
+      setQuickAmountEntry(null);
+      setQuickAmount(0);
       setRecoverableDraft(readTransactionDraft());
     }
   }, [isOpen, aiClassificationEnabled]);
@@ -549,6 +563,25 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setInstallmentCurrentRound(1);
     setConfirmInstallmentMonths(1);
     setConfirmInstallmentCurrentRound(1);
+    setQuickAmountEntry(null);
+    setQuickAmount(0);
+  };
+
+  const expenseQuickEntries = quickEntries.filter(entry => entry.type === 'expense');
+
+  const finishQuickEntry = (entry: QuickEntry, amountOverride?: number) => {
+    if (!onPostQuickEntry?.(entry.id, amountOverride)) return;
+    resetAll();
+    onClose();
+  };
+
+  const selectQuickEntry = (entry: QuickEntry) => {
+    if (entry.amount === null) {
+      setQuickAmountEntry(entry);
+      setQuickAmount(0);
+      return;
+    }
+    finishQuickEntry(entry);
   };
 
   const saveErrorNotice = saveError ? (
@@ -688,6 +721,85 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               </button>
             </div>
           </div>
+        )}
+
+        {/* The central + button is the fastest route into the app, so saved
+            expenses live here as well as on the dashboard and widget. */}
+        {onPostQuickEntry && (
+          <section className="space-y-3 rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-500/10 via-slate-950 to-rose-500/5 p-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="flex items-center gap-1.5 text-sm font-extrabold text-amber-200">
+                  <Zap className="h-4 w-4 fill-amber-300 text-amber-300" aria-hidden="true" />
+                  퀵등록으로 바로 기록
+                </h3>
+                <p className="mt-0.5 text-[11px] text-slate-400">자주 쓰는 지출은 입력 과정 없이 바로 저장합니다.</p>
+              </div>
+              {onManageQuickEntries && (
+                <button
+                  type="button"
+                  onClick={onManageQuickEntries}
+                  className="flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-bold text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                >
+                  <Settings2 className="h-3.5 w-3.5" /> 관리
+                </button>
+              )}
+            </div>
+
+            {expenseQuickEntries.length > 0 ? (
+              <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
+                {expenseQuickEntries.map(entry => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    onClick={() => selectQuickEntry(entry)}
+                    className="min-h-14 min-w-[7.25rem] shrink-0 rounded-xl border border-amber-500/20 bg-slate-900 px-3 py-2 text-left transition-colors hover:border-amber-400/50 hover:bg-slate-800 active:scale-[0.98]"
+                  >
+                    <span className="block truncate text-xs font-extrabold text-slate-100">{entry.label}</span>
+                    <span className="mt-0.5 block text-[11px] font-semibold text-amber-300">
+                      {entry.amount === null ? '금액 입력' : formatKRW(entry.amount)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={onManageQuickEntries}
+                className="min-h-11 w-full rounded-xl border border-dashed border-slate-700 text-xs font-semibold text-slate-400 hover:border-amber-500/40 hover:text-amber-200"
+              >
+                지출 퀵등록 만들기
+              </button>
+            )}
+
+            {quickAmountEntry && (
+              <div className="space-y-3 rounded-xl border border-amber-500/30 bg-slate-900 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-extrabold text-slate-100">{quickAmountEntry.label}</p>
+                    <p className="text-[11px] text-slate-400">이번 지출 금액만 입력하세요.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setQuickAmountEntry(null)}
+                    className="rounded-lg p-2 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+                    aria-label="퀵등록 금액 입력 닫기"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <AmountInput value={quickAmount} onChange={setQuickAmount} showQuickAdd autoFocus />
+                <button
+                  type="button"
+                  disabled={quickAmount <= 0}
+                  onClick={() => finishQuickEntry(quickAmountEntry, quickAmount)}
+                  className="min-h-11 w-full rounded-xl bg-amber-400 text-sm font-extrabold text-slate-950 transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {quickAmount > 0 ? `${formatKRW(quickAmount)} 바로 기록` : '금액을 입력해 주세요'}
+                </button>
+              </div>
+            )}
+          </section>
         )}
 
         {/* Mode Switcher - 2x2 Grid on Mobile for 4 modes */}
