@@ -32,6 +32,12 @@ import {
   deleteBankAccount,
   getPaymentCards,
   getCycleBaseline,
+  getQuickEntries,
+  saveQuickEntry,
+  updateQuickEntry,
+  deleteQuickEntry,
+  reorderQuickEntry,
+  postQuickEntry,
   saveCycleBaseline,
   setCardSettlementPaid,
   savePaymentCard,
@@ -58,7 +64,9 @@ import {
   exportTransactionsCSV,
   resetAllData,
   initializeStorageAfterLogin,
+  ensureTransactionHistoryFor,
   shutdownStorage,
+  shutdownStorageAndForgetCache,
   getClassificationIssueSummary,
   repairClassificationIssues,
 } from './utils/storage';
@@ -75,13 +83,15 @@ import {
 } from './utils/calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
-import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
+import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, QuickEntry, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
 import { logoutOwner, onSessionStateChanged } from './utils/auth';
 import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
+import { QuickEntryBar } from './components/QuickEntryBar';
+import { QuickEntrySuggestion, suggestQuickEntryCandidates } from './utils/quickEntrySuggestions';
 import { OnboardingResult, OnboardingSheet } from './components/OnboardingSheet';
 import { findManualCardSettlementCandidates } from './utils/cardSettlementPlans';
 import { calculateFutureCommitments } from './utils/futureCommitments';
@@ -129,6 +139,9 @@ export default function App() {
   /** Reset whenever the drift changes, so "그대로 두기" hides one notice, not all of them. */
   const [dismissedDelta, setDismissedDelta] = useState<number | null>(null);
   const [dismissedClosingYM, setDismissedClosingYM] = useState<string | null>(null);
+  const [quickEntries, setQuickEntries] = useState<QuickEntry[]>([]);
+  /** Suggestions turned down in this session, keyed by merchant + category. */
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<string[]>([]);
   const [nativeDestination, setNativeDestination] = useState<NativeDestination | null>(null);
 
   // Reload state from storage
@@ -147,6 +160,7 @@ export default function App() {
     setBankAccounts(getBankAccounts());
     setPaymentCards(getPaymentCards());
     setCycleBaseline(getCycleBaseline(currentYM));
+    setQuickEntries(getQuickEntries());
   };
 
   useEffect(() => startNetworkWatch(), []);
@@ -167,7 +181,9 @@ export default function App() {
         })
         .catch(async error => {
           console.error('Authenticated data initialization failed:', error);
-          shutdownStorage();
+          // A boot that failed may have left a half-written cache behind, so
+          // this path drops it rather than trusting it on the next unlock.
+          shutdownStorageAndForgetCache();
           await logoutOwner().catch(() => undefined);
           setBootState('locked');
         });
@@ -180,6 +196,13 @@ export default function App() {
     refreshAppData();
     return subscribeToStorage(refreshAppData);
   }, [bootState, currentYM]);
+
+  // Boot only loads the recent accounting periods, so moving the selector far
+  // enough back has to fetch the rest before this month's figures mean anything.
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    void ensureTransactionHistoryFor(currentYM);
+  }, [bootState, currentYM, userProfile.monthStartDay]);
 
   const handleUnlockSuccess = async () => {
     setBootState('loading');
@@ -635,6 +658,90 @@ export default function App() {
     return transaction;
   };
 
+  const suggestionKey = (suggestion: QuickEntrySuggestion) =>
+    `${suggestion.merchant.trim().toLowerCase()}::${suggestion.categoryId}`;
+
+  const quickEntrySuggestions = useMemo(
+    () => suggestQuickEntryCandidates(transactions, quickEntries)
+      .filter(suggestion => !dismissedSuggestions.includes(suggestionKey(suggestion))),
+    [transactions, quickEntries, dismissedSuggestions],
+  );
+
+  const handlePostQuickEntry = (id: string, amountOverride?: number) => {
+    let result;
+    try {
+      result = postQuickEntry(id, amountOverride);
+    } catch (error) {
+      // The saved category can be deleted or merged after the chip was made.
+      console.error('Failed to record quick entry:', error);
+      showToast({
+        message: '퀵등록 항목을 기록하지 못했습니다.',
+        description: '카테고리가 바뀌었을 수 있습니다. 관리에서 항목을 확인해 주세요.',
+        tone: 'error',
+      });
+      return;
+    }
+    if (!result) {
+      showToast({ message: '퀵등록 항목을 기록하지 못했습니다.', tone: 'error' });
+      return;
+    }
+    const { transaction, synced } = result;
+    const label = `${transaction.merchant || '거래'} ${formatKRW(transaction.amount)}`;
+    void synced.then(ok => {
+      showToast(
+        ok
+          ? { message: '거래를 저장했습니다.', description: label, tone: 'success' }
+          : {
+              message: '이 기기에 저장했습니다.',
+              description: `${label} · DB 반영은 연결이 복구되면 자동으로 재시도합니다.`,
+              tone: 'warning',
+            },
+      );
+    });
+  };
+
+  const handleAcceptQuickEntrySuggestion = (suggestion: QuickEntrySuggestion) => {
+    saveQuickEntry({
+      label: suggestion.merchant,
+      type: suggestion.type,
+      amount: suggestion.fixedAmount,
+      categoryId: suggestion.categoryId,
+      merchant: suggestion.merchant,
+      memo: '',
+      paymentMethodType: 'card',
+      accountId: null,
+      cardId: null,
+    });
+    showToast({
+      message: '퀵등록에 추가했습니다.',
+      description: suggestion.fixedAmount === null
+        ? `${suggestion.merchant} · 누를 때 금액을 입력합니다.`
+        : `${suggestion.merchant} ${formatKRW(suggestion.fixedAmount)}`,
+      tone: 'success',
+    });
+  };
+
+  const handleDeleteQuickEntry = async (entry: QuickEntry) => {
+    const accepted = await confirm({
+      title: '이 퀵등록 항목을 삭제할까요?',
+      description: '이미 기록한 거래는 그대로 남습니다.',
+      details: [
+        { label: '이름', value: entry.label },
+        { label: '사용처', value: entry.merchant || '사용처 미입력' },
+        { label: '금액', value: entry.amount === null ? '누를 때 입력' : formatKRW(entry.amount) },
+      ],
+      confirmLabel: '삭제',
+      tone: 'danger',
+    });
+    if (!accepted) return;
+    deleteQuickEntry(entry.id);
+    showToast({ message: '퀵등록 항목을 삭제했습니다.', description: entry.label, tone: 'success' });
+  };
+
+  const handleDismissQuickEntrySuggestion = (suggestion: QuickEntrySuggestion) => {
+    setDismissedSuggestions(previous => [...previous, suggestionKey(suggestion)]);
+  };
+
   const handleDeleteTransaction = async (transaction: Transaction) => {
     const category = categories.find(item => item.id === transaction.categoryId);
     const accepted = await confirm({
@@ -829,6 +936,17 @@ export default function App() {
                 onCarryLeftoverToSavings={amount => void handleConfirmBaseline(amount)}
               />
             )}
+            quickEntrySlot={(
+              <QuickEntryBar
+                entries={quickEntries}
+                categories={categories}
+                suggestions={quickEntrySuggestions}
+                onPost={handlePostQuickEntry}
+                onAcceptSuggestion={handleAcceptQuickEntrySuggestion}
+                onDismissSuggestion={handleDismissQuickEntrySuggestion}
+                onManage={() => handleNavigateTab('management', 'quick_entries')}
+              />
+            )}
           />
         )}
 
@@ -980,6 +1098,17 @@ export default function App() {
             onExportCSV={handleExportCSV}
             onResetData={resetAllData}
             onRepairClassificationIssues={repairClassificationIssues}
+            quickEntries={quickEntries}
+            onCreateQuickEntry={draft => {
+              saveQuickEntry(draft);
+              showToast({ message: '퀵등록에 추가했습니다.', description: draft.label, tone: 'success' });
+            }}
+            onUpdateQuickEntry={(id, draft) => {
+              updateQuickEntry(id, draft);
+              showToast({ message: '퀵등록 항목을 수정했습니다.', description: draft.label, tone: 'success' });
+            }}
+            onDeleteQuickEntry={entry => void handleDeleteQuickEntry(entry)}
+            onReorderQuickEntry={(id, direction) => reorderQuickEntry(id, direction)}
           />
         )}
       </main>

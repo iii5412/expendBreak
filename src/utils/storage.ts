@@ -9,6 +9,7 @@ import {
   AIFeedbackResult,
   CycleBaseline,
   CycleBaselineFigures,
+  QuickEntry,
 } from '../types';
 import {
   DEFAULT_EXPENSE_CATEGORIES,
@@ -48,13 +49,20 @@ import {
   syncPaymentCardToFirestore,
   deletePaymentCardFromFirestore,
   syncCycleBaselineToFirestore,
+  syncQuickEntryToFirestore,
+  deleteQuickEntryFromFirestore,
   deleteCycleBaselineFromFirestore,
   clearFirestoreAllData,
-  hydrateFirestoreFromCloud,
   stopFirestoreSync,
   flushFirestoreOutbox,
   clearFirestoreOutbox,
+  syncPendingCountFromStorage,
+  clearTransactionHistoryFloor,
+  getLoadedTransactionHistoryFloor,
+  loadTransactionHistoryFrom,
 } from './firestoreSync';
+import { reportWriteFailed } from './syncStatus';
+import { getTransactionWindowStart } from './transactionWindow';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch } from './auth';
 import { getDefaultCategoryIdForType } from './categoryIntegrity';
@@ -74,11 +82,18 @@ const STORAGE_KEYS = {
   BANK_ACCOUNTS: 'brake_bank_accounts',
   PAYMENT_CARDS: 'brake_payment_cards',
   CYCLE_BASELINES: 'brake_cycle_baselines',
+  QUICK_ENTRIES: 'brake_quick_entries',
   AI_INSIGHTS: 'brake_ai_insights',
 };
 
 let storageReady = false;
 let initializationPromise: Promise<void> | null = null;
+/**
+ * Bumped on every shutdown. Background reconciliation captures the value it
+ * started under and abandons its work if the session ended meanwhile, so a lock
+ * during boot cannot leave listeners attached to a session nobody is in.
+ */
+let sessionGeneration = 0;
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -92,6 +107,7 @@ function readJson<T>(key: string, fallback: T): T {
 
 export function clearLocalAppData() {
   Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+  clearTransactionHistoryFloor();
 }
 
 // Event listener mechanism for reactive state updates
@@ -110,78 +126,175 @@ function notifyListeners() {
 }
 
 /**
- * Authenticated boot sequence: migrate legacy root data, hydrate cloud state, then start listeners.
+ * True when this device still holds a complete enough cache from a previous
+ * session to render the app and record a transaction without any network.
+ *
+ * A profile and a category list are the floor: the dashboard reads the profile
+ * for the accounting cycle, and the entry modal cannot classify anything
+ * without categories.
+ */
+export function hasWarmLocalCache(): boolean {
+  if (!localStorage.getItem(STORAGE_KEYS.USER_PROFILE)) return false;
+  return readJson<Category[]>(STORAGE_KEYS.CATEGORIES, []).length > 0;
+}
+
+/** The live subscription window for whoever is signed in on this device. */
+function currentTransactionWindowStart(): string {
+  const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+  return getTransactionWindowStart(getYearMonthString(), normalizeMonthStartDay(profile.monthStartDay));
+}
+
+/**
+ * Makes sure the cache actually covers `yearMonth` before a screen reports
+ * figures for it. Boot only loads the recent periods, so moving the period
+ * selector far enough back has to reach for the rest.
+ */
+export async function ensureTransactionHistoryFor(yearMonth: string): Promise<void> {
+  if (!storageReady) return;
+  const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+  const startDate = getAccountingPeriod(yearMonth, normalizeMonthStartDay(profile.monthStartDay)).startDate;
+  if (startDate >= getLoadedTransactionHistoryFloor()) return;
+  try {
+    await loadTransactionHistoryFrom(startDate, notifyListeners);
+  } catch (error) {
+    console.error('Failed to load older transaction history:', error);
+    reportWriteFailed('과거 내역을 불러오지 못했습니다. 연결을 확인해 주세요.');
+  }
+}
+
+/** Verifies the legacy-data migration and pushes anything queued while offline. */
+async function ensureServerSideMigration() {
+  const migrationResponse = await authenticatedFetch('/api/migration/ensure', { method: 'POST' });
+  if (!migrationResponse.ok) {
+    const payload = await migrationResponse.json().catch(() => ({}));
+    throw new Error(payload.message || '기존 운영 데이터 확인에 실패했습니다.');
+  }
+}
+
+/**
+ * This app plans spending from salary day (10th) through the day before the
+ * next salary. Persist the migration once so an existing cloud profile does not
+ * keep using the old calendar-month default after refresh.
+ */
+async function applyPaydayPlanningMigration() {
+  const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
+  if (profile.paydayPlanningVersion === 1) return;
+  const migratedProfile: UserProfile = {
+    ...profile,
+    monthStartDay: 10,
+    paydayPlanningVersion: 1,
+    updatedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(migratedProfile));
+  const saved = await syncUserProfileToFirestore(migratedProfile);
+  if (!saved) {
+    throw new Error('급여일 10일 기준 예산 주기를 DB에 저장하지 못했습니다.');
+  }
+}
+
+/**
+ * Cold boot: nothing usable on the device, so the cloud has to answer before
+ * anything can be shown.
+ */
+async function startColdSession() {
+  await ensureServerSideMigration();
+
+  const pendingWritesSaved = await flushFirestoreOutbox();
+  if (!pendingWritesSaved) {
+    throw new Error('이전에 저장하지 못한 변경사항을 DB에 반영하지 못했습니다. 네트워크 연결 후 다시 시도해 주세요.');
+  }
+
+  const { hasCloudData } = await initFirestoreSync(notifyListeners, currentTransactionWindowStart());
+  if (!hasCloudData) {
+    const currentYM = getYearMonthString();
+    const categories = [...DEFAULT_INCOME_CATEGORIES, ...DEFAULT_EXPENSE_CATEGORIES];
+    const budget = getSampleBudget(currentYM);
+    const templates = getSampleRecurringTemplates();
+
+    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(INITIAL_USER_PROFILE));
+    localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
+    localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify({ [currentYM]: budget }));
+    localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(generateSampleTransactionsForMonth(currentYM)));
+    localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify({}));
+
+    const initializationWrites = await Promise.all([
+      syncCategoriesToFirestore(categories),
+      syncUserProfileToFirestore(INITIAL_USER_PROFILE),
+      syncBudgetToFirestore(budget),
+      ...DEFAULT_MERCHANT_RULES.map(rule => syncMerchantRuleToFirestore(rule)),
+    ]);
+    if (initializationWrites.some(result => !result)) {
+      throw new Error('초기 설정을 DB에 저장하지 못했습니다. 네트워크 연결 후 다시 시도해 주세요.');
+    }
+  }
+
+  await applyPaydayPlanningMigration();
+
+  storageReady = true;
+  notifyListeners();
+}
+
+/**
+ * Warm boot: the cache is already a complete, self-consistent view of the last
+ * session, so the app renders from it immediately and reconciles with the cloud
+ * afterwards.
+ *
+ * Blocking the first paint on three sequential network round trips is what made
+ * opening the app to record one expense take longer than recording it. Writes
+ * do not depend on the listeners — `persistFirestoreWrite` queues to the outbox
+ * on its own — so a transaction saved during reconciliation is never lost.
+ */
+function startWarmSession(): Promise<void> {
+  storageReady = true;
+  syncPendingCountFromStorage();
+  notifyListeners();
+
+  const generation = sessionGeneration;
+  const sessionEnded = () => generation !== sessionGeneration;
+
+  void (async () => {
+    try {
+      await ensureServerSideMigration();
+      if (sessionEnded()) return;
+      // Push local pending writes before the listeners attach, so a server
+      // snapshot cannot briefly present pre-edit values as the truth.
+      await flushFirestoreOutbox();
+      if (sessionEnded()) return;
+      await initFirestoreSync(notifyListeners, currentTransactionWindowStart());
+      if (sessionEnded()) {
+        stopFirestoreSync();
+        return;
+      }
+      await applyPaydayPlanningMigration();
+      notifyListeners();
+    } catch (error) {
+      if (sessionEnded()) return;
+      console.error('Background cloud reconciliation failed:', error);
+      reportWriteFailed('클라우드와 동기화하지 못했습니다. 연결되면 자동으로 다시 시도합니다.');
+    }
+  })();
+
+  return Promise.resolve();
+}
+
+/**
+ * Authenticated boot sequence. Resolves as soon as the app can render, which is
+ * immediately whenever this device has a usable cache.
  * No caller should invoke this before Firebase PIN authentication succeeds.
  */
 export function initializeStorageAfterLogin() {
   if (storageReady) return Promise.resolve();
   if (initializationPromise) return initializationPromise;
 
-  initializationPromise = (async () => {
-    const migrationResponse = await authenticatedFetch('/api/migration/ensure', { method: 'POST' });
-    if (!migrationResponse.ok) {
-      const payload = await migrationResponse.json().catch(() => ({}));
-      throw new Error(payload.message || '기존 운영 데이터 확인에 실패했습니다.');
-    }
-
-    const pendingWritesSaved = await flushFirestoreOutbox();
-    if (!pendingWritesSaved) {
-      throw new Error('이전에 저장하지 못한 변경사항을 DB에 반영하지 못했습니다. 네트워크 연결 후 다시 시도해 주세요.');
-    }
-
-    const { hasCloudData } = await hydrateFirestoreFromCloud();
-    if (!hasCloudData) {
-      const currentYM = getYearMonthString();
-      const categories = [...DEFAULT_INCOME_CATEGORIES, ...DEFAULT_EXPENSE_CATEGORIES];
-      const budget = getSampleBudget(currentYM);
-      const templates = getSampleRecurringTemplates();
-
-      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(INITIAL_USER_PROFILE));
-      localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
-      localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify({ [currentYM]: budget }));
-      localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
-      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(generateSampleTransactionsForMonth(currentYM)));
-      localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify({}));
-
-      const initializationWrites = await Promise.all([
-        syncCategoriesToFirestore(categories),
-        syncUserProfileToFirestore(INITIAL_USER_PROFILE),
-        syncBudgetToFirestore(budget),
-        ...DEFAULT_MERCHANT_RULES.map(rule => syncMerchantRuleToFirestore(rule)),
-      ]);
-      if (initializationWrites.some(result => !result)) {
-        throw new Error('초기 설정을 DB에 저장하지 못했습니다. 네트워크 연결 후 다시 시도해 주세요.');
-      }
-    }
-
-    // This app plans spending from salary day (10th) through the day before
-    // the next salary. Persist the migration once so an existing cloud profile
-    // does not keep using the old calendar-month default after refresh.
-    const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
-    if (profile.paydayPlanningVersion !== 1) {
-      const migratedProfile: UserProfile = {
-        ...profile,
-        monthStartDay: 10,
-        paydayPlanningVersion: 1,
-        updatedAt: new Date().toISOString(),
-      };
-      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(migratedProfile));
-      const saved = await syncUserProfileToFirestore(migratedProfile);
-      if (!saved) {
-        throw new Error('급여일 10일 기준 예산 주기를 DB에 저장하지 못했습니다.');
-      }
-    }
-
-    storageReady = true;
-    initFirestoreSync(notifyListeners);
-    notifyListeners();
-  })().finally(() => {
-    initializationPromise = null;
-  });
+  initializationPromise = (hasWarmLocalCache() ? startWarmSession() : startColdSession())
+    .finally(() => {
+      initializationPromise = null;
+    });
 
   return initializationPromise;
 }
@@ -191,7 +304,30 @@ export function initializeStorageIfEmpty() {
   return storageReady;
 }
 
+/**
+ * Ends the session on lock, keeping the local cache so the next unlock can
+ * render immediately instead of re-downloading the whole account.
+ *
+ * The lock screen, not an empty cache, is what gates access to the figures. A
+ * user who would rather leave nothing on the device can opt back into wiping
+ * via `wipeCacheOnLock`, which restores the previous behaviour.
+ */
 export function shutdownStorage() {
+  const wipeRequested = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE).wipeCacheOnLock;
+  sessionGeneration += 1;
+  stopFirestoreSync();
+  storageReady = false;
+  initializationPromise = null;
+  if (wipeRequested) clearLocalAppData();
+  notifyListeners();
+}
+
+/**
+ * Ends the session and drops the cache. For paths where the cached data is
+ * suspect or must not survive: a failed boot, and an explicit device wipe.
+ */
+export function shutdownStorageAndForgetCache() {
+  sessionGeneration += 1;
   stopFirestoreSync();
   storageReady = false;
   initializationPromise = null;
@@ -1220,6 +1356,114 @@ export async function clearCycleBaseline(yearMonth: string): Promise<void> {
 export function getMerchantRules(): MerchantRule[] {
   initializeStorageIfEmpty();
   return readJson<MerchantRule[]>(STORAGE_KEYS.MERCHANT_RULES, []);
+}
+
+/* Quick entries: saved shapes for the transactions recorded over and over. */
+
+export function getQuickEntries(): QuickEntry[] {
+  initializeStorageIfEmpty();
+  return readJson<QuickEntry[]>(STORAGE_KEYS.QUICK_ENTRIES, [])
+    .slice()
+    .sort((left, right) => left.sortOrder - right.sortOrder);
+}
+
+function writeQuickEntries(entries: QuickEntry[]) {
+  localStorage.setItem(STORAGE_KEYS.QUICK_ENTRIES, JSON.stringify(entries));
+  notifyListeners();
+}
+
+export function saveQuickEntry(
+  input: Omit<QuickEntry, 'id' | 'sortOrder' | 'useCount' | 'lastUsedAt' | 'createdAt' | 'updatedAt'>,
+): QuickEntry {
+  assertCategoryMatchesType(input.type, input.categoryId);
+  const entries = getQuickEntries();
+  const now = new Date().toISOString();
+  const entry: QuickEntry = {
+    ...input,
+    id: `quick_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    sortOrder: entries.length > 0 ? Math.max(...entries.map(item => item.sortOrder)) + 1 : 0,
+    useCount: 0,
+    lastUsedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  writeQuickEntries([...entries, entry]);
+  void syncQuickEntryToFirestore(entry);
+  return entry;
+}
+
+export function updateQuickEntry(id: string, patch: Partial<QuickEntry>): QuickEntry | null {
+  const entries = getQuickEntries();
+  const target = entries.find(entry => entry.id === id);
+  if (!target) return null;
+
+  const merged: QuickEntry = { ...target, ...patch, id: target.id, updatedAt: new Date().toISOString() };
+  assertCategoryMatchesType(merged.type, merged.categoryId);
+  writeQuickEntries(entries.map(entry => (entry.id === id ? merged : entry)));
+  void syncQuickEntryToFirestore(merged);
+  return merged;
+}
+
+export function deleteQuickEntry(id: string): boolean {
+  const entries = getQuickEntries();
+  if (!entries.some(entry => entry.id === id)) return false;
+  writeQuickEntries(entries.filter(entry => entry.id !== id));
+  void deleteQuickEntryFromFirestore(id);
+  return true;
+}
+
+/** Moves one chip up or down the row, persisting the new order for every chip it passed. */
+export function reorderQuickEntry(id: string, direction: -1 | 1): boolean {
+  const entries = getQuickEntries();
+  const index = entries.findIndex(entry => entry.id === id);
+  const target = index + direction;
+  if (index === -1 || target < 0 || target >= entries.length) return false;
+
+  const reordered = [...entries];
+  [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+
+  const now = new Date().toISOString();
+  const renumbered = reordered.map((entry, position) => (
+    entry.sortOrder === position ? entry : { ...entry, sortOrder: position, updatedAt: now }
+  ));
+  writeQuickEntries(renumbered);
+  // Only the chips whose position actually moved need a write.
+  renumbered
+    .filter(entry => entry.updatedAt === now)
+    .forEach(entry => void syncQuickEntryToFirestore(entry));
+  return true;
+}
+
+/**
+ * Records one transaction from a saved quick entry.
+ *
+ * `amountOverride` carries the number typed for a variable-amount chip; a fixed
+ * chip ignores it. Usage counters feed the "most used first" ordering hint.
+ */
+export function postQuickEntry(id: string, amountOverride?: number): TransactionSaveResult | null {
+  const entry = getQuickEntries().find(candidate => candidate.id === id);
+  if (!entry) return null;
+
+  const amount = entry.amount ?? amountOverride;
+  if (!amount || amount <= 0) return null;
+
+  const now = new Date();
+  const result = saveTransaction({
+    type: entry.type,
+    amount,
+    occurredAt: now.toISOString(),
+    localDate: getLocalDateString(now),
+    categoryId: entry.categoryId,
+    merchant: entry.merchant,
+    memo: entry.memo,
+    source: 'manual',
+    paymentMethodType: entry.paymentMethodType,
+    accountId: entry.accountId ?? null,
+    cardId: entry.cardId ?? null,
+  });
+
+  updateQuickEntry(id, { useCount: entry.useCount + 1, lastUsedAt: now.toISOString() });
+  return result;
 }
 
 export function saveMerchantRule(pattern: string, categoryId: string): MerchantRule {

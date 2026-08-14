@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { QuickEntryDraft, QuickEntryManager } from './QuickEntryManager';
 import {
   Calendar,
   DollarSign,
@@ -32,6 +33,7 @@ import {
   Category,
   UserProfile,
   MerchantRule,
+  QuickEntry,
   BankAccount,
   PaymentCard,
   PaymentMethodType,
@@ -104,6 +106,11 @@ interface ManagementViewProps {
   onExportCSV: () => void;
   onResetData: () => void | Promise<void>;
   onRepairClassificationIssues?: () => { repairedTransactions: number; repairedTemplates: number };
+  quickEntries?: QuickEntry[];
+  onCreateQuickEntry?: (draft: QuickEntryDraft) => void;
+  onUpdateQuickEntry?: (id: string, draft: QuickEntryDraft) => void;
+  onDeleteQuickEntry?: (entry: QuickEntry) => void;
+  onReorderQuickEntry?: (id: string, direction: -1 | 1) => void;
 }
 
 export const ManagementView: React.FC<ManagementViewProps> = ({
@@ -133,10 +140,15 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   onExportCSV,
   onResetData,
   onRepairClassificationIssues,
+  quickEntries = [],
+  onCreateQuickEntry,
+  onUpdateQuickEntry,
+  onDeleteQuickEntry,
+  onReorderQuickEntry,
 }) => {
   const { showToast } = useToast();
   const confirm = useConfirm();
-  const [subTab, setSubTab] = useState<'recurring' | 'budget' | 'category' | 'settings'>(
+  const [subTab, setSubTab] = useState<'recurring' | 'budget' | 'category' | 'quick_entries' | 'settings'>(
     (initialSubTab as any) || 'recurring'
   );
 
@@ -484,10 +496,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   return (
     <div className="space-y-5 pb-24 relative">
       {/* Top Sub-Navigation Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-1.5 flex items-center justify-between text-xs">
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-1.5 grid grid-cols-3 gap-1 text-xs">
         <button
           onClick={() => setSubTab('recurring')}
-          className={`flex-1 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
             subTab === 'recurring'
               ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
               : 'text-slate-400 hover:text-slate-200'
@@ -499,7 +511,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
         <button
           onClick={() => setSubTab('budget')}
-          className={`flex-1 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
             subTab === 'budget'
               ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
               : 'text-slate-400 hover:text-slate-200'
@@ -511,7 +523,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
         <button
           onClick={() => setSubTab('category')}
-          className={`flex-1 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
             subTab === 'category'
               ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
               : 'text-slate-400 hover:text-slate-200'
@@ -522,8 +534,20 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
         </button>
 
         <button
+          onClick={() => setSubTab('quick_entries')}
+          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+            subTab === 'quick_entries'
+              ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5" />
+          <span>퀵등록</span>
+        </button>
+
+        <button
           onClick={() => setSubTab('settings')}
-          className={`flex-1 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
             subTab === 'settings'
               ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
               : 'text-slate-400 hover:text-slate-200'
@@ -581,7 +605,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
             <button
               onClick={() => setRecurringViewMode('bank_accounts')}
-              className={`flex-1 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+              className={`flex-1 min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
                 recurringViewMode === 'bank_accounts'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700 shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -593,7 +617,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
             <button
               onClick={() => setRecurringViewMode('schedule')}
-              className={`flex-1 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+              className={`flex-1 min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
                 recurringViewMode === 'schedule'
                   ? 'bg-slate-800 text-rose-400 border border-slate-700 shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -1114,6 +1138,19 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       )}
 
       {/* SUBTAB 4: 설정 & AI (SETTINGS & AI) */}
+      {subTab === 'quick_entries' && (
+        <QuickEntryManager
+          entries={quickEntries}
+          categories={categories}
+          bankAccounts={bankAccounts}
+          paymentCards={paymentCards}
+          onCreate={draft => onCreateQuickEntry?.(draft)}
+          onUpdate={(id, draft) => onUpdateQuickEntry?.(id, draft)}
+          onDelete={entry => onDeleteQuickEntry?.(entry)}
+          onReorder={(id, direction) => onReorderQuickEntry?.(id, direction)}
+        />
+      )}
+
       {subTab === 'settings' && (
         <div className="space-y-4 text-xs">
           {/* Accounting cycle */}
@@ -1278,6 +1315,30 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                   <option key={minutes} value={minutes}>{describeIdleLockMinutes(minutes)}</option>
                 ))}
               </select>
+            </label>
+
+            <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <span className="min-w-0">
+                <span className="block font-bold text-slate-200">잠글 때 기기 데이터 삭제</span>
+                <span className="block text-xs text-slate-400">
+                  켜면 잠글 때마다 이 기기의 사본을 지웁니다. 대신 잠금을 풀 때마다 전체를 다시 내려받아 앱이 느리게 열립니다.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={Boolean(userProfile.wipeCacheOnLock)}
+                onChange={event => {
+                  const wipeCacheOnLock = event.target.checked;
+                  onUpdateUserProfile({ wipeCacheOnLock });
+                  triggerToast(
+                    wipeCacheOnLock
+                      ? '잠글 때 기기 데이터를 삭제합니다.'
+                      : '기기 데이터를 유지해 잠금 해제가 빨라집니다.',
+                  );
+                }}
+                className="shrink-0 w-11 h-11 accent-emerald-500"
+                aria-label="잠글 때 기기 데이터 삭제"
+              />
             </label>
 
             <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-xs text-slate-400 space-y-1">

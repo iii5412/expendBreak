@@ -37,6 +37,7 @@ import {
   readTransactionDraft,
   saveTransactionDraft,
 } from '../utils/transactionDraft';
+import { readPreferredEntryMode, savePreferredEntryMode } from '../utils/entryMode';
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { LiveVoicePanel } from './LiveVoicePanel';
@@ -138,6 +139,17 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   /** Pending "is this your rent?" question, blocking the save until answered. */
   const [recurringMatchPrompt, setRecurringMatchPrompt] = useState<RecurringMatchCandidate | null>(null);
 
+  /**
+   * Mode changes the user asked for, which become the remembered default. The
+   * programmatic `setActiveMode('manual')` hops after an AI or voice result are
+   * deliberately not routed through here — they are a step inside another flow,
+   * not a statement about how this person prefers to enter transactions.
+   */
+  const selectMode = (mode: 'receipt' | 'voice' | 'ai' | 'manual') => {
+    setActiveMode(mode);
+    savePreferredEntryMode(mode);
+  };
+
   const failValidation = (message: string, focusElementId?: string) => {
     setSaveError(message);
     if (focusElementId) document.getElementById(focusElementId)?.focus();
@@ -150,7 +162,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setActiveMode(aiClassificationEnabled ? 'voice' : 'manual');
+      setActiveMode(readPreferredEntryMode(aiClassificationEnabled));
       setVoiceInputKind('live');
       setVoiceResult(null);
       setSaveError(null);
@@ -687,7 +699,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           {aiClassificationEnabled && (
             <button
               onClick={() => {
-                setActiveMode('voice');
+                selectMode('voice');
               }}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
                 activeMode === 'voice'
@@ -703,7 +715,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           {aiClassificationEnabled && (
             <button
               onClick={() => {
-                setActiveMode('ai');
+                selectMode('ai');
                 setVoiceResult(null);
               }}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
@@ -720,7 +732,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           {aiClassificationEnabled && (
             <button
               onClick={() => {
-                setActiveMode('receipt');
+                selectMode('receipt');
                 setVoiceResult(null);
               }}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
@@ -736,7 +748,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
           <button
             onClick={() => {
-              setActiveMode('manual');
+              selectMode('manual');
               setVoiceResult(null);
             }}
             className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${

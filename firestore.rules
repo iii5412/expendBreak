@@ -109,6 +109,16 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
 
+      match /quickEntries/{documentId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && validTransactionType()
+          && request.resource.data.label is string
+          && (request.resource.data.amount == null
+              || (request.resource.data.amount is number && request.resource.data.amount > 0))
+          && categoryMatches(userId);
+      }
+
       match /bankAccounts/{documentId} {
         allow read, write: if isOwner(userId);
       }

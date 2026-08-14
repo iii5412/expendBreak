@@ -47,6 +47,8 @@ interface DashboardViewProps {
   baselineChangeDismissed: boolean;
   /** Rendered above everything when the previous cycle has a plan to close out. */
   cycleClosingSlot?: React.ReactNode;
+  /** One-tap quick entry chips, rendered under the allowance card. */
+  quickEntrySlot?: React.ReactNode;
 }
 
 /** `2026-08-01` -> `8/1`. */
@@ -116,6 +118,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onDismissBaselineChange,
   baselineChangeDismissed,
   cycleClosingSlot,
+  quickEntrySlot,
 }) => {
   const getAlertBadgeProps = () => {
     switch (summary.alertLevel) {
@@ -569,6 +572,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 1b. Repeat spending, one tap. Sits directly under the allowance figure
+          it moves, and above the cards that only explain the month. */}
+      {quickEntrySlot}
 
       {/* 2. Credit card usage and next settlement estimate */}
       {(cardPaymentSummary.creditCards.length > 0 || cardPaymentSummary.totalCardUsage > 0) && (

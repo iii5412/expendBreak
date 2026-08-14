@@ -216,6 +216,31 @@ export interface CycleBaseline extends CycleBaselineFigures {
   updatedAt: string;
 }
 
+/**
+ * A saved shape for a transaction the user records over and over, so the
+ * repeat costs one tap instead of a full trip through the entry modal.
+ */
+export interface QuickEntry {
+  id: string;
+  /** What the chip reads, e.g. "점심" or "출근 교통비". */
+  label: string;
+  type: TransactionType;
+  /** `null` asks for the amount on use; a number saves straight away. */
+  amount: number | null;
+  categoryId: string;
+  merchant: string;
+  memo: string;
+  paymentMethodType: PaymentMethodType;
+  accountId?: string | null;
+  cardId?: string | null;
+  /** Manual ordering of the chip row; lower comes first. */
+  sortOrder: number;
+  useCount: number;
+  lastUsedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MerchantRule {
   id: string;
   pattern: string; // e.g. "배민", "카카오택시"
@@ -245,6 +270,12 @@ export interface UserProfile {
   onboardingCompletedAt?: string | null;
   /** Idle minutes before the app locks. 0 disables the idle lock. */
   idleLockMinutes?: number;
+  /**
+   * Clear the on-device cache every time the app locks. Off by default: keeping
+   * the cache is what makes unlocking instant, and the PIN screen still gates
+   * access. Turn it on to leave nothing readable on a shared or at-risk device.
+   */
+  wipeCacheOnLock?: boolean;
   /** Android home-screen widget disclosure policy. */
   widgetPrivacyMode?: WidgetPrivacyMode;
   securityPinEnabled?: boolean;

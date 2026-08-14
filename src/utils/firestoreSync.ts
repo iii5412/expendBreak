@@ -8,6 +8,8 @@ import {
   deleteDoc,
   writeBatch,
   runTransaction,
+  query,
+  where,
 } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import {
@@ -20,6 +22,7 @@ import {
   RecurringOccurrence,
   MerchantRule,
   CycleBaseline,
+  QuickEntry,
   UserProfile
 } from '../types';
 import {
@@ -32,6 +35,7 @@ import {
   resetSyncStatus,
 } from './syncStatus';
 import { stripUndefined } from './firestorePayload';
+import { mergeFetchedHistory, mergeTransactionWindow } from './transactionWindow';
 
 const COLLECTION_APP_SETTINGS = 'appSettings';
 const DOC_GLOBAL_SETTINGS = 'global';
@@ -44,6 +48,7 @@ const COLLECTION_MERCHANT_RULES = 'merchantRules';
 const COLLECTION_BANK_ACCOUNTS = 'bankAccounts';
 const COLLECTION_PAYMENT_CARDS = 'paymentCards';
 const COLLECTION_CYCLE_BASELINES = 'cycleBaselines';
+const COLLECTION_QUICK_ENTRIES = 'quickEntries';
 const FIRESTORE_OUTBOX_KEY = 'brake_firestore_outbox';
 
 interface PendingFirestoreWrite {
@@ -88,6 +93,7 @@ const COLLECTION_LABELS: Record<string, string> = {
   bankAccounts: '계좌',
   paymentCards: '카드',
   cycleBaselines: '주기 생활비 계획',
+  quickEntries: '퀵등록',
   appSettings: '앱 설정',
 };
 
@@ -193,6 +199,11 @@ export function syncPendingCountFromStorage() {
   reportPendingCount(readFirestoreOutbox().length);
 }
 
+export function clearTransactionHistoryFloor() {
+  localStorage.removeItem(TRANSACTION_HISTORY_FLOOR_KEY);
+  liveTransactionWindowStart = '';
+}
+
 export function clearFirestoreOutbox() {
   localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
   resetSyncStatus();
@@ -209,6 +220,7 @@ const STORAGE_KEYS = {
   BANK_ACCOUNTS: 'brake_bank_accounts',
   PAYMENT_CARDS: 'brake_payment_cards',
   CYCLE_BASELINES: 'brake_cycle_baselines',
+  QUICK_ENTRIES: 'brake_quick_entries',
 };
 
 type SyncNotifyCallback = () => void;
@@ -251,77 +263,129 @@ async function readCollection<T>(collectionName: string): Promise<T[]> {
   return snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
 }
 
-/** Loads the cloud source of truth only after PIN/Firebase authentication succeeds. */
-export async function hydrateFirestoreFromCloud() {
-  const [
-    profileSnapshot,
-    categories,
-    transactions,
-    budgets,
-    templates,
-    occurrences,
-    merchantRules,
-    bankAccounts,
-    paymentCards,
-    cycleBaselines,
-  ] = await Promise.all([
-    getDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS)),
-    readCollection<Category>(COLLECTION_CATEGORIES),
-    readCollection<Transaction>(COLLECTION_TRANSACTIONS),
-    readCollection<Budget>(COLLECTION_BUDGETS),
-    readCollection<RecurringTemplate>(COLLECTION_RECURRING_TEMPLATES),
-    readCollection<RecurringOccurrence>(COLLECTION_RECURRING_OCCURRENCES),
-    readCollection<MerchantRule>(COLLECTION_MERCHANT_RULES),
-    readCollection<BankAccount>(COLLECTION_BANK_ACCOUNTS),
-    readCollection<PaymentCard>(COLLECTION_PAYMENT_CARDS),
-    readCollection<CycleBaseline>(COLLECTION_CYCLE_BASELINES),
-  ]);
+/**
+ * Oldest `localDate` currently present in the local transaction cache. Anything
+ * before this has to be fetched before a screen can summarise it truthfully.
+ */
+const TRANSACTION_HISTORY_FLOOR_KEY = 'brake_transaction_history_floor';
 
-  transactions.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
-  const budgetMap = Object.fromEntries(
-    budgets.filter(budget => budget.yearMonth).map(budget => [budget.yearMonth, normalizeBudget(budget)]),
-  );
+let liveTransactionWindowStart = '';
 
-  localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-  localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(merchantRules));
-  localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(bankAccounts));
-  localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(paymentCards));
-  localStorage.setItem(
-    STORAGE_KEYS.CYCLE_BASELINES,
-    JSON.stringify(Object.fromEntries(
-      cycleBaselines.filter(baseline => baseline.yearMonth).map(baseline => [baseline.yearMonth, baseline]),
-    )),
-  );
-  if (profileSnapshot.exists()) {
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profileSnapshot.data()));
-  } else {
-    localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
-  }
-
-  return {
-    hasCloudData: profileSnapshot.exists()
-      || categories.length + transactions.length + budgets.length + templates.length + occurrences.length
-        + merchantRules.length + bankAccounts.length + paymentCards.length + cycleBaselines.length > 0,
-  };
+function readHistoryFloor(fallback: string): string {
+  const stored = localStorage.getItem(TRANSACTION_HISTORY_FLOOR_KEY);
+  return stored && stored < fallback ? stored : fallback;
 }
 
-/** Initialize scoped realtime listeners after the initial cloud hydration. */
-export function initFirestoreSync(onNotify: SyncNotifyCallback) {
-  if (isSyncInitialized) return;
+/** The earliest date the local transaction cache can be trusted to be complete from. */
+export function getLoadedTransactionHistoryFloor(): string {
+  return readHistoryFloor(liveTransactionWindowStart);
+}
+
+/**
+ * Pulls transaction history older than what the live subscription covers, for
+ * when the user navigates to a period outside the boot window. A one-shot read
+ * rather than another subscription: old periods do not change under the user,
+ * and a second live query would fight the first one over the same cache entry.
+ */
+export async function loadTransactionHistoryFrom(startDate: string, onNotify: SyncNotifyCallback) {
+  const floor = getLoadedTransactionHistoryFloor();
+  if (startDate >= floor) return;
+
+  const snapshot = await getDocs(query(
+    scopedCollection(COLLECTION_TRANSACTIONS),
+    where('localDate', '>=', startDate),
+    where('localDate', '<', floor),
+  ));
+  const fetched = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as Transaction);
+
+  const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(mergeFetchedHistory(cached, fetched)));
+  localStorage.setItem(TRANSACTION_HISTORY_FLOOR_KEY, startDate);
+  onNotify();
+}
+
+/** Every source the first snapshot round has to cover before the cache is whole. */
+const SYNC_SOURCES = [
+  'profile',
+  'categories',
+  'transactions',
+  'budgets',
+  'recurringTemplates',
+  'recurringOccurrences',
+  'merchantRules',
+  'bankAccounts',
+  'paymentCards',
+  'cycleBaselines',
+  'quickEntries',
+] as const;
+
+function localCacheHasAnyData(): boolean {
+  if (localStorage.getItem(STORAGE_KEYS.USER_PROFILE)) return true;
+  const arrayKeys = [
+    STORAGE_KEYS.CATEGORIES,
+    STORAGE_KEYS.TRANSACTIONS,
+    STORAGE_KEYS.RECURRING_TEMPLATES,
+    STORAGE_KEYS.RECURRING_OCCURRENCES,
+    STORAGE_KEYS.MERCHANT_RULES,
+    STORAGE_KEYS.BANK_ACCOUNTS,
+    STORAGE_KEYS.PAYMENT_CARDS,
+    STORAGE_KEYS.QUICK_ENTRIES,
+  ];
+  if (arrayKeys.some(key => parseStoredObject<unknown[]>(key, []).length > 0)) return true;
+  const mapKeys = [STORAGE_KEYS.BUDGETS, STORAGE_KEYS.CYCLE_BASELINES];
+  return mapKeys.some(key => Object.keys(parseStoredObject<Record<string, unknown>>(key, {})).length > 0);
+}
+
+/**
+ * Starts the scoped realtime listeners and resolves once every one of them has
+ * delivered its first snapshot.
+ *
+ * That first round *is* the hydration. This used to be preceded by a separate
+ * `getDocs` pass over the same ten collections, which meant every boot
+ * downloaded the whole account twice before the app would render.
+ */
+export function initFirestoreSync(
+  onNotify: SyncNotifyCallback,
+  transactionWindowStart: string,
+): Promise<{ hasCloudData: boolean }> {
+  if (isSyncInitialized) return Promise.resolve({ hasCloudData: localCacheHasAnyData() });
   requireOwnerUid();
   isSyncInitialized = true;
+  liveTransactionWindowStart = transactionWindowStart;
+  localStorage.setItem(TRANSACTION_HISTORY_FLOOR_KEY, readHistoryFloor(transactionWindowStart));
 
-  const subscribeArray = <T,>(collectionName: string, storageKey: string, sort?: (values: T[]) => void) =>
+  const pending = new Set<string>(SYNC_SOURCES);
+  let settle: (() => void) | null = null;
+  let fail: ((error: unknown) => void) | null = null;
+  const firstRound = new Promise<void>((resolve, reject) => {
+    settle = resolve;
+    fail = reject;
+  });
+
+  const markDelivered = (source: string) => {
+    pending.delete(source);
+    if (pending.size === 0) settle?.();
+  };
+
+  /** A listener that never attaches must not leave the boot waiting forever. */
+  const markFailed = (error: unknown) => {
+    snapshotError(error);
+    fail?.(error);
+  };
+
+  const subscribeArray = <T,>(
+    source: string,
+    collectionName: string,
+    storageKey: string,
+    sort?: (values: T[]) => void,
+  ) =>
     onSnapshot(scopedCollection(collectionName), snapshot => {
       const values = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
       sort?.(values);
       localStorage.setItem(storageKey, JSON.stringify(values));
+      markDelivered(source);
       onNotify();
-    }, snapshotError);
+    }, markFailed);
 
   activeUnsubscribers = [
     onSnapshot(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS), snapshot => {
@@ -332,12 +396,25 @@ export function initFirestoreSync(onNotify: SyncNotifyCallback) {
       } else {
         localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
       }
+      markDelivered('profile');
       onNotify();
-    }, snapshotError),
-    subscribeArray<Category>(COLLECTION_CATEGORIES, STORAGE_KEYS.CATEGORIES),
-    subscribeArray<Transaction>(COLLECTION_TRANSACTIONS, STORAGE_KEYS.TRANSACTIONS, values => {
-      values.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
-    }),
+    }, markFailed),
+    subscribeArray<Category>('categories', COLLECTION_CATEGORIES, STORAGE_KEYS.CATEGORIES),
+    // Bounded to the recent accounting periods: subscribing to every
+    // transaction ever recorded made boot time grow with the ledger. Older
+    // history arrives through loadTransactionHistoryFrom on demand.
+    onSnapshot(
+      query(scopedCollection(COLLECTION_TRANSACTIONS), where('localDate', '>=', transactionWindowStart)),
+      snapshot => {
+        const live = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as Transaction);
+        const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+        const merged = mergeTransactionWindow(cached, live, transactionWindowStart);
+        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(merged));
+        markDelivered('transactions');
+        onNotify();
+      },
+      markFailed,
+    ),
     onSnapshot(scopedCollection(COLLECTION_BUDGETS), snapshot => {
       const budgetMap: Record<string, Budget> = {};
       snapshot.docs.forEach(document => {
@@ -345,13 +422,21 @@ export function initFirestoreSync(onNotify: SyncNotifyCallback) {
         budgetMap[budget.yearMonth || document.id] = normalizeBudget(budget);
       });
       localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
+      markDelivered('budgets');
       onNotify();
-    }, snapshotError),
-    subscribeArray<RecurringTemplate>(COLLECTION_RECURRING_TEMPLATES, STORAGE_KEYS.RECURRING_TEMPLATES),
-    subscribeArray<RecurringOccurrence>(COLLECTION_RECURRING_OCCURRENCES, STORAGE_KEYS.RECURRING_OCCURRENCES),
-    subscribeArray<MerchantRule>(COLLECTION_MERCHANT_RULES, STORAGE_KEYS.MERCHANT_RULES),
-    subscribeArray<BankAccount>(COLLECTION_BANK_ACCOUNTS, STORAGE_KEYS.BANK_ACCOUNTS),
-    subscribeArray<PaymentCard>(COLLECTION_PAYMENT_CARDS, STORAGE_KEYS.PAYMENT_CARDS),
+    }, markFailed),
+    subscribeArray<RecurringTemplate>(
+      'recurringTemplates', COLLECTION_RECURRING_TEMPLATES, STORAGE_KEYS.RECURRING_TEMPLATES,
+    ),
+    subscribeArray<RecurringOccurrence>(
+      'recurringOccurrences', COLLECTION_RECURRING_OCCURRENCES, STORAGE_KEYS.RECURRING_OCCURRENCES,
+    ),
+    subscribeArray<MerchantRule>('merchantRules', COLLECTION_MERCHANT_RULES, STORAGE_KEYS.MERCHANT_RULES),
+    subscribeArray<BankAccount>('bankAccounts', COLLECTION_BANK_ACCOUNTS, STORAGE_KEYS.BANK_ACCOUNTS),
+    subscribeArray<PaymentCard>('paymentCards', COLLECTION_PAYMENT_CARDS, STORAGE_KEYS.PAYMENT_CARDS),
+    subscribeArray<QuickEntry>('quickEntries', COLLECTION_QUICK_ENTRIES, STORAGE_KEYS.QUICK_ENTRIES, values => {
+      values.sort((a, b) => a.sortOrder - b.sortOrder);
+    }),
     onSnapshot(scopedCollection(COLLECTION_CYCLE_BASELINES), snapshot => {
       const baselineMap: Record<string, CycleBaseline> = {};
       snapshot.docs.forEach(document => {
@@ -359,9 +444,12 @@ export function initFirestoreSync(onNotify: SyncNotifyCallback) {
         baselineMap[baseline.yearMonth || document.id] = baseline;
       });
       localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselineMap));
+      markDelivered('cycleBaselines');
       onNotify();
-    }, snapshotError),
+    }, markFailed),
   ];
+
+  return firstRound.then(() => ({ hasCloudData: localCacheHasAnyData() }));
 }
 
 export function stopFirestoreSync() {
@@ -406,6 +494,19 @@ export async function deleteTransactionFromFirestore(id: string) {
   return persistFirestoreWrite({
     operation: 'delete', collectionName: COLLECTION_TRANSACTIONS, documentId: id,
   }, 'Failed to delete transaction from Firestore');
+}
+
+export async function syncQuickEntryToFirestore(entry: QuickEntry) {
+  return persistFirestoreWrite({
+    operation: 'set', collectionName: COLLECTION_QUICK_ENTRIES, documentId: entry.id,
+    data: entry as unknown as Record<string, unknown>,
+  }, 'Failed to sync quick entry to Firestore');
+}
+
+export async function deleteQuickEntryFromFirestore(id: string) {
+  return persistFirestoreWrite({
+    operation: 'delete', collectionName: COLLECTION_QUICK_ENTRIES, documentId: id,
+  }, 'Failed to delete quick entry from Firestore');
 }
 
 export async function syncCategoriesToFirestore(categories: Category[]) {
@@ -530,6 +631,7 @@ export async function clearFirestoreAllData() {
       COLLECTION_BANK_ACCOUNTS,
       COLLECTION_PAYMENT_CARDS,
       COLLECTION_CYCLE_BASELINES,
+      COLLECTION_QUICK_ENTRIES,
     ];
 
     for (const colName of collectionsToClear) {
