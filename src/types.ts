@@ -249,6 +249,7 @@ export interface MerchantRule {
 }
 
 export type WidgetPrivacyMode = 'unlock_required' | 'always_show' | 'amounts_hidden';
+export type AppTheme = 'dark' | 'light';
 
 export interface UserProfile {
   uid: string;
@@ -278,6 +279,8 @@ export interface UserProfile {
   wipeCacheOnLock?: boolean;
   /** Android home-screen widget disclosure policy. */
   widgetPrivacyMode?: WidgetPrivacyMode;
+  /** Account-scoped visual preference. Defaults to the original dark theme. */
+  theme?: AppTheme;
   securityPinEnabled?: boolean;
   accessPin?: string; // Legacy only. New PIN authentication never stores this field.
   createdAt: string;

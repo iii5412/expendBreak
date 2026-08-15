@@ -30,8 +30,8 @@ export function savePreferredEntryMode(mode: EntryMode) {
 }
 
 /**
- * Resolves the mode to open in. Falls back to `manual` whenever AI is off, since
- * the other three modes are not rendered in that case.
+ * Resolves the mode to open in. Falls back to `manual` whenever AI is off; the
+ * other modes remain visible as opt-in entry points for the current account.
  */
 export function readPreferredEntryMode(aiClassificationEnabled: boolean): EntryMode {
   if (!aiClassificationEnabled) return 'manual';

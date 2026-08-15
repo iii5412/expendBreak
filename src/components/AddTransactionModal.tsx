@@ -13,6 +13,7 @@ import {
   Volume2,
   Zap,
   Settings2,
+  LockKeyhole,
 } from 'lucide-react';
 import {
   Category,
@@ -60,6 +61,8 @@ interface AddTransactionModalProps {
   recurringTemplates?: RecurringTemplate[];
   monthStartDay?: number;
   aiClassificationEnabled?: boolean;
+  /** Enables AI for the currently signed-in account after its own consent. */
+  onEnableAI?: () => Promise<boolean> | boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
   quickEntries?: QuickEntry[];
@@ -89,6 +92,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   recurringTemplates = [],
   monthStartDay = 1,
   aiClassificationEnabled = true,
+  onEnableAI,
   onSaveTransaction,
   onSaveMerchantRule,
   quickEntries = [],
@@ -160,6 +164,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const selectMode = (mode: 'receipt' | 'voice' | 'ai' | 'manual') => {
     setActiveMode(mode);
     savePreferredEntryMode(mode);
+  };
+
+  const selectProtectedMode = async (mode: 'receipt' | 'voice' | 'ai') => {
+    if (!aiClassificationEnabled) {
+      const enabled = await onEnableAI?.();
+      if (!enabled) return;
+    }
+    selectMode(mode);
   };
 
   const failValidation = (message: string, focusElementId?: string) => {
@@ -803,16 +815,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         )}
 
         {/* Mode Switcher - 2x2 Grid on Mobile for 4 modes */}
-        <div
-          className={`grid ${
-            aiClassificationEnabled ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-1'
-          } gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800`}
-        >
-          {aiClassificationEnabled && (
+        {!aiClassificationEnabled && (
+          <div className="flex items-start gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
+            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>AI 지출 등록은 모든 계정에서 사용할 수 있습니다. 원하는 AI 방식을 누르면 이 계정의 동의를 받은 뒤 바로 활성화됩니다.</p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-950 p-1.5 sm:grid-cols-4">
             <button
-              onClick={() => {
-                selectMode('voice');
-              }}
+              onClick={() => void selectProtectedMode('voice')}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
                 activeMode === 'voice'
                   ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
@@ -822,12 +834,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               <Mic className="w-4 h-4 shrink-0 text-purple-300" />
               <span>GPT 라이브</span>
             </button>
-          )}
 
-          {aiClassificationEnabled && (
             <button
               onClick={() => {
-                selectMode('ai');
+                void selectProtectedMode('ai');
                 setVoiceResult(null);
               }}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
@@ -839,12 +849,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               <Sparkles className="w-4 h-4 shrink-0 text-amber-300" />
               <span>AI 문장</span>
             </button>
-          )}
 
-          {aiClassificationEnabled && (
             <button
               onClick={() => {
-                selectMode('receipt');
+                void selectProtectedMode('receipt');
                 setVoiceResult(null);
               }}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
@@ -856,7 +864,6 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               <Camera className="w-4 h-4 shrink-0" />
               <span>영수증</span>
             </button>
-          )}
 
           <button
             onClick={() => {
@@ -875,7 +882,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         </div>
 
         {/* MODE 1: Receipt Capture */}
-        {aiClassificationEnabled && activeMode === 'receipt' && (
+        {activeMode === 'receipt' && (
           <ReceiptCapturePanel
             categories={categories}
             merchantRules={merchantRules}
@@ -892,7 +899,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         )}
 
         {/* MODE 2: Voice Input */}
-        {aiClassificationEnabled && activeMode === 'voice' && (
+        {activeMode === 'voice' && (
           <div className="space-y-4">
             {!voiceResult ? (
               voiceInputKind === 'live' ? (
@@ -1187,7 +1194,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         )}
 
         {/* MODE 3: AI Quick Input */}
-        {aiClassificationEnabled && activeMode === 'ai' && (
+        {activeMode === 'ai' && (
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-xs text-slate-300 font-semibold block">

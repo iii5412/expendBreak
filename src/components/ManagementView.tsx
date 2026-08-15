@@ -25,6 +25,8 @@ import {
   CheckCheck,
   ArrowRight,
   CalendarRange,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import {
   RecurringTemplate,
@@ -55,6 +57,7 @@ import { parseAmountInput } from '../utils/amount';
 import { IDLE_LOCK_OPTIONS, describeIdleLockMinutes, normalizeIdleLockMinutes } from '../utils/lockPolicy';
 import { InstallAppCard } from './InstallAppCard';
 import { AndroidAppCard } from './AndroidAppCard';
+import { normalizeAppTheme } from '../utils/theme';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -1206,6 +1209,44 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             <p className="text-xs text-slate-400">
               매월 29~31일은 없는 달이 있어 시작일은 28일까지만 선택할 수 있습니다.
             </p>
+          </div>
+
+          {/* Account-scoped appearance */}
+          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+            <h3 className="flex items-center gap-2 text-sm font-bold text-white">
+              <Sun className="h-4 w-4 text-amber-300" />
+              <span>화면 테마</span>
+            </h3>
+            <p className="text-xs leading-relaxed text-slate-400">
+              이 설정은 현재 로그인한 계정에 저장됩니다. 내 계정과 와이프 계정이 서로 다른 테마를 사용할 수 있습니다.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { value: 'dark' as const, label: '현재 다크', icon: Moon },
+                { value: 'light' as const, label: '화이트', icon: Sun },
+              ]).map(option => {
+                const selected = normalizeAppTheme(userProfile.theme) === option.value;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      onUpdateUserProfile({ theme: option.value });
+                      triggerToast(`${option.label} 테마로 변경했습니다.`);
+                    }}
+                    aria-pressed={selected}
+                    className={`flex min-h-12 items-center justify-center gap-2 rounded-xl border px-3 py-2 font-bold transition-colors ${selected
+                      ? 'border-rose-400 bg-rose-500/15 text-rose-300'
+                      : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span>{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <InstallAppCard />

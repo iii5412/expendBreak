@@ -47,6 +47,7 @@ export const INITIAL_USER_PROFILE: UserProfile = {
   aiInsightsEnabled: false,
   securityPinEnabled: true,
   widgetPrivacyMode: 'unlock_required',
+  theme: 'dark',
   aiConsentAt: null,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
