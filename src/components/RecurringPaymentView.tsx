@@ -71,7 +71,7 @@ interface RecurringPaymentViewProps {
     customAccountId?: string | null,
     customCardId?: string | null
   ) => void;
-  onUpdateOccurrenceStatus: (occId: string, status: any) => void;
+  onUndoPostedOccurrence: (occurrenceId: string) => void;
   onUpdateOccurrencePlan: (
     occId: string,
     amount: number,
@@ -98,7 +98,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   onResolveCardSettlementReview,
   onUpdateCardSettlementStatus,
   onPostOccurrence,
-  onUpdateOccurrenceStatus,
+  onUndoPostedOccurrence,
   onUpdateOccurrencePlan,
 }) => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'posted' | 'expense' | 'income'>('pending');
@@ -183,12 +183,12 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     setSelectedOcc(null);
   };
 
-  // Map Occurrences with template type
-  // The snapshot leads: an occurrence whose template was deleted still knows
-  // what it was, and the month summary already reads it that way. Falling back
-  // to the template alone filed a posted salary under 고정 지출.
-  const occurrencesWithTemplates = recurringOccurrences.map((occ) => {
+  // Hide unposted orphan rows left by earlier app versions. A posted orphan
+  // stays visible under 처리 완료 so its generated transaction can still be
+  // cancelled and cleaned up after the template itself was deleted.
+  const occurrencesWithTemplates = recurringOccurrences.flatMap((occ) => {
     const tmpl = templateMap.get(occ.templateId);
+    if (!tmpl && occ.status !== 'posted') return [];
     const type = occ.typeSnapshot ?? tmpl?.type ?? 'expense';
     return { ...occ, type, tmpl };
   });
@@ -308,7 +308,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             미처리 항목 건수
           </div>
           <p className="text-xl font-extrabold text-indigo-300 mt-1">
-            {recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건
+            {occurrencesWithTemplates.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건
           </p>
           <p className="text-xs text-slate-400 mt-1">
             수입 {incomeOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건 대기 중
@@ -494,7 +494,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            미처리 대기 ({recurringOccurrences.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount})
+            미처리 대기 ({occurrencesWithTemplates.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount})
           </button>
 
           <button
@@ -527,7 +527,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            처리 완료 ({recurringOccurrences.filter((o) => o.status === 'posted').length + paidCardSettlementCount})
+            처리 완료 ({occurrencesWithTemplates.filter((o) => o.status === 'posted').length + paidCardSettlementCount})
           </button>
 
           <button
@@ -538,7 +538,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            전체 보기 ({recurringOccurrences.length + cardSettlementItems.length})
+            전체 보기 ({occurrencesWithTemplates.length + cardSettlementItems.length})
           </button>
         </div>
       </div>
@@ -685,6 +685,14 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                           <Check className="w-4 h-4 text-emerald-400" />
                           {isIncome ? '입금 완료' : '납부 완료'}
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => onUndoPostedOccurrence(occ.id)}
+                          className="inline-flex items-center gap-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-amber-200 transition-colors hover:bg-amber-500/20"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          {isIncome ? '입금 완료 취소' : '납부 완료 취소'}
+                        </button>
                       </div>
                     ) : (
                       <button

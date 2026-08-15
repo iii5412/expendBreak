@@ -34,10 +34,11 @@ describe('financial calculations', () => {
     expect(summary.confirmedIncome).toBe(0);
   });
 
-  it('does not count an orphan occurrence as an expense', () => {
+  it('does not count a deleted template occurrence as an expense even when it has a type snapshot', () => {
     const occurrence: RecurringOccurrence = {
       id: 'orphan', templateId: 'missing', occurrenceKey: 'missing_2026-08-10', scheduledDate: '2026-08-10',
-      expectedAmount: 300_000, status: 'scheduled', createdAt: now.toISOString(), updatedAt: now.toISOString(),
+      expectedAmount: 300_000, status: 'scheduled', typeSnapshot: 'expense',
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
     const summary = calculateMonthSummary('2026-08', [], [occurrence], budget, [] as RecurringTemplate[], now);
     expect(summary.remainingScheduledExpenses).toBe(0);

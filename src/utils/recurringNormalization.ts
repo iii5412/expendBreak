@@ -100,6 +100,40 @@ export interface NormalizedRecurringOccurrences {
 }
 
 /**
+ * Removing a template cancels every occurrence that has not become a real
+ * transaction yet. Posted occurrences are historical evidence and stay linked
+ * to the transaction that was already created.
+ */
+export function removeUnpostedOccurrencesForTemplate(
+  occurrences: RecurringOccurrence[],
+  templateId: string,
+): NormalizedRecurringOccurrences {
+  const removedIds = occurrences
+    .filter(occurrence => occurrence.templateId === templateId && occurrence.status !== 'posted')
+    .map(occurrence => occurrence.id);
+  const removedIdSet = new Set(removedIds);
+
+  return {
+    occurrences: occurrences.filter(occurrence => !removedIdSet.has(occurrence.id)),
+    removedIds,
+  };
+}
+
+/** Turns a posted occurrence back into an editable pending plan. */
+export function reopenPostedOccurrence(
+  occurrence: RecurringOccurrence,
+  updatedAt: string,
+): RecurringOccurrence | null {
+  if (occurrence.status !== 'posted') return null;
+  return {
+    ...occurrence,
+    status: 'needs_confirmation',
+    transactionId: null,
+    updatedAt,
+  };
+}
+
+/**
  * Removes obsolete, unposted occurrences left behind by due-date/template changes.
  * Posted records are historical evidence and are never deleted.
  */

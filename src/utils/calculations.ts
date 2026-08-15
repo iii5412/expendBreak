@@ -385,6 +385,9 @@ export function calculateMonthSummary(
   const pendingOccurrences = occurrences.filter(
     o => isDateInPeriod(o.scheduledDate, period)
       && (o.status === 'scheduled' || o.status === 'needs_confirmation' || o.status === 'overdue')
+      // A snapshot preserves historical meaning, but it must not keep a
+      // deleted template reserved as a future payment.
+      && templateMap.get(o.templateId)?.active
   );
 
   // Scheduled Income (recurring items with template.type === 'income')

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { RecurringOccurrence, RecurringTemplate } from '../types';
-import { getScheduledDatesForMonth, normalizeRecurringOccurrencesForMonth } from './recurringNormalization';
+import {
+  getScheduledDatesForMonth,
+  normalizeRecurringOccurrencesForMonth,
+  reopenPostedOccurrence,
+  removeUnpostedOccurrencesForTemplate,
+} from './recurringNormalization';
 
 const now = '2026-08-11T00:00:00.000Z';
 const template: RecurringTemplate = {
@@ -15,6 +20,31 @@ const occurrence = (id: string, scheduledDate: string, status: RecurringOccurren
 });
 
 describe('recurring occurrence normalization', () => {
+  it('removes every unposted occurrence when its template is deleted', () => {
+    const result = removeUnpostedOccurrencesForTemplate([
+      occurrence('scheduled', '2026-08-10', 'scheduled'),
+      occurrence('skipped', '2026-09-10', 'skipped'),
+      occurrence('paid', '2026-07-10', 'posted'),
+      { ...occurrence('other', '2026-08-15'), templateId: 'other-template' },
+    ], template.id);
+
+    expect(result.occurrences.map(item => item.id)).toEqual(['paid', 'other']);
+    expect(result.removedIds).toEqual(['scheduled', 'skipped']);
+  });
+
+  it('reopens a posted occurrence without losing its confirmed amount', () => {
+    const posted = { ...occurrence('paid', '2026-08-10', 'posted'), actualAmount: 525_000, transactionId: 'tx-paid' };
+    const reopened = reopenPostedOccurrence(posted, '2026-08-12T00:00:00.000Z');
+
+    expect(reopened).toMatchObject({
+      status: 'needs_confirmation',
+      actualAmount: 525_000,
+      transactionId: null,
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    });
+    expect(reopenPostedOccurrence(occurrence('pending', '2026-08-10'), now)).toBeNull();
+  });
+
   it('removes the old unposted date after a due date changes', () => {
     const result = normalizeRecurringOccurrencesForMonth([
       occurrence('old-15th', '2026-09-15'),

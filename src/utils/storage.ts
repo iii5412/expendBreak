@@ -69,7 +69,12 @@ import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 import { getCarriedRecurringAmount } from './recurringPlans';
 import { resolveInheritedAllowanceLimit } from './budgetPlans';
-import { getScheduledDatesForMonth, normalizeRecurringOccurrencesForMonth } from './recurringNormalization';
+import {
+  getScheduledDatesForMonth,
+  normalizeRecurringOccurrencesForMonth,
+  reopenPostedOccurrence,
+  removeUnpostedOccurrencesForTemplate,
+} from './recurringNormalization';
 
 const STORAGE_KEYS = {
   get TRANSACTIONS() { return getAccountStorageKey('brake_transactions'); },
@@ -979,16 +984,10 @@ export function deleteRecurringTemplate(id: string): boolean {
     deleteRecurringTemplateFromFirestore(id);
 
     const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-    const changedOccurrences: RecurringOccurrence[] = [];
-    occurrences.forEach(occurrence => {
-      if (occurrence.templateId !== id || occurrence.status === 'posted') return;
-      occurrence.status = 'skipped';
-      occurrence.updatedAt = new Date().toISOString();
-      changedOccurrences.push(occurrence);
-    });
-    if (changedOccurrences.length > 0) {
-      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-      syncRecurringOccurrencesToFirestore(changedOccurrences);
+    const removed = removeUnpostedOccurrencesForTemplate(occurrences, id);
+    if (removed.removedIds.length > 0) {
+      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(removed.occurrences));
+      void deleteRecurringOccurrencesFromFirestore(removed.removedIds);
     }
     notifyListeners();
     return true;
@@ -1109,6 +1108,32 @@ export function updateOccurrenceStatus(
     syncRecurringOccurrencesToFirestore([target]);
     notifyListeners();
   }
+}
+
+/**
+ * Reverses a recurring payment confirmation. The generated transaction is
+ * removed and the occurrence becomes pending again, so the user can correct it
+ * or delete its template without leaving dummy financial data behind.
+ */
+export function undoPostedOccurrence(occurrenceId: string): RecurringOccurrence | null {
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const index = occurrences.findIndex(occurrence => occurrence.id === occurrenceId);
+  if (index === -1) return null;
+
+  const reopened = reopenPostedOccurrence(occurrences[index], new Date().toISOString());
+  if (!reopened) return null;
+
+  const transactionId = occurrences[index].transactionId
+    || `tx_recurring_${occurrences[index].occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const transactions = getTransactions().filter(transaction => transaction.id !== transactionId);
+
+  occurrences[index] = reopened;
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  void deleteTransactionFromFirestore(transactionId);
+  void syncRecurringOccurrencesToFirestore([reopened]);
+  notifyListeners();
+  return reopened;
 }
 
 /** Saves a month-specific recurring plan without posting a transaction. */

@@ -342,7 +342,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     const template = recurringTemplates.find(item => item.id === id);
     const accepted = await confirm({
       title: '이 정기 항목을 삭제할까요?',
-      description: '아직 처리하지 않은 이번 달 발생 건은 건너뜀으로 정리됩니다. 이미 확정된 거래는 그대로 남습니다.',
+      description: '아직 처리하지 않은 발생 건은 함께 삭제됩니다. 이미 확정된 거래는 그대로 남습니다.',
       details: [
         { label: '항목', value: name },
         ...(template

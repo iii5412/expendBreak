@@ -49,6 +49,7 @@ import {
   restoreTransaction,
   finalizeTransactionDeletion,
   postOccurrenceToTransaction,
+  undoPostedOccurrence,
   updateOccurrenceStatus,
   updateOccurrencePlan,
   reloadRecurringOccurrences,
@@ -564,6 +565,38 @@ export default function App() {
     refreshAppData();
   };
 
+  const handleUndoPostedOccurrence = async (occurrenceId: string) => {
+    const occurrence = allRecurringOccurrences.find(item => item.id === occurrenceId);
+    if (!occurrence || occurrence.status !== 'posted') {
+      showToast({ message: '이미 완료 취소된 항목입니다.', tone: 'info' });
+      return;
+    }
+    const template = recurringTemplates.find(item => item.id === occurrence.templateId);
+    const isIncome = (occurrence.typeSnapshot ?? template?.type) === 'income';
+    const accepted = await confirm({
+      title: `${isIncome ? '입금' : '납부'} 완료를 취소할까요?`,
+      description: '완료 처리할 때 생성된 거래를 삭제하고 미처리 상태로 되돌립니다. 정기 항목 자체는 삭제되지 않습니다.',
+      details: [
+        { label: '항목', value: template?.name || '정기 항목' },
+        { label: '금액', value: formatKRW(occurrence.actualAmount ?? occurrence.expectedAmount) },
+        { label: '예정일', value: occurrence.scheduledDate },
+      ],
+      confirmLabel: '완료 취소',
+      tone: 'danger',
+    });
+    if (!accepted) return;
+
+    const reopened = undoPostedOccurrence(occurrenceId);
+    refreshAppData();
+    showToast(reopened
+      ? {
+          message: `${isIncome ? '입금' : '납부'} 완료를 취소했습니다.`,
+          description: '생성됐던 거래를 삭제하고 미처리 항목으로 되돌렸습니다.',
+          tone: 'success',
+        }
+      : { message: '완료 상태를 되돌리지 못했습니다.', tone: 'error' });
+  };
+
   const handleCardSettlementStatus = (cardId: string, status: 'scheduled' | 'paid') => {
     const card = paymentCards.find(candidate => candidate.id === cardId);
     const settlement = cardSettlementSummary.cards.find(candidate => candidate.cardId === cardId);
@@ -1006,10 +1039,7 @@ export default function App() {
               await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
               refreshAppData();
             }}
-            onUpdateOccurrenceStatus={(occId, status) => {
-              updateOccurrenceStatus(occId, status);
-              refreshAppData();
-            }}
+            onUndoPostedOccurrence={occurrenceId => void handleUndoPostedOccurrence(occurrenceId)}
             onUpdateOccurrencePlan={(occId, amount, pType, accId, cId) => {
               updateOccurrencePlan(occId, {
                 amount,
