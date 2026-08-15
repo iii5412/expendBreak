@@ -56,10 +56,10 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
 
         <div className="space-y-1">
           <h2 className="text-base font-black text-slate-100 flex items-center justify-center gap-1.5">
-            <span>🛡️ Gemini API & 접근 보안 모드</span>
+            <span>🛡️ 내 가계부 계정 로그인</span>
           </h2>
           <p className="text-xs text-slate-400 leading-relaxed px-2">
-            PIN 확인이 완료된 뒤에만 가계부 정보를 안전하게 불러옵니다.
+            본인 계정의 PIN을 입력하면 해당 계정의 데이터만 불러옵니다.
           </p>
         </div>
 
@@ -72,7 +72,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
                 setEnteredPin(e.target.value);
                 setErrorMsg(null);
               }}
-              placeholder="접근 암호(PIN) 입력"
+              placeholder="계정 PIN 입력"
               inputMode="numeric"
               pattern="[0-9]*"
               autoComplete="current-password"
@@ -103,7 +103,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
               <span>보안 암호 확인 중...</span>
             ) : (
               <>
-                <span>앱 잠금 해제</span>
+                <span>내 계정으로 로그인</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
@@ -112,7 +112,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
 
         <div className="pt-2 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-center gap-1">
           <Sparkles className="w-3 h-3 text-amber-400" />
-          <span>PIN은 브라우저나 Firestore에 저장되지 않습니다.</span>
+          <span>계정별 PIN과 가계부 데이터는 서로 분리됩니다.</span>
         </div>
       </div>
     </div>

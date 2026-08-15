@@ -5,8 +5,9 @@
  * Uses sessionStorage: the draft must survive a lock, but not a closed tab, and
  * it is never written to the cloud.
  */
+import { getAccountStorageKey } from './auth';
 
-const DRAFT_KEY = 'brake_transaction_draft';
+const draftKey = () => getAccountStorageKey('brake_transaction_draft');
 
 export interface TransactionDraft {
   type: 'income' | 'expense';
@@ -41,11 +42,11 @@ export function saveTransactionDraft(draft: Omit<TransactionDraft, 'savedAt'>) {
   const store = session();
   if (!store) return;
   if (!isDraftWorthKeeping(draft)) {
-    store.removeItem(DRAFT_KEY);
+    store.removeItem(draftKey());
     return;
   }
   try {
-    store.setItem(DRAFT_KEY, JSON.stringify({ ...draft, savedAt: new Date().toISOString() }));
+    store.setItem(draftKey(), JSON.stringify({ ...draft, savedAt: new Date().toISOString() }));
   } catch {
     // Storage can be unavailable in private modes; losing a draft is acceptable.
   }
@@ -55,7 +56,7 @@ export function readTransactionDraft(): TransactionDraft | null {
   const store = session();
   if (!store) return null;
   try {
-    const raw = store.getItem(DRAFT_KEY);
+    const raw = store.getItem(draftKey());
     return raw ? JSON.parse(raw) as TransactionDraft : null;
   } catch {
     return null;
@@ -63,5 +64,5 @@ export function readTransactionDraft(): TransactionDraft | null {
 }
 
 export function clearTransactionDraft() {
-  session()?.removeItem(DRAFT_KEY);
+  session()?.removeItem(draftKey());
 }

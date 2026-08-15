@@ -4,6 +4,7 @@ import { UserProfile } from '../types';
 
 interface NavbarProps {
   userProfile: UserProfile;
+  accountName: string;
   nextPaydayText: string;
   onOpenSettings: () => void;
   onLock: () => void;
@@ -13,6 +14,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   userProfile,
+  accountName,
   nextPaydayText,
   onOpenSettings,
   onLock,
@@ -55,7 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 px-3 py-1.5 rounded-lg transition-colors"
           >
             <UserCheck className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-medium hidden xs:inline">{userProfile.displayName}</span>
+            <span className="font-medium hidden xs:inline">{accountName}</span>
             {userProfile.aiClassificationEnabled && (
               // lucide icons drop unknown props, so the tooltip lives on a wrapper.
               <span title="AI 자동분류 활성화" className="inline-flex">

@@ -84,7 +84,7 @@ import {
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
 import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, QuickEntry, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
-import { logoutOwner, onSessionStateChanged } from './utils/auth';
+import { getSignedInAccount, logoutOwner, onSessionStateChanged } from './utils/auth';
 import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
@@ -170,7 +170,6 @@ export default function App() {
   useEffect(() => {
     const unsubscribeAuth = onSessionStateChanged(isLoggedIn => {
       if (!isLoggedIn) {
-        shutdownStorage();
         setBootState('locked');
         return;
       }
@@ -910,6 +909,7 @@ export default function App() {
       {/* Top Navbar */}
       <Navbar
         userProfile={userProfile}
+        accountName={getSignedInAccount().name}
         nextPaydayText={nextPaydayText}
         onOpenSettings={() => handleNavigateTab('management', 'settings')}
         onLock={handleLock}

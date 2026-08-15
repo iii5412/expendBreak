@@ -17,7 +17,10 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const OWNER_UID = process.env.OWNER_UID?.trim() || process.env.APP_OWNER_UID?.trim() || 'owner';
-const SESSION_SECRET = process.env.APP_PIN_HASH || process.env.APP_ACCESS_KEY || 'expendbreak_secret_key_2026';
+const SESSION_SECRET = process.env.APP_SESSION_SECRET
+  || process.env.APP_PIN_HASH
+  || process.env.APP_ACCESS_KEY
+  || 'expendbreak_secret_key_2026';
 const UPDATE_APK_PATH = process.env.APP_UPDATE_APK_PATH?.trim();
 const UPDATE_VERSION_CODE = Number(process.env.APP_UPDATE_VERSION_CODE);
 const UPDATE_VERSION_NAME = process.env.APP_UPDATE_VERSION_NAME?.trim();
@@ -91,20 +94,69 @@ function checkPinAgainstSecret(pin: string, secret: string): boolean {
   return safeEqualText(pin, secret);
 }
 
-function verifyConfiguredPin(pin: string): boolean {
+type ConfiguredAccount = {
+  uid: string;
+  name: string;
+  pinHash: string;
+  isOwner: boolean;
+};
+
+function ownerPinSecret(): string {
   const encodedHash = process.env.APP_PIN_HASH?.trim();
-  if (encodedHash) {
-    return checkPinAgainstSecret(pin, encodedHash);
-  }
+  if (encodedHash) return encodedHash;
 
   const legacyKey = process.env.APP_ACCESS_KEY?.trim();
-  if (legacyKey) {
-    return checkPinAgainstSecret(pin, legacyKey);
-  }
+  if (legacyKey) return legacyKey;
 
   // No PIN configured: only the local development default is accepted, and only
   // when neither secret is set. Never accept it once a real PIN exists.
-  return safeEqualText(pin, '0000');
+  return '0000';
+}
+
+function loadConfiguredAccounts(): ConfiguredAccount[] {
+  const accounts: ConfiguredAccount[] = [{
+    uid: OWNER_UID,
+    name: process.env.OWNER_NAME?.trim() || '내 계정',
+    pinHash: ownerPinSecret(),
+    isOwner: true,
+  }];
+  const raw = process.env.APP_ACCOUNTS_JSON?.trim();
+  if (!raw) return accounts;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('APP_ACCOUNTS_JSON must be valid JSON.');
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error('APP_ACCOUNTS_JSON must be a JSON array.');
+  }
+
+  for (const candidate of parsed) {
+    const uid = typeof candidate?.uid === 'string' ? candidate.uid.trim() : '';
+    const name = typeof candidate?.name === 'string' ? candidate.name.trim() : '';
+    const pinHash = typeof candidate?.pinHash === 'string' ? candidate.pinHash.trim() : '';
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(uid) || !name || name.length > 40 || !pinHash) {
+      throw new Error('Each APP_ACCOUNTS_JSON entry needs a valid uid, name, and pinHash.');
+    }
+    if (accounts.some(account => account.uid === uid)) {
+      throw new Error(`Duplicate account uid in APP_ACCOUNTS_JSON: ${uid}`);
+    }
+    if (accounts.some(account => account.pinHash === pinHash)) {
+      throw new Error(`Each account must use a different PIN hash: ${uid}`);
+    }
+    accounts.push({ uid, name, pinHash, isOwner: false });
+  }
+  return accounts;
+}
+
+const CONFIGURED_ACCOUNTS = loadConfiguredAccounts();
+const CONFIGURED_ACCOUNT_UIDS = new Set(CONFIGURED_ACCOUNTS.map(account => account.uid));
+
+function verifyConfiguredPin(pin: string): ConfiguredAccount | null {
+  const matches = CONFIGURED_ACCOUNTS.filter(account => checkPinAgainstSecret(pin, account.pinHash));
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function createSessionToken(uid: string): string {
@@ -137,17 +189,18 @@ function verifySessionToken(token: string): string | null {
 type PinAttempt = { failures: number; blockedUntil: number };
 const pinAttempts = new Map<string, PinAttempt>();
 
-async function requireOwner(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function requireAccount(req: express.Request, res: express.Response, next: express.NextFunction) {
   try {
     const authorization = req.headers.authorization || '';
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
     const uid = verifySessionToken(token);
-    if (!uid || uid !== OWNER_UID) {
+    if (!uid || !CONFIGURED_ACCOUNT_UIDS.has(uid)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
+    res.locals.userUid = uid;
     res.locals.ownerUid = uid;
     return next();
   } catch (error) {
@@ -156,8 +209,8 @@ async function requireOwner(req: express.Request, res: express.Response, next: e
   }
 }
 
-// Gemini endpoints require the Firebase owner session, never the raw PIN.
-app.use('/api/ai/*', requireOwner);
+// Gemini endpoints require an app account session, never the raw PIN.
+app.use('/api/ai/*', requireAccount);
 
 let updateHashCache: { path: string; size: number; mtimeMs: number; sha256: string } | null = null;
 
@@ -344,7 +397,7 @@ app.post(
 // Auth endpoint to check status
 app.get('/api/auth/status', (req, res) => {
   const isPinConfigured = Boolean(process.env.APP_PIN_HASH?.trim() || process.env.APP_ACCESS_KEY?.trim());
-  return res.json({ isPinConfigured });
+  return res.json({ isPinConfigured, accountCount: CONFIGURED_ACCOUNTS.length });
 });
 
 // PIN endpoint verifies PIN and issues session token
@@ -358,8 +411,16 @@ app.post('/api/auth/verify-key', async (req, res) => {
   }
 
   try {
-    const isValid = verifyConfiguredPin(key);
-    if (!isValid) {
+    const previousAttempt = pinAttempts.get(clientId);
+    if (previousAttempt && previousAttempt.blockedUntil > now) {
+      return res.status(429).json({
+        isValid: false,
+        retryAfterMs: previousAttempt.blockedUntil - now,
+      });
+    }
+
+    const account = verifyConfiguredPin(key);
+    if (!account) {
       const attempt = pinAttempts.get(clientId) || { failures: 0, blockedUntil: 0 };
       const failures = attempt.failures + 1;
       const delayMs = failures >= 5 ? Math.min(60_000, 1_000 * (2 ** (failures - 5))) : 0;
@@ -368,10 +429,15 @@ app.post('/api/auth/verify-key', async (req, res) => {
     }
 
     pinAttempts.delete(clientId);
-    const token = createSessionToken(OWNER_UID);
+    const token = createSessionToken(account.uid);
     const { adminAuth } = getAdminServices();
-    const firebaseToken = await adminAuth.createCustomToken(OWNER_UID);
-    return res.json({ isValid: true, token, firebaseToken });
+    const firebaseToken = await adminAuth.createCustomToken(account.uid);
+    return res.json({
+      isValid: true,
+      token,
+      firebaseToken,
+      account: { uid: account.uid, name: account.name, isOwner: account.isOwner },
+    });
   } catch (error) {
     console.error('PIN authentication error:', error instanceof Error ? error.message : error);
     return res.status(500).json({
@@ -497,8 +563,14 @@ async function ensureLegacyDataMigration(ownerUid: string) {
 }
 
 // Copies existing global collections into the fixed owner path. It never deletes the source data.
-app.post('/api/migration/ensure', requireOwner, async (req, res) => {
+app.post('/api/migration/ensure', requireAccount, async (req, res) => {
   try {
+    if (res.locals.userUid !== OWNER_UID) {
+      return res.json({
+        ok: true,
+        report: { skipped: true, reason: 'not_owner_account', ownerUid: res.locals.userUid },
+      });
+    }
     const report = await ensureLegacyDataMigration(res.locals.ownerUid);
     return res.json({ ok: true, report });
   } catch (error) {

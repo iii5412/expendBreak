@@ -1,13 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // The client scopes every document under users/owner, while the server mints
-    // its custom token with OWNER_UID. Those two can disagree, so the fixed
-    // 'owner' path stays allowed -- but only for a request that authenticated.
-    // Leaving `userId == 'owner'` outside this auth check made the whole ledger
-    // world-readable and world-writable.
+    // Every account receives a Firebase custom token whose UID is also used in
+    // its users/{userId} path. No authenticated account may read a spouse's
+    // ledger, including the original users/owner data.
     function isOwner(userId) {
-      return request.auth != null && (request.auth.uid == userId || userId == 'owner');
+      return request.auth != null && request.auth.uid == userId;
     }
 
     function validTransactionType() {

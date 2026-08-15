@@ -16,10 +16,21 @@ npm run pin:hash -- 123456
 
 출력 전체를 운영 secret `APP_PIN_HASH`에 저장한다. 실제 PIN과 hash는 Git에 커밋하지 않는다.
 
+배우자처럼 데이터를 완전히 분리할 추가 계정은 별도 PIN으로 생성한다.
+
+```powershell
+npm run account:hash -- wife "와이프" 654321
+```
+
+출력된 JSON 전체를 운영 secret `APP_ACCOUNTS_JSON`에 저장한다. 여러 계정이면 같은 배열 안에 항목을 추가한다. UID와 PIN은 계정마다 달라야 한다. 기존 계정은 계속 `users/{OWNER_UID}`를 사용하고, 위 예시 계정은 `users/wife`를 사용한다.
+
 필수 환경변수:
 
 - `APP_PIN_HASH`: 위 명령으로 생성한 값
-- `OWNER_UID`: 단일 소유자 UID. 기본값은 `owner`
+- `OWNER_UID`: 기존 데이터 소유자 UID. 기본값은 `owner`
+- `OWNER_NAME`: 기존 계정에 표시할 이름. 기본값은 `내 계정`
+- `APP_ACCOUNTS_JSON`: 추가 계정의 `uid`, 표시 이름, PIN hash 배열
+- `APP_SESSION_SECRET`: 세션 서명용 긴 임의 문자열. 다중 계정 운영에서는 명시적으로 설정 권장
 - `GEMINI_API_KEY`: AI 기능을 사용할 경우
 - `OPENAI_API_KEY`: GPT 라이브 음성을 사용할 경우. 브라우저 환경변수로 노출하지 않고 서버 secret으로만 등록
 - `OPENAI_REALTIME_MODEL`: 기본값 `gpt-realtime-2.1-mini`
@@ -43,6 +54,7 @@ Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 �
 6. 각 컬렉션의 `sourceCount`, `destinationCount`와 거래 `sourceAmountTotal`, `destinationAmountTotal`을 확인한다.
 7. `classificationIssues`의 거래·정기 항목 불일치 건수와 금액을 기록한다.
 8. 대시보드 월별 수입·지출, 계좌, 정기 항목을 기존 앱과 대조한다.
+9. 추가 계정 PIN으로 로그인해 빈 독립 가계부가 생성되고, 기존 소유자 데이터가 보이지 않는지 확인한다.
 
 마이그레이션은 원본을 삭제하지 않는다. 검증 실패 시 클라이언트는 데이터를 로드하지 않고 원본은 그대로 남는다.
 
@@ -51,13 +63,15 @@ Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 �
 1. 1차 검증이 끝난 뒤 저장소의 `firestore.rules`를 배포한다.
 2. PIN이 없을 때 Firestore 요청이 거부되는지 확인한다.
 3. 올바른 PIN 로그인 후 조회·추가·수정·삭제가 가능한지 확인한다.
-4. 유형과 맞지 않는 카테고리로 거래 또는 정기 항목 저장이 거부되는지 확인한다.
-5. 설정의 `분류 무결성 점검`에서 기존 불일치 건수를 확인한다.
+4. 각 계정에서 다른 계정의 `users/{uid}` 경로 읽기·쓰기가 거부되는지 확인한다.
+5. 유형과 맞지 않는 카테고리로 거래 또는 정기 항목 저장이 거부되는지 확인한다.
+6. 설정의 `분류 무결성 점검`에서 기존 불일치 건수를 확인한다.
 
 ## 4. 운영 확인
 
 - 새 브라우저에서 PIN 전에는 금융 데이터가 나타나지 않는다.
 - PIN 성공 후 기존 데이터가 기본값으로 덮이지 않는다.
+- 같은 브라우저에서 계정을 바꿔 로그인해도 로컬 캐시, 오프라인 대기 쓰기, 작성 중 초안이 섞이지 않는다.
 - 계좌번호와 송금정보 복사가 동작한다.
 - 계좌 잔액 수정 시 기준일이 저장된다.
 - 같은 정기 건을 빠르게 두 번 처리해도 거래가 하나만 생성된다.

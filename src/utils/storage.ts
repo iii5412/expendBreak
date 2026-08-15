@@ -64,7 +64,7 @@ import {
 import { reportWriteFailed } from './syncStatus';
 import { getTransactionWindowStart } from './transactionWindow';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
-import { authenticatedFetch } from './auth';
+import { authenticatedFetch, getAccountStorageKey, getSignedInAccount } from './auth';
 import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 import { getCarriedRecurringAmount } from './recurringPlans';
@@ -72,18 +72,18 @@ import { resolveInheritedAllowanceLimit } from './budgetPlans';
 import { getScheduledDatesForMonth, normalizeRecurringOccurrencesForMonth } from './recurringNormalization';
 
 const STORAGE_KEYS = {
-  TRANSACTIONS: 'brake_transactions',
-  CATEGORIES: 'brake_categories',
-  BUDGETS: 'brake_budgets',
-  RECURRING_TEMPLATES: 'brake_recurring_templates',
-  RECURRING_OCCURRENCES: 'brake_recurring_occurrences',
-  MERCHANT_RULES: 'brake_merchant_rules',
-  USER_PROFILE: 'brake_user_profile',
-  BANK_ACCOUNTS: 'brake_bank_accounts',
-  PAYMENT_CARDS: 'brake_payment_cards',
-  CYCLE_BASELINES: 'brake_cycle_baselines',
-  QUICK_ENTRIES: 'brake_quick_entries',
-  AI_INSIGHTS: 'brake_ai_insights',
+  get TRANSACTIONS() { return getAccountStorageKey('brake_transactions'); },
+  get CATEGORIES() { return getAccountStorageKey('brake_categories'); },
+  get BUDGETS() { return getAccountStorageKey('brake_budgets'); },
+  get RECURRING_TEMPLATES() { return getAccountStorageKey('brake_recurring_templates'); },
+  get RECURRING_OCCURRENCES() { return getAccountStorageKey('brake_recurring_occurrences'); },
+  get MERCHANT_RULES() { return getAccountStorageKey('brake_merchant_rules'); },
+  get USER_PROFILE() { return getAccountStorageKey('brake_user_profile'); },
+  get BANK_ACCOUNTS() { return getAccountStorageKey('brake_bank_accounts'); },
+  get PAYMENT_CARDS() { return getAccountStorageKey('brake_payment_cards'); },
+  get CYCLE_BASELINES() { return getAccountStorageKey('brake_cycle_baselines'); },
+  get QUICK_ENTRIES() { return getAccountStorageKey('brake_quick_entries'); },
+  get AI_INSIGHTS() { return getAccountStorageKey('brake_ai_insights'); },
 };
 
 let storageReady = false;
@@ -103,6 +103,18 @@ function readJson<T>(key: string, fallback: T): T {
     console.error(`Invalid local cache for ${key}:`, error);
     return fallback;
   }
+}
+
+function initialProfileForSignedInAccount(): UserProfile {
+  const account = getSignedInAccount();
+  return {
+    ...INITIAL_USER_PROFILE,
+    uid: account.uid,
+    displayName: account.name,
+    email: '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function clearLocalAppData() {
@@ -210,9 +222,10 @@ async function startColdSession() {
     const categories = [...DEFAULT_INCOME_CATEGORIES, ...DEFAULT_EXPENSE_CATEGORIES];
     const budget = getSampleBudget(currentYM);
     const templates = getSampleRecurringTemplates();
+    const initialProfile = initialProfileForSignedInAccount();
 
     localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(INITIAL_USER_PROFILE));
+    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(initialProfile));
     localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
     localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify({ [currentYM]: budget }));
     localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
@@ -224,7 +237,7 @@ async function startColdSession() {
 
     const initializationWrites = await Promise.all([
       syncCategoriesToFirestore(categories),
-      syncUserProfileToFirestore(INITIAL_USER_PROFILE),
+      syncUserProfileToFirestore(initialProfile),
       syncBudgetToFirestore(budget),
       ...DEFAULT_MERCHANT_RULES.map(rule => syncMerchantRuleToFirestore(rule)),
     ]);

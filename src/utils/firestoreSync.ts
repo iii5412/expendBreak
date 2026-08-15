@@ -36,6 +36,7 @@ import {
 } from './syncStatus';
 import { stripUndefined } from './firestorePayload';
 import { mergeFetchedHistory, mergeTransactionWindow } from './transactionWindow';
+import { getAccountStorageKey, getSignedInAccount } from './auth';
 
 const COLLECTION_APP_SETTINGS = 'appSettings';
 const DOC_GLOBAL_SETTINGS = 'global';
@@ -49,7 +50,10 @@ const COLLECTION_BANK_ACCOUNTS = 'bankAccounts';
 const COLLECTION_PAYMENT_CARDS = 'paymentCards';
 const COLLECTION_CYCLE_BASELINES = 'cycleBaselines';
 const COLLECTION_QUICK_ENTRIES = 'quickEntries';
-const FIRESTORE_OUTBOX_KEY = 'brake_firestore_outbox';
+const ACCOUNT_KEYS = {
+  get firestoreOutbox() { return getAccountStorageKey('brake_firestore_outbox'); },
+  get transactionHistoryFloor() { return getAccountStorageKey('brake_transaction_history_floor'); },
+};
 
 interface PendingFirestoreWrite {
   id: string;
@@ -65,7 +69,7 @@ let persistenceChain: Promise<void> = Promise.resolve();
 
 function readFirestoreOutbox(): PendingFirestoreWrite[] {
   try {
-    const raw = localStorage.getItem(FIRESTORE_OUTBOX_KEY);
+    const raw = localStorage.getItem(ACCOUNT_KEYS.firestoreOutbox);
     return raw ? JSON.parse(raw) as PendingFirestoreWrite[] : [];
   } catch (error) {
     console.error('Failed to read Firestore persistence outbox:', error);
@@ -75,9 +79,9 @@ function readFirestoreOutbox(): PendingFirestoreWrite[] {
 
 function writeFirestoreOutbox(entries: PendingFirestoreWrite[]) {
   if (entries.length === 0) {
-    localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
+    localStorage.removeItem(ACCOUNT_KEYS.firestoreOutbox);
   } else {
-    localStorage.setItem(FIRESTORE_OUTBOX_KEY, JSON.stringify(entries));
+    localStorage.setItem(ACCOUNT_KEYS.firestoreOutbox, JSON.stringify(entries));
   }
   reportPendingCount(entries.length);
 }
@@ -200,27 +204,27 @@ export function syncPendingCountFromStorage() {
 }
 
 export function clearTransactionHistoryFloor() {
-  localStorage.removeItem(TRANSACTION_HISTORY_FLOOR_KEY);
+  localStorage.removeItem(ACCOUNT_KEYS.transactionHistoryFloor);
   liveTransactionWindowStart = '';
 }
 
 export function clearFirestoreOutbox() {
-  localStorage.removeItem(FIRESTORE_OUTBOX_KEY);
+  localStorage.removeItem(ACCOUNT_KEYS.firestoreOutbox);
   resetSyncStatus();
 }
 
 const STORAGE_KEYS = {
-  TRANSACTIONS: 'brake_transactions',
-  CATEGORIES: 'brake_categories',
-  BUDGETS: 'brake_budgets',
-  RECURRING_TEMPLATES: 'brake_recurring_templates',
-  RECURRING_OCCURRENCES: 'brake_recurring_occurrences',
-  MERCHANT_RULES: 'brake_merchant_rules',
-  USER_PROFILE: 'brake_user_profile',
-  BANK_ACCOUNTS: 'brake_bank_accounts',
-  PAYMENT_CARDS: 'brake_payment_cards',
-  CYCLE_BASELINES: 'brake_cycle_baselines',
-  QUICK_ENTRIES: 'brake_quick_entries',
+  get TRANSACTIONS() { return getAccountStorageKey('brake_transactions'); },
+  get CATEGORIES() { return getAccountStorageKey('brake_categories'); },
+  get BUDGETS() { return getAccountStorageKey('brake_budgets'); },
+  get RECURRING_TEMPLATES() { return getAccountStorageKey('brake_recurring_templates'); },
+  get RECURRING_OCCURRENCES() { return getAccountStorageKey('brake_recurring_occurrences'); },
+  get MERCHANT_RULES() { return getAccountStorageKey('brake_merchant_rules'); },
+  get USER_PROFILE() { return getAccountStorageKey('brake_user_profile'); },
+  get BANK_ACCOUNTS() { return getAccountStorageKey('brake_bank_accounts'); },
+  get PAYMENT_CARDS() { return getAccountStorageKey('brake_payment_cards'); },
+  get CYCLE_BASELINES() { return getAccountStorageKey('brake_cycle_baselines'); },
+  get QUICK_ENTRIES() { return getAccountStorageKey('brake_quick_entries'); },
 };
 
 type SyncNotifyCallback = () => void;
@@ -229,7 +233,7 @@ let isSyncInitialized = false;
 let activeUnsubscribers: Array<() => void> = [];
 
 function requireOwnerUid() {
-  return 'owner';
+  return getSignedInAccount().uid;
 }
 
 function scopedCollection(collectionName: string) {
@@ -267,12 +271,10 @@ async function readCollection<T>(collectionName: string): Promise<T[]> {
  * Oldest `localDate` currently present in the local transaction cache. Anything
  * before this has to be fetched before a screen can summarise it truthfully.
  */
-const TRANSACTION_HISTORY_FLOOR_KEY = 'brake_transaction_history_floor';
-
 let liveTransactionWindowStart = '';
 
 function readHistoryFloor(fallback: string): string {
-  const stored = localStorage.getItem(TRANSACTION_HISTORY_FLOOR_KEY);
+  const stored = localStorage.getItem(ACCOUNT_KEYS.transactionHistoryFloor);
   return stored && stored < fallback ? stored : fallback;
 }
 
@@ -300,7 +302,7 @@ export async function loadTransactionHistoryFrom(startDate: string, onNotify: Sy
 
   const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
   localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(mergeFetchedHistory(cached, fetched)));
-  localStorage.setItem(TRANSACTION_HISTORY_FLOOR_KEY, startDate);
+  localStorage.setItem(ACCOUNT_KEYS.transactionHistoryFloor, startDate);
   onNotify();
 }
 
@@ -352,7 +354,7 @@ export function initFirestoreSync(
   requireOwnerUid();
   isSyncInitialized = true;
   liveTransactionWindowStart = transactionWindowStart;
-  localStorage.setItem(TRANSACTION_HISTORY_FLOOR_KEY, readHistoryFloor(transactionWindowStart));
+  localStorage.setItem(ACCOUNT_KEYS.transactionHistoryFloor, readHistoryFloor(transactionWindowStart));
 
   const pending = new Set<string>(SYNC_SOURCES);
   let settle: (() => void) | null = null;

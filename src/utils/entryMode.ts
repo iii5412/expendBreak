@@ -5,8 +5,9 @@
  * who only ever types expenses by hand should not have to leave the voice tab on
  * every single open, including the first one after a restart.
  */
+import { getAccountStorageKey } from './auth';
 
-const ENTRY_MODE_KEY = 'brake_entry_mode';
+const entryModeKey = () => getAccountStorageKey('brake_entry_mode');
 
 export type EntryMode = 'receipt' | 'voice' | 'ai' | 'manual';
 
@@ -22,7 +23,7 @@ function store(): Storage | null {
 
 export function savePreferredEntryMode(mode: EntryMode) {
   try {
-    store()?.setItem(ENTRY_MODE_KEY, mode);
+    store()?.setItem(entryModeKey(), mode);
   } catch {
     // Private-mode storage failures only cost us the preference.
   }
@@ -34,6 +35,6 @@ export function savePreferredEntryMode(mode: EntryMode) {
  */
 export function readPreferredEntryMode(aiClassificationEnabled: boolean): EntryMode {
   if (!aiClassificationEnabled) return 'manual';
-  const raw = store()?.getItem(ENTRY_MODE_KEY);
+  const raw = store()?.getItem(entryModeKey());
   return ENTRY_MODES.includes(raw as EntryMode) ? raw as EntryMode : 'voice';
 }

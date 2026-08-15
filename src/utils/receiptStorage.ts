@@ -1,8 +1,16 @@
 import { deleteObject, getBlob, list, ref, uploadBytes } from 'firebase/storage';
-import { auth, receiptStorage } from '../lib/firebase';
+import { receiptStorage } from '../lib/firebase';
+import { getSignedInAccount } from './auth';
 
 function requireOwnerUid() {
-  return 'owner';
+  return getSignedInAccount().uid;
+}
+
+function requireOwnedStoragePath(storagePath: string) {
+  const uid = requireOwnerUid();
+  if (!storagePath.startsWith(`users/${uid}/receipts/`)) {
+    throw new Error('다른 계정의 영수증 파일에는 접근할 수 없습니다.');
+  }
 }
 
 export async function uploadReceiptImage(receiptId: string, blob: Blob) {
@@ -31,7 +39,7 @@ export async function uploadReceiptImage(receiptId: string, blob: Blob) {
 }
 
 export async function loadReceiptImage(storagePath: string) {
-  requireOwnerUid();
+  requireOwnedStoragePath(storagePath);
   const timeoutMs = 5000;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -51,7 +59,7 @@ export async function loadReceiptImage(storagePath: string) {
 
 export async function deleteReceiptImage(storagePath?: string | null) {
   if (!storagePath) return;
-  requireOwnerUid();
+  requireOwnedStoragePath(storagePath);
   try {
     await deleteObject(ref(receiptStorage, storagePath));
   } catch (error: any) {

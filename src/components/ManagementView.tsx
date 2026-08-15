@@ -1288,7 +1288,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              PIN 확인 후 고정 소유자 세션을 발급하며, 확인 전에는 Firestore 데이터와 Gemini API를 불러오지 않습니다.
+              로그인한 계정의 Firebase UID 아래 데이터만 불러옵니다. 가족이 각자 다른 PIN으로 로그인해도 서로의 거래·예산·계좌·영수증은 보이지 않습니다.
             </p>
 
             <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
@@ -1342,9 +1342,9 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             </label>
 
             <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-xs text-slate-400 space-y-1">
-              <span className="font-bold text-emerald-300 block">PIN 변경 방법</span>
+              <span className="font-bold text-emerald-300 block">계정 및 PIN 설정 방법</span>
               <p className="leading-normal">
-                PIN은 앱 데이터에 저장되지 않습니다. 새 PIN hash를 생성한 뒤 배포 환경의 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">APP_PIN_HASH</code> secret을 교체하세요.
+                내 PIN은 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">APP_PIN_HASH</code>, 추가 가족 계정은 <code className="bg-slate-900 text-emerald-400 px-1 py-0.5 rounded border border-slate-800">APP_ACCOUNTS_JSON</code> 배포 secret으로 관리합니다. PIN 원문은 저장하지 않습니다.
               </p>
             </div>
           </div>
