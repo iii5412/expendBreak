@@ -37,7 +37,10 @@ const CACHE = 'expendbreak-' + VERSION;
 const SHELL = ${JSON.stringify(shell)};
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).catch(() => undefined));
+  event.waitUntil(Promise.all([
+    caches.open(CACHE).then(cache => cache.addAll(SHELL)).catch(() => undefined),
+    self.skipWaiting(),
+  ]));
 });
 
 self.addEventListener('activate', event => {

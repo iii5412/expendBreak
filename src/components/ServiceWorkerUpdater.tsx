@@ -18,6 +18,15 @@ export const ServiceWorkerUpdater: React.FC = () => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
 
     let cancelled = false;
+    let reloadRequested = false;
+    let reloadFallback: number | null = null;
+
+    const reloadOnNewController = () => {
+      if (!reloadRequested || cancelled) return;
+      reloadRequested = false;
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', reloadOnNewController);
 
     const promptUpdate = (waiting: ServiceWorker) => {
       showToast({
@@ -28,14 +37,17 @@ export const ServiceWorkerUpdater: React.FC = () => {
         action: {
           label: '새로고침',
           onAction: () => {
+            reloadRequested = true;
             waiting.postMessage('SKIP_WAITING');
-            window.location.reload();
+            // `controllerchange` is the authoritative signal. The fallback is
+            // only for older WebViews that activate a worker without emitting it.
+            reloadFallback = window.setTimeout(() => window.location.reload(), 3000);
           },
         },
       });
     };
 
-    navigator.serviceWorker.register('/sw.js').then(registration => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(registration => {
       if (cancelled) return;
 
       if (registration.waiting && navigator.serviceWorker.controller) {
@@ -52,12 +64,15 @@ export const ServiceWorkerUpdater: React.FC = () => {
           }
         });
       });
+      void registration.update();
     }).catch(error => {
       console.error('Service worker registration failed:', error);
     });
 
     return () => {
       cancelled = true;
+      navigator.serviceWorker.removeEventListener('controllerchange', reloadOnNewController);
+      if (reloadFallback !== null) window.clearTimeout(reloadFallback);
     };
   }, [showToast]);
 
