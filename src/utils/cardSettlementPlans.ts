@@ -72,15 +72,22 @@ export function findManualCardSettlementCandidates(
     const linkedCards = creditCards.filter(card => card.linkedAccountId === template.accountId);
     if (linkedCards.length === 0) continue;
 
-    // Confident: says "카드대금" and names the card or its issuer.
-    const namedCard = CARD_BILL_PATTERN.test(description)
-      ? linkedCards.find(card => {
-          const cardName = normalizeText(card.cardName);
-          const cardCompany = normalizeText(card.cardCompany);
-          return (cardName.length >= 2 && description.includes(cardName))
-            || (cardCompany.length >= 2 && description.includes(cardCompany));
-        })
-      : undefined;
+    // Confident: explicitly says "카드대금", or an account transfer is named
+    // exactly after the linked card/issuer (for example "신한카드"). These are
+    // settlement transfers, not ordinary fixed expenses, so the generated bill
+    // replaces them instead of letting both tracks count the same withdrawal.
+    const saysCardBill = CARD_BILL_PATTERN.test(description);
+    const namedCard = linkedCards.find(card => {
+      const cardName = normalizeText(card.cardName);
+      const cardCompany = normalizeText(card.cardCompany);
+      const exactCardName = (cardName.length >= 2 && description === cardName)
+        || (cardCompany.length >= 2 && description === cardCompany);
+      const billNamesCard = saysCardBill && (
+        (cardName.length >= 2 && description.includes(cardName))
+        || (cardCompany.length >= 2 && description.includes(cardCompany))
+      );
+      return exactCardName || billNamesCard;
+    }) ?? (saysCardBill && linkedCards.length === 1 ? linkedCards[0] : undefined);
 
     if (namedCard) {
       candidates.push({

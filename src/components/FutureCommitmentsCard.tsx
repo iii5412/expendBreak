@@ -14,7 +14,7 @@ interface FutureCommitmentsCardProps {
 }
 
 const SEGMENTS = [
-  { key: 'accountFixed', label: '고정비', className: 'bg-slate-500' },
+  { key: 'accountFixed', label: '계좌 고정지출', className: 'bg-slate-500' },
   { key: 'installments', label: '할부', className: 'bg-indigo-400' },
   { key: 'cardSettlement', label: '카드대금', className: 'bg-indigo-600' },
 ] as const;
@@ -31,7 +31,7 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
             앞으로 6주기에 이미 정해진 지출
           </h3>
           <p className="mt-0.5 text-xs text-slate-400">
-            지금 등록된 고정비·할부·카드대금만 계산했습니다. 앞으로 쓸 돈은 포함하지 않았습니다.
+            계좌 고정지출과 카드대금 이체를 분리했습니다. 이번 달 1일~말일 카드 사용분은 다음 달 카드대금에 한 번만 반영합니다.
           </p>
         </div>
       </div>
@@ -56,7 +56,7 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
             <div
               className="flex h-3 w-full overflow-hidden rounded-full border border-slate-800 bg-slate-950"
               role="img"
-              aria-label={`${month.yearMonth} 확정 지출 ${formatKRW(month.total)}: 고정비 ${formatKRW(month.accountFixed)}, 할부 ${formatKRW(month.installments)}, 카드대금 ${formatKRW(month.cardSettlement)}`}
+              aria-label={`${month.yearMonth} 확정 지출 ${formatKRW(month.total)}: 계좌 고정지출 ${formatKRW(month.accountFixed)}, 할부 ${formatKRW(month.installments)}, 카드대금 ${formatKRW(month.cardSettlement)}`}
             >
               {SEGMENTS.map(segment => {
                 const value = month[segment.key];

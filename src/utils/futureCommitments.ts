@@ -1,5 +1,5 @@
 import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
-import { getAccountingPeriod, getMonthlyDueDateInPeriod, shiftYearMonth } from './calculations';
+import { getAccountingPeriod, getScheduledDatesInPeriod, shiftYearMonth } from './calculations';
 import { calculateMonthlyCardSettlementSummary } from './cardPayments';
 import { getInstallmentCharge } from './installments';
 
@@ -13,7 +13,7 @@ import { getInstallmentCharge } from './installments';
 
 export interface FutureCommitmentMonth {
   yearMonth: string;
-  /** Recurring expenses transferred from an account. */
+  /** Recurring expenses transferred from an account, excluding card settlements. */
   accountFixed: number;
   /** Installment rounds due, excluded from `cardSettlement` to be shown separately. */
   installments: number;
@@ -50,16 +50,12 @@ export function calculateFutureCommitments(
     const accountFixed = recurringTemplates
       .filter(template => {
         if (!template.active || template.type !== 'expense') return false;
-        if (template.paymentMethodType === 'card') return false;
-        if (template.frequency !== 'monthly') return false;
-        const dueDate = getMonthlyDueDateInPeriod(template.dayOfMonth, period);
-        return Boolean(
-          dueDate
-          && dueDate >= template.startDate
-          && (!template.endDate || dueDate <= template.endDate),
-        );
+        if (template.paymentMethodType === 'card' || template.cardSettlementCardId) return false;
+        return getScheduledDatesInPeriod(template, period).length > 0;
       })
-      .reduce((sum, template) => sum + Math.round(template.defaultAmount), 0);
+      .reduce((sum, template) => (
+        sum + Math.round(template.defaultAmount) * getScheduledDatesInPeriod(template, period).length
+      ), 0);
 
     const settlement = calculateMonthlyCardSettlementSummary(
       yearMonth,
@@ -68,20 +64,30 @@ export function calculateFutureCommitments(
       monthStartDay,
       recurringOccurrences,
       recurringTemplates,
+      { usageBasis: 'previous_calendar_month' },
     );
 
     // Installment rounds sit inside the card bill; split them out so the bar can
     // show what is a one-off month versus a standing commitment.
-    const usageMonths = new Set(settlement.cards.map(card => card.usageYearMonth));
     const endingInstallments: FutureCommitmentMonth['endingInstallments'] = [];
     let installments = 0;
 
-    transactions.forEach(transaction => {
-      if (transaction.type !== 'expense' || !transaction.installment) return;
-      usageMonths.forEach(usageYearMonth => {
+    // Split installment rounds out of the exact card bill that contains them.
+    // Walking every usage month for every transaction counted one card's plan
+    // multiple times when cards in the same payday cycle had different windows.
+    settlement.cards.forEach(card => {
+      let cardInstallments = 0;
+      transactions.forEach(transaction => {
+        if (transaction.type !== 'expense'
+          || transaction.paymentMethodType !== 'card'
+          || transaction.cardId !== card.cardId
+          || !transaction.installment
+          || (transaction.role ?? 'normal') !== 'normal') return;
+
+        const usageYearMonth = card.usageYearMonth;
         const charge = getInstallmentCharge(transaction.amount, transaction.installment, usageYearMonth);
         if (!charge) return;
-        installments += charge.amount;
+        cardInstallments += charge.amount;
         if (charge.round === transaction.installment?.totalMonths) {
           endingInstallments.push({
             merchant: transaction.merchant || '할부',
@@ -90,6 +96,7 @@ export function calculateFutureCommitments(
           });
         }
       });
+      installments += Math.min(card.amount, cardInstallments);
     });
 
     const cardSettlement = Math.max(0, settlement.totalAmount - installments);

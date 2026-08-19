@@ -58,13 +58,13 @@ export function buildCycleClosingReport(
 
   const breakdown = getCategoryBreakdown(yearMonth, transactions, categoryMap, {
     variableOnly: true,
-    monthStartDay,
+    monthStartDay: 1,
   });
   const previousBreakdown = getCategoryBreakdown(
     shiftYearMonth(yearMonth, -1),
     transactions,
     categoryMap,
-    { variableOnly: true, monthStartDay },
+    { variableOnly: true, monthStartDay: 1 },
   );
   const previousByName = new Map(previousBreakdown.map(item => [item.categoryName, item.amount]));
 

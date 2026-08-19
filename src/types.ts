@@ -158,6 +158,9 @@ export interface RecurringTemplate {
   endDate?: string | null;
   nextDueDate: string; // YYYY-MM-DD
   active: boolean;
+  /** Soft deletion keeps already-loaded monthly plans usable until that month is
+   *  explicitly reloaded, while hiding the item from the normalized master list. */
+  archivedAt?: string | null;
   /** Set when the user confirms this manual item is card X's bill. The generated
    *  card settlement then stands in for it and planning skips this template. */
   cardSettlementCardId?: string | null;

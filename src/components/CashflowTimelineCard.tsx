@@ -54,7 +54,9 @@ export const CashflowTimelineCard: React.FC<CashflowTimelineCardProps> = ({ time
             이번 주기 잔고 흐름
           </h3>
           <p className="mt-0.5 text-xs text-slate-400">
-            입력한 계좌 잔액에서 확정된 입출금과 현재 소비 속도를 반영한 추정입니다.
+            {timeline.balanceAsOfDate
+              ? `${timeline.balanceAsOfDate} 잔액부터 이후 입출금과 현재 소비 속도를 반영한 추정입니다.`
+              : '입력한 계좌 잔액에서 확정된 입출금과 현재 소비 속도를 반영한 추정입니다.'}
           </p>
         </div>
       </div>

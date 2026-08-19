@@ -99,27 +99,32 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   const methodOf = (occurrence: RecurringOccurrence) =>
     occurrence.paymentMethodType ?? templateMap.get(occurrence.templateId)?.paymentMethodType;
 
+  const visibleOccurrences = useMemo(
+    () => recurringOccurrences.filter(occurrence => occurrence.status !== 'skipped'),
+    [recurringOccurrences],
+  );
+
   const incomeOccurrences = useMemo(
-    () => recurringOccurrences.filter(occurrence => typeOf(occurrence) === 'income'),
-    [recurringOccurrences, templateMap],
+    () => visibleOccurrences.filter(occurrence => typeOf(occurrence) === 'income'),
+    [visibleOccurrences, templateMap],
   );
 
   // Card-paid fixed expenses are settled through the card bill, so the transfer
   // checklist only lists what actually leaves an account on payday.
   const transferOccurrences = useMemo(
-    () => recurringOccurrences
+    () => visibleOccurrences
       .filter(occurrence => typeOf(occurrence) === 'expense' && methodOf(occurrence) !== 'card')
       .sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)),
-    [recurringOccurrences, templateMap],
+    [visibleOccurrences, templateMap],
   );
 
   // Fixed expenses that are real, just not transfers. Listing them by name is
   // what turns "왜 항목이 모자라지?" into an answer the user can check.
   const cardPaidOccurrences = useMemo(
-    () => recurringOccurrences
+    () => visibleOccurrences
       .filter(occurrence => typeOf(occurrence) === 'expense' && methodOf(occurrence) === 'card')
       .sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)),
-    [recurringOccurrences, templateMap],
+    [visibleOccurrences, templateMap],
   );
 
   /** Transfers grouped the way the user actually does them: one bank at a time. */

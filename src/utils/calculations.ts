@@ -129,6 +129,14 @@ export interface MonthSummaryOptions {
   savingsReserve?: number;
   /** The cycle's locked payday plan, if the user has confirmed one. */
   baseline?: CycleBaseline | null;
+  /** When false, only rows explicitly loaded into this monthly plan are used. */
+  reserveUnmaterializedTemplates?: boolean;
+}
+
+/** Only normal purchases/income are spending. Settlements and transfers merely
+ * move money that has already been counted elsewhere. */
+export function isSpendingTransaction(transaction: Transaction): boolean {
+  return (transaction.role ?? 'normal') === 'normal';
 }
 
 /**
@@ -345,15 +353,13 @@ export function calculateMonthSummary(
 
   // Card settlements and transfers move money the app already accounts for, so
   // they are excluded from every expense total (INV-2). Only `normal` is spending.
-  const isSpending = (transaction: Transaction) => (transaction.role ?? 'normal') === 'normal';
-
   // Confirmed Expenses
   const confirmedExpenses = monthTxs
-    .filter(t => t.type === 'expense' && isSpending(t))
+    .filter(t => t.type === 'expense' && isSpendingTransaction(t))
     .reduce((sum, t) => sum + Math.round(t.amount), 0);
 
   // Confirmed Fixed Expenses (expenses originating from recurring templates)
-  const confirmedFixedTxs = monthTxs.filter(t => t.type === 'expense' && t.recurringTemplateId && isSpending(t));
+  const confirmedFixedTxs = monthTxs.filter(t => t.type === 'expense' && t.recurringTemplateId && isSpendingTransaction(t));
   const confirmedFixedExpenses = confirmedFixedTxs
     .reduce((sum, t) => sum + Math.round(t.amount), 0);
 
@@ -370,7 +376,7 @@ export function calculateMonthSummary(
   // cycle's, and an installment purchase is skipped in the cycle it was made.
   const variableTransactions = transactions.filter(transaction => {
     if (transaction.type !== 'expense' || transaction.recurringTemplateId) return false;
-    if (!isSpending(transaction)) return false;
+    if (!isSpendingTransaction(transaction)) return false;
     return transaction.installment
       ? Boolean(getInstallmentCharge(transaction.amount, transaction.installment, yearMonth))
       : isDateInPeriod(transaction.localDate, spendPeriod);
@@ -425,7 +431,7 @@ export function calculateMonthSummary(
   // Weekly items land several times per cycle, so the net counts occurrences,
   // not templates. Both frequencies honour the holiday policy: a due date pushed
   // across the period boundary belongs to the neighbouring cycle, not this one.
-  const unmaterializedFixed = templates
+  const unmaterializedFixed = options.reserveUnmaterializedTemplates === false ? [] : templates
     .filter(template => template.active
       && template.type === 'expense'
       && !occurrenceTemplateIds.has(template.id)
@@ -664,6 +670,7 @@ export function getCategoryBreakdown(
   // track, so one big purchase does not dominate the category mix for a month.
   const expenses = transactions.filter(t => {
     if (t.type !== 'expense') return false;
+    if (!isSpendingTransaction(t)) return false;
     if (options.variableOnly && t.recurringTemplateId) return false;
     return t.installment
       ? Boolean(getInstallmentCharge(t.amount, t.installment, yearMonth))

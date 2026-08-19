@@ -131,7 +131,10 @@ describe('GPT live finance helpers', () => {
     };
 
     const snapshot = createAssistantFinancialSnapshot({
-      transactions: [transaction({})],
+      transactions: [
+        transaction({}),
+        transaction({ id: 'settlement', amount: 900_000, role: 'card_settlement' }),
+      ],
       categories,
       bankAccounts: accounts,
       budget,
@@ -143,6 +146,7 @@ describe('GPT live finance helpers', () => {
     expect(snapshot.확정전체지출).toBe(52_000);
     expect(snapshot.사용한용돈).toBe(52_000);
     expect(snapshot.남은용돈).toBe(-52_000);
+    expect(snapshot.용돈상위카테고리).toEqual([{ 카테고리: '식비', 금액: 52_000 }]);
     expect(snapshot.수동계좌잔액합계).toBe(1_200_000);
     expect(JSON.stringify(snapshot)).not.toContain('110-123-456789');
   });

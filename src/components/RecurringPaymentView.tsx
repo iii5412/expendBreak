@@ -16,6 +16,8 @@ import {
   TrendingUp,
   TrendingDown,
   RefreshCw,
+  Search,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   BankAccount,
@@ -72,6 +74,8 @@ interface RecurringPaymentViewProps {
     customCardId?: string | null
   ) => void;
   onUndoPostedOccurrence: (occurrenceId: string) => void;
+  /** Excludes one unposted row from this month without deleting its master item. */
+  onExcludeOccurrence: (occurrenceId: string) => void;
   onUpdateOccurrencePlan: (
     occId: string,
     amount: number,
@@ -99,9 +103,13 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   onUpdateCardSettlementStatus,
   onPostOccurrence,
   onUndoPostedOccurrence,
+  onExcludeOccurrence,
   onUpdateOccurrencePlan,
 }) => {
-  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'posted' | 'expense' | 'income'>('pending');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'posted' | 'expense' | 'card' | 'income'>('pending');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'account' | 'card'>('all');
+  const [sortBy, setSortBy] = useState<'date_asc' | 'date_desc' | 'name' | 'amount_asc' | 'amount_desc'>('date_asc');
 
   // Modal State for Confirming Payment / Income
   const [selectedOcc, setSelectedOcc] = useState<RecurringOccurrence | null>(null);
@@ -187,6 +195,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   // stays visible under 처리 완료 so its generated transaction can still be
   // cancelled and cleaned up after the template itself was deleted.
   const occurrencesWithTemplates = recurringOccurrences.flatMap((occ) => {
+    if (occ.status === 'skipped') return [];
     const tmpl = templateMap.get(occ.templateId);
     if (!tmpl && occ.status !== 'posted') return [];
     const type = occ.typeSnapshot ?? tmpl?.type ?? 'expense';
@@ -195,6 +204,12 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
 
   const incomeOccurrences = occurrencesWithTemplates.filter((o) => o.type === 'income');
   const expenseOccurrences = occurrencesWithTemplates.filter((o) => o.type === 'expense');
+  const paymentMethodOf = (occurrence: (typeof occurrencesWithTemplates)[number]) =>
+    occurrence.paymentMethodType
+      ?? occurrence.tmpl?.paymentMethodType
+      ?? (occurrence.type === 'income' ? 'account' : 'card');
+  const accountExpenseOccurrences = expenseOccurrences.filter(occurrence => paymentMethodOf(occurrence) !== 'card');
+  const cardExpenseOccurrences = expenseOccurrences.filter(occurrence => paymentMethodOf(occurrence) === 'card');
 
   const totalScheduledIncome = incomeOccurrences.filter(o => o.status !== 'skipped').reduce(
     (sum, o) => sum + (o.actualAmount ?? o.expectedAmount),
@@ -205,17 +220,15 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     .reduce((sum, o) => sum + (o.actualAmount ?? o.expectedAmount), 0);
   const pendingIncomeAmount = totalScheduledIncome - totalPostedIncome;
 
-  // Fixed-outflow totals come from the shared cash-track model so this screen,
-  // the dashboard and settings cannot drift apart.
-  const totalScheduledExpense = summary.accountFixedOutflow + summary.cardSettlementOutflow;
-  const postedCardSettlementAmount = cardSettlementSummary.cards
-    .filter(card => card.status === 'paid')
-    .reduce((sum, card) => sum + card.amount, 0);
-  const totalPostedExpense = summary.confirmedAccountFixedOutflow + postedCardSettlementAmount;
-  const pendingExpenseAmount = totalScheduledExpense - totalPostedExpense;
+  // Only direct account transfers belong to the recurring expense amount.
+  // Card-paid fixed items are informational here: their cash outflow appears
+  // exactly once in the separately calculated card bill below.
+  const totalScheduledExpense = summary.accountFixedOutflow;
+  const totalPostedExpense = summary.confirmedAccountFixedOutflow;
+  const pendingExpenseAmount = summary.scheduledAccountFixedOutflow;
   const cardSettlementItems = cardSettlementSummary.cards;
-  const pendingCardSettlementCount = cardSettlementItems.filter(card => card.status !== 'paid').length;
-  const paidCardSettlementCount = cardSettlementItems.filter(card => card.status === 'paid').length;
+  const pendingAccountExpenseCount = accountExpenseOccurrences.filter(occurrence => occurrence.status !== 'posted').length;
+  const pendingCardExpenseCount = cardExpenseOccurrences.filter(occurrence => occurrence.status !== 'posted').length;
   // Cards with different billing days can charge different usage months.
   const cardBillUsageMonths = [...new Set(cardSettlementItems.map(card => card.usageYearMonth))];
   const cardBillUsageLabel = cardBillUsageMonths.length === 1 ? cardBillUsageMonths[0] : '직전 사용월';
@@ -229,14 +242,48 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     }
   };
 
-  // Filter Occurrences
-  const filteredOccurrences = occurrencesWithTemplates.filter((occ) => {
-    if (filterStatus === 'pending') return occ.status !== 'posted' && occ.status !== 'skipped';
-    if (filterStatus === 'posted') return occ.status === 'posted';
-    if (filterStatus === 'income') return occ.type === 'income';
-    if (filterStatus === 'expense') return occ.type === 'expense';
-    return true;
-  });
+  // Filter and sort the selected month's materialized rows. Automatic card
+  // settlements remain in their own section because they are calculated rows,
+  // not recurring occurrences that can be edited or excluded here.
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase('ko-KR');
+  const filteredOccurrences = occurrencesWithTemplates
+    .filter((occ) => {
+      if (filterStatus === 'pending' && (occ.status === 'posted' || occ.status === 'skipped')) return false;
+      if (filterStatus === 'posted' && occ.status !== 'posted') return false;
+      if (filterStatus === 'income' && occ.type !== 'income') return false;
+      const method = paymentMethodOf(occ);
+      if (filterStatus === 'expense' && (occ.type !== 'expense' || method === 'card')) return false;
+      if (filterStatus === 'card' && (occ.type !== 'expense' || method !== 'card')) return false;
+
+      if (paymentFilter !== 'all' && method !== paymentFilter) return false;
+
+      if (!normalizedSearchQuery) return true;
+      const categoryName = occ.tmpl ? categoryMap.get(occ.tmpl.categoryId)?.name : '';
+      const linkedAccountId = occ.accountId ?? occ.tmpl?.accountId;
+      const linkedCardId = occ.cardId ?? occ.tmpl?.cardId;
+      const account = linkedAccountId ? accountMap.get(linkedAccountId) : undefined;
+      const card = linkedCardId ? cardMap.get(linkedCardId) : undefined;
+      return [
+        occ.tmpl?.name,
+        occ.tmpl?.counterparty,
+        categoryName,
+        account?.accountName,
+        account?.bankName,
+        card?.cardName,
+      ].some(value => value?.toLocaleLowerCase('ko-KR').includes(normalizedSearchQuery));
+    })
+    .sort((left, right) => {
+      const leftAmount = left.actualAmount ?? left.expectedAmount;
+      const rightAmount = right.actualAmount ?? right.expectedAmount;
+      const leftName = left.tmpl?.name || '삭제된 정기 항목';
+      const rightName = right.tmpl?.name || '삭제된 정기 항목';
+
+      if (sortBy === 'date_desc') return right.scheduledDate.localeCompare(left.scheduledDate) || leftName.localeCompare(rightName, 'ko-KR');
+      if (sortBy === 'name') return leftName.localeCompare(rightName, 'ko-KR');
+      if (sortBy === 'amount_asc') return leftAmount - rightAmount || leftName.localeCompare(rightName, 'ko-KR');
+      if (sortBy === 'amount_desc') return rightAmount - leftAmount || leftName.localeCompare(rightName, 'ko-KR');
+      return left.scheduledDate.localeCompare(right.scheduledDate) || leftName.localeCompare(rightName, 'ko-KR');
+    });
 
   return (
     <div className="space-y-6 pb-20">
@@ -270,7 +317,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       </div>
 
       {/* Metrics Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 text-emerald-400 text-xs font-semibold">
@@ -289,7 +336,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 text-rose-400 text-xs font-semibold">
               <TrendingDown className="w-4 h-4" />
-              이번 달 고정 출금 예정액
+              계좌 고정지출 예정액
             </span>
             <span className="text-xs text-slate-400 font-medium">납부 완료: {formatKRW(totalPostedExpense)}</span>
           </div>
@@ -298,8 +345,20 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             남은 납부 예정: <strong className="text-amber-300">{formatKRW(pendingExpenseAmount)}</strong>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            계좌 이체 {formatKRW(summary.accountFixedOutflow)} + 카드대금 {formatKRW(summary.cardSettlementOutflow)}
+            카드 결제 항목과 카드대금은 제외한 금액
           </p>
+        </div>
+
+        <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/5 p-4">
+          <div className="flex items-center gap-2 text-xs font-semibold text-indigo-300">
+            <CreditCard className="h-4 w-4" />
+            카드 결제 고정항목
+          </div>
+          <p className="mt-1 text-xl font-extrabold text-indigo-300">{formatKRW(summary.cardFixedExpenses)}</p>
+          <p className="mt-1 text-xs text-slate-400">
+            미처리 {pendingCardExpenseCount}건 · 카드대금에 포함되는 참고 금액
+          </p>
+          <p className="mt-1 text-xs font-semibold text-indigo-200/80">계좌 고정지출 합계에서는 제외</p>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
@@ -308,12 +367,19 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             미처리 항목 건수
           </div>
           <p className="text-xl font-extrabold text-indigo-300 mt-1">
-            {occurrencesWithTemplates.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건
+            {incomeOccurrences.filter(occurrence => occurrence.status !== 'posted').length + pendingAccountExpenseCount + pendingCardExpenseCount}건
           </p>
           <p className="text-xs text-slate-400 mt-1">
-            수입 {incomeOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length}건 / 지출 {expenseOccurrences.filter(o => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount}건 대기 중
+            수입 {incomeOccurrences.filter(occurrence => occurrence.status !== 'posted').length}건 / 계좌 지출 {pendingAccountExpenseCount}건 / 카드 {pendingCardExpenseCount}건
           </p>
         </div>
+      </div>
+
+      <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/5 p-3 text-xs leading-relaxed text-indigo-100">
+        <strong>카드 고정비는 지출 합계에 다시 더하지 않습니다.</strong>
+        <span className="ml-1 text-slate-300">
+          카드 결제 고정항목 {formatKRW(summary.cardFixedExpenses)}은 카드 사용 내역이며, 실제 통장 출금은 카드 결제일이 속한 주기의 카드대금으로 한 번만 반영됩니다. 이번 주기 카드대금은 {formatKRW(summary.cardSettlementOutflow)}입니다.
+        </span>
       </div>
 
       <div className="space-y-3 rounded-2xl border border-indigo-500/25 bg-indigo-500/5 p-4">
@@ -327,7 +393,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
               결제일이 {period.yearMonth} 주기 안에 있는 카드대금입니다. {cardBillUsageLabel} 사용분과 카드 결제 고정지출을 합산하며, 카드 사용 거래를 다시 지출로 중복 저장하지 않고 결제계좌에서 확보할 출금액으로만 반영합니다.
             </p>
           </div>
-          <span className="shrink-0 text-base font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.linkedAccountTotal)}</span>
+          <span className="shrink-0 text-base font-extrabold text-indigo-300">{formatKRW(cardSettlementSummary.totalAmount)}</span>
         </div>
 
         {cardSettlementItems.length === 0 ? (
@@ -494,7 +560,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            미처리 대기 ({occurrencesWithTemplates.filter((o) => o.status !== 'posted' && o.status !== 'skipped').length + pendingCardSettlementCount})
+            미처리 대기 ({occurrencesWithTemplates.filter((o) => o.status !== 'posted').length})
           </button>
 
           <button
@@ -516,7 +582,18 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            고정 지출만 ({expenseOccurrences.length + cardSettlementItems.length})
+            계좌 고정지출 ({accountExpenseOccurrences.length})
+          </button>
+
+          <button
+            onClick={() => setFilterStatus('card')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+              filterStatus === 'card'
+                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            카드 고정비 ({cardExpenseOccurrences.length})
           </button>
 
           <button
@@ -527,7 +604,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            처리 완료 ({occurrencesWithTemplates.filter((o) => o.status === 'posted').length + paidCardSettlementCount})
+            처리 완료 ({occurrencesWithTemplates.filter((o) => o.status === 'posted').length})
           </button>
 
           <button
@@ -538,13 +615,61 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            전체 보기 ({occurrencesWithTemplates.length + cardSettlementItems.length})
+            전체 보기 ({occurrencesWithTemplates.length})
           </button>
         </div>
       </div>
 
+      <div className="grid grid-cols-1 gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+        <label className="relative min-w-0">
+          <span className="sr-only">정기납부 항목 검색</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={event => setSearchQuery(event.target.value)}
+            placeholder="항목명·카테고리·계좌 검색"
+            className="min-h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500/60"
+          />
+        </label>
+
+        <label className="flex min-w-0 items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-2.5">
+          <span className="shrink-0 text-[11px] font-bold text-slate-400">결제수단</span>
+          <select
+            value={paymentFilter}
+            onChange={event => setPaymentFilter(event.target.value as typeof paymentFilter)}
+            className="min-h-10 min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-200 outline-none"
+            aria-label="정기납부 결제수단 필터"
+          >
+            <option value="all">전체</option>
+            <option value="account">계좌</option>
+            <option value="card">카드</option>
+          </select>
+        </label>
+
+        <label className="flex min-w-0 items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 px-2.5">
+          <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+          <select
+            value={sortBy}
+            onChange={event => setSortBy(event.target.value as typeof sortBy)}
+            className="min-h-10 min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-200 outline-none"
+            aria-label="정기납부 목록 정렬"
+          >
+            <option value="date_asc">예정일 빠른순</option>
+            <option value="date_desc">예정일 늦은순</option>
+            <option value="name">이름순</option>
+            <option value="amount_asc">금액 낮은순</option>
+            <option value="amount_desc">금액 높은순</option>
+          </select>
+        </label>
+
+        <p className="text-[11px] text-slate-500 sm:col-span-3">
+          조건에 맞는 정기납부 {filteredOccurrences.length}건
+        </p>
+      </div>
+
       {/* List of Recurring Items */}
-      {filteredOccurrences.length === 0 && cardSettlementItems.length === 0 ? (
+      {filteredOccurrences.length === 0 ? (
         <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-8 text-center space-y-3">
           <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
             <Receipt className="w-6 h-6" />
@@ -561,6 +686,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             const cat = tmpl ? categoryMap.get(tmpl.categoryId) : undefined;
             const isPosted = occ.status === 'posted';
             const isIncome = occ.type === 'income';
+            const isCardExpense = !isIncome && paymentMethodOf(occ) === 'card';
 
             // Determine Account or Card details
             const cardObj = occ.cardId ? cardMap.get(occ.cardId) : (tmpl?.cardId ? cardMap.get(tmpl.cardId) : undefined);
@@ -599,6 +725,10 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       {isIncome ? (
                         <span className="text-xs font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1">
                           <TrendingUp className="w-3 h-3" /> 고정 수입
+                        </span>
+                      ) : isCardExpense ? (
+                        <span className="flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/20 px-2 py-0.5 text-xs font-bold text-indigo-300">
+                          <CreditCard className="h-3 w-3" /> 카드 고정비 · 카드대금 포함
                         </span>
                       ) : (
                         <span className="text-xs font-bold bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-md border border-rose-500/30 flex items-center gap-1">
@@ -667,6 +797,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                     <span className="text-xs text-slate-400 block">
                       {isIncome
                         ? (isPosted ? '최종 입금 금액' : '예상 입금 금액')
+                        : isCardExpense
+                          ? (isPosted ? '카드 반영 금액' : '카드 반영 예정액')
                         : (isPosted ? '최종 납부 금액' : '예상 납부 금액')}
                     </span>
                     <span
@@ -695,17 +827,27 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                         </button>
                       </div>
                     ) : (
-                      <button
-                        onClick={() => handleOpenPaymentModal(occ)}
-                        className={`text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                          isIncome
-                            ? 'bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-700 hover:to-teal-600'
-                            : 'bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600'
-                        }`}
-                      >
-                        {isIncome ? <TrendingUp className="w-4 h-4" /> : <Receipt className="w-4 h-4" />}
-                        {isIncome ? '금액 확인 및 입금' : '금액 입력 및 납부'}
-                      </button>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onExcludeOccurrence(occ.id)}
+                          className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs font-bold text-slate-300 transition-colors hover:border-rose-500/40 hover:bg-rose-500/10 hover:text-rose-300"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          이번 달 제외
+                        </button>
+                        <button
+                          onClick={() => handleOpenPaymentModal(occ)}
+                          className={`text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-1.5 shrink-0 ${
+                            isIncome
+                              ? 'bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-700 hover:to-teal-600'
+                              : 'bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600'
+                          }`}
+                        >
+                          {isIncome ? <TrendingUp className="w-4 h-4" /> : <Receipt className="w-4 h-4" />}
+                          {isIncome ? '금액 확인 및 입금' : isCardExpense ? '금액 입력 및 카드 반영' : '금액 입력 및 납부'}
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>

@@ -27,6 +27,8 @@ export interface CashflowTimeline {
   lowestBalance: number;
   /** False when no account balance is recorded, making the whole line meaningless. */
   hasStartingBalance: boolean;
+  /** Snapshot date used as the opening point. Transactions on/before it are already in the balance. */
+  balanceAsOfDate: string | null;
 }
 
 export function buildCashflowTimeline(
@@ -42,24 +44,54 @@ export function buildCashflowTimeline(
   const startingBalance = bankAccounts.reduce((sum, account) => sum + Math.round(account.balance || 0), 0);
   const templateMap = new Map(templates.map(template => [template.id, template]));
   const today = getLocalDateString(now);
+  const recordedBalanceDates = bankAccounts
+    .map(account => account.balanceAsOf)
+    .filter((date): date is string => Boolean(date && /^\d{4}-\d{2}-\d{2}$/.test(date)))
+    .sort();
+  const balanceAsOfDate = recordedBalanceDates.at(-1) ?? null;
+  const snapshotFallsAfterPeriod = Boolean(balanceAsOfDate && balanceAsOfDate > period.endDate);
+  const timelineStartDate = balanceAsOfDate && balanceAsOfDate > period.startDate
+    ? balanceAsOfDate
+    : period.startDate;
+  const signedRecordedMovement = (transaction: Transaction) => {
+    const role = transaction.role ?? 'normal';
+    if (role === 'transfer') return 0;
+    if (transaction.type === 'income') return Math.round(transaction.amount);
+    if (role === 'normal' && transaction.paymentMethodType === 'card') return 0;
+    return -Math.round(transaction.amount);
+  };
+  const openingBalanceAdjustment = balanceAsOfDate && balanceAsOfDate < period.startDate
+    ? transactions
+      .filter(transaction => transaction.localDate > balanceAsOfDate && transaction.localDate < period.startDate)
+      .reduce((sum, transaction) => sum + signedRecordedMovement(transaction), 0)
+    : 0;
+  const balanceDateAlignment = balanceAsOfDate
+    ? bankAccounts.reduce((sum, account) => {
+      if (!account.balanceAsOf || account.balanceAsOf >= balanceAsOfDate) return sum;
+      return sum + transactions
+        .filter(transaction => transaction.accountId === account.id
+          && transaction.localDate > account.balanceAsOf!
+          && transaction.localDate <= balanceAsOfDate)
+        .reduce((accountSum, transaction) => accountSum + signedRecordedMovement(transaction), 0);
+    }, 0)
+    : 0;
 
   /** Amounts to apply on a given date, signed: positive adds to the balance. */
   const movements = new Map<string, Array<{ label: string; amount: number }>>();
   const addMovement = (date: string, label: string, amount: number) => {
     if (!isDateInPeriod(date, period) || amount === 0) return;
+    // The manually entered balance already contains everything through its
+    // snapshot date. Replaying those rows was the source of double deductions.
+    if (balanceAsOfDate && date <= balanceAsOfDate) return;
     movements.set(date, [...(movements.get(date) || []), { label, amount }]);
   };
 
   // Recorded history. Card settlements are real withdrawals; card purchases are
   // not, since they leave the account only when the bill is paid.
   transactions.forEach(transaction => {
-    const role = transaction.role ?? 'normal';
-    if (transaction.type === 'income') {
-      addMovement(transaction.localDate, transaction.merchant || '수입', Math.round(transaction.amount));
-      return;
-    }
-    if (role === 'normal' && transaction.paymentMethodType === 'card') return;
-    addMovement(transaction.localDate, transaction.merchant || '지출', -Math.round(transaction.amount));
+    const amount = signedRecordedMovement(transaction);
+    if (amount === 0) return;
+    addMovement(transaction.localDate, transaction.merchant || (amount > 0 ? '수입' : '지출'), amount);
   });
 
   // Still-pending recurring items, on their scheduled dates.
@@ -80,12 +112,17 @@ export function buildCashflowTimeline(
   });
 
   const points: CashflowTimelinePoint[] = [];
-  const [startYear, startMonth, startDay] = period.startDate.split('-').map(Number);
-  let balance = startingBalance;
+  const [startYear, startMonth, startDay] = timelineStartDate.split('-').map(Number);
+  const endDate = new Date(`${period.endDate}T12:00:00`);
+  const startDate = new Date(startYear, startMonth - 1, startDay, 12);
+  const timelineDays = snapshotFallsAfterPeriod
+    ? 0
+    : Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1;
+  let balance = startingBalance + balanceDateAlignment + openingBalanceAdjustment;
   let shortfallDate: string | null = null;
-  let lowestBalance = startingBalance;
+  let lowestBalance = balance;
 
-  for (let offset = 0; offset < period.daysInMonth; offset += 1) {
+  for (let offset = 0; offset < timelineDays; offset += 1) {
     const date = getLocalDateString(new Date(startYear, startMonth - 1, startDay + offset));
     const events = movements.get(date) || [];
     balance += events.reduce((sum, event) => sum + event.amount, 0);
@@ -104,6 +141,8 @@ export function buildCashflowTimeline(
     points,
     shortfallDate,
     lowestBalance,
-    hasStartingBalance: bankAccounts.some(account => Math.round(account.balance || 0) !== 0),
+    hasStartingBalance: !snapshotFallsAfterPeriod
+      && bankAccounts.some(account => Math.round(account.balance || 0) !== 0),
+    balanceAsOfDate,
   };
 }

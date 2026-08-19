@@ -61,6 +61,22 @@ describe('future commitments', () => {
     expect(months.every(month => month.accountFixed === 700_000)).toBe(true);
   });
 
+  it('counts every weekly account transfer in the payday cycle', () => {
+    const weekly: RecurringTemplate = {
+      ...RENT,
+      id: 't_weekly',
+      name: '주간 이체',
+      defaultAmount: 50_000,
+      frequency: 'weekly',
+      startDate: '2026-08-14',
+      nextDueDate: '2026-08-14',
+    };
+
+    const { months } = calculateFutureCommitments('2026-08', [], [weekly], [], [], SALARY_DAY, 1);
+
+    expect(months[0].accountFixed).toBe(200_000);
+  });
+
   it('stops a template after its end date', () => {
     const ending = { ...RENT, endDate: '2026-10-31' };
     const { months } = calculateFutureCommitments('2026-08', [], [ending], [], [], SALARY_DAY, 6);
@@ -114,6 +130,72 @@ describe('future commitments', () => {
     expect(september?.installments).toBe(100_000);
     expect(september?.cardSettlement).toBe(0);
     expect(september?.total).toBe(100_000);
+  });
+
+  it('keeps account fixed expenses and the card-bill transfer in separate segments', () => {
+    const purchase = makeTransaction({ amount: 50_000, paymentMethodType: 'card', cardId: CARD.id });
+    const { months } = calculateFutureCommitments('2026-09', [purchase], [RENT], [], [CARD], SALARY_DAY, 1);
+
+    expect(months[0]).toMatchObject({
+      accountFixed: 700_000,
+      installments: 0,
+      cardSettlement: 50_000,
+      total: 750_000,
+    });
+  });
+
+  it('puts every card purchase from the 1st through month end in next month bill', () => {
+    const cardWithStatementWindow: PaymentCard = { ...CARD, billingDay: 5, statementClosingDay: 11 };
+    const purchases = [
+      makeTransaction({ id: 'aug-1', localDate: '2026-08-01', amount: 10_000, paymentMethodType: 'card', cardId: CARD.id }),
+      makeTransaction({ id: 'aug-31', localDate: '2026-08-31', amount: 20_000, paymentMethodType: 'card', cardId: CARD.id }),
+      makeTransaction({ id: 'sep-1', localDate: '2026-09-01', amount: 40_000, paymentMethodType: 'card', cardId: CARD.id }),
+    ];
+
+    const { months } = calculateFutureCommitments(
+      '2026-09', purchases, [], [], [cardWithStatementWindow], SALARY_DAY, 2,
+    );
+
+    expect(months[0].cardSettlement).toBe(30_000);
+    expect(months[1].cardSettlement).toBe(40_000);
+  });
+
+  it('does not classify a confirmed card settlement transfer as account fixed', () => {
+    const manualCardBill: RecurringTemplate = {
+      ...RENT,
+      id: 'manual-card-bill',
+      name: '신한카드',
+      defaultAmount: 50_000,
+      cardSettlementCardId: CARD.id,
+    };
+    const purchase = makeTransaction({ amount: 50_000, paymentMethodType: 'card', cardId: CARD.id });
+    const { months } = calculateFutureCommitments(
+      '2026-09', [purchase], [manualCardBill], [], [CARD], SALARY_DAY, 1,
+    );
+
+    expect(months[0]).toMatchObject({ accountFixed: 0, cardSettlement: 50_000, total: 50_000 });
+  });
+
+  it('does not apply one card installment to another card usage month', () => {
+    const purchase = makeTransaction({
+      amount: 300_000,
+      paymentMethodType: 'card',
+      cardId: CARD.id,
+      installment: { totalMonths: 3, currentRound: 1, baseYearMonth: '2026-08' },
+    });
+    const earlyBillingCard: PaymentCard = {
+      ...CARD,
+      id: 'card_2',
+      cardName: '다른 카드',
+      billingDay: 5,
+    };
+
+    const { months } = calculateFutureCommitments(
+      '2026-09', [purchase], [], [], [CARD, earlyBillingCard], SALARY_DAY, 1,
+    );
+
+    expect(months[0].installments).toBe(100_000);
+    expect(months[0].total).toBe(100_000);
   });
 
   it('reports the peak for bar scaling', () => {

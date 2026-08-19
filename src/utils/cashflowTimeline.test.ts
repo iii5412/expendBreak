@@ -114,6 +114,49 @@ describe('cashflow timeline', () => {
     expect(timeline.points.find(point => point.date === '2026-08-25')?.balance).toBe(600_000);
   });
 
+  it('starts at the balance snapshot date without replaying older transactions', () => {
+    const past = makeTransaction({ amount: 300_000, localDate: '2026-08-11', paymentMethodType: 'account' });
+    const future = makeTransaction({ amount: 100_000, localDate: '2026-08-13', paymentMethodType: 'account' });
+    const timeline = buildCashflowTimeline(
+      PERIOD,
+      [past, future],
+      [],
+      [],
+      [{ ...ACCOUNT, balanceAsOf: '2026-08-12' }],
+      emptySettlement,
+      0,
+      NOW,
+    );
+
+    expect(timeline.balanceAsOfDate).toBe('2026-08-12');
+    expect(timeline.points[0]).toMatchObject({ date: '2026-08-12', balance: 1_000_000 });
+    expect(timeline.points.find(point => point.date === '2026-08-13')?.balance).toBe(900_000);
+  });
+
+  it('aligns accounts recorded on different balance dates before combining them', () => {
+    const accountA = { ...ACCOUNT, id: 'acc_a', balance: 500_000, balanceAsOf: '2026-08-10' };
+    const accountB = { ...ACCOUNT, id: 'acc_b', balance: 500_000, balanceAsOf: '2026-08-12' };
+    const accountAExpense = makeTransaction({
+      amount: 100_000,
+      localDate: '2026-08-11',
+      paymentMethodType: 'account',
+      accountId: accountA.id,
+    });
+
+    const timeline = buildCashflowTimeline(
+      PERIOD, [accountAExpense], [], [], [accountA, accountB], emptySettlement, 0, NOW,
+    );
+
+    expect(timeline.points[0]).toMatchObject({ date: '2026-08-12', balance: 900_000 });
+  });
+
+  it('does not reduce the combined account balance for an internal transfer', () => {
+    const transfer = makeTransaction({ amount: 300_000, role: 'transfer', paymentMethodType: 'account' });
+    const timeline = buildCashflowTimeline(PERIOD, [transfer], [], [], [ACCOUNT], emptySettlement, 0, NOW);
+
+    expect(timeline.points.every(point => point.balance === 1_000_000)).toBe(true);
+  });
+
   it('carries the spending trend into future days only', () => {
     const timeline = buildCashflowTimeline(PERIOD, [], [], [], [ACCOUNT], emptySettlement, 10_000, NOW);
 

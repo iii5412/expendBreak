@@ -39,7 +39,6 @@ import {
   deleteCategoryFromFirestore,
   syncBudgetToFirestore,
   syncRecurringTemplateToFirestore,
-  deleteRecurringTemplateFromFirestore,
   syncRecurringOccurrencesToFirestore,
   deleteRecurringOccurrencesFromFirestore,
   commitRecurringPosting,
@@ -73,7 +72,6 @@ import {
   getScheduledDatesForMonth,
   normalizeRecurringOccurrencesForMonth,
   reopenPostedOccurrence,
-  removeUnpostedOccurrencesForTemplate,
 } from './recurringNormalization';
 
 const STORAGE_KEYS = {
@@ -373,20 +371,21 @@ function generateOccurrencesForMonth(
   occurrences = normalized.occurrences;
 
   for (const tmpl of templates) {
-    if (!tmpl.active) continue;
+    if (!tmpl.active || tmpl.archivedAt) continue;
 
     // A monthly item is paid once per salary cycle, not once per calendar month.
     // Scoping this to the calendar month silently swallowed the new cycle: an
     // item paid on the 5th blocked the one due on the 10th, the first day of the
     // cycle that follows it, and the payment never appeared anywhere.
-    const postedCycles = tmpl.frequency === 'monthly'
+    const closedCycles = tmpl.frequency === 'monthly'
       ? new Set(occurrences
-        .filter(occurrence => occurrence.templateId === tmpl.id && occurrence.status === 'posted')
+        .filter(occurrence => occurrence.templateId === tmpl.id
+          && (occurrence.status === 'posted' || occurrence.status === 'skipped'))
         .map(occurrence => getYearMonthForDate(occurrence.scheduledDate, monthStartDay)))
       : new Set<string>();
 
     for (const scheduledDate of getScheduledDatesForMonth(tmpl, yearMonth, monthStartDay)) {
-      if (postedCycles.has(getYearMonthForDate(scheduledDate, monthStartDay))) continue;
+      if (closedCycles.has(getYearMonthForDate(scheduledDate, monthStartDay))) continue;
       const occurrenceKey = `${tmpl.id}_${scheduledDate}`;
       const existingOccurrence = occurrences.find(o => o.occurrenceKey === occurrenceKey);
       if (!existingOccurrence) {
@@ -848,7 +847,9 @@ export async function reloadRecurringOccurrences(
   const period = getAccountingPeriod(yearMonth, monthStartDay);
   const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   const resetIds = all
-    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period) && occurrence.status !== 'posted')
+    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period)
+      && occurrence.status !== 'posted'
+      && occurrence.status !== 'skipped')
     .map(occurrence => occurrence.id);
   const resetIdSet = new Set(resetIds);
   const preserved = all.filter(occurrence => !resetIdSet.has(occurrence.id));
@@ -863,7 +864,9 @@ export async function reloadRecurringOccurrences(
   }
 
   const loadedCount = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
-    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period) && occurrence.status !== 'posted')
+    .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period)
+      && occurrence.status !== 'posted'
+      && occurrence.status !== 'skipped')
     .length;
   notifyListeners();
   return { removedCount: resetIds.length, loadedCount };
@@ -872,51 +875,6 @@ export async function reloadRecurringOccurrences(
 export function getRecurringTemplates(): RecurringTemplate[] {
   initializeStorageIfEmpty();
   return readJson<RecurringTemplate[]>(STORAGE_KEYS.RECURRING_TEMPLATES, []);
-}
-
-/**
- * Pushes a template edit onto the monthly plans that have not happened yet.
- *
- * The lists show the occurrence amount, not `defaultAmount`, so without this an
- * edited price stayed invisible: the occurrence kept whatever it carried
- * forward. A changed amount therefore also drops the month-specific override —
- * the user just said what this item costs now. Past cycles and posted items are
- * history and stay untouched.
- */
-function applyTemplateToPendingOccurrences(
-  template: RecurringTemplate,
-  previousAmount: number,
-  monthStartDay: number,
-) {
-  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  const fromDate = getAccountingPeriod(getCurrentYearMonth(monthStartDay), monthStartDay).startDate;
-  const amountChanged = Math.round(previousAmount) !== Math.round(template.defaultAmount);
-  const now = new Date().toISOString();
-  const changed: RecurringOccurrence[] = [];
-
-  occurrences.forEach(occurrence => {
-    if (occurrence.templateId !== template.id) return;
-    if (occurrence.status === 'posted' || occurrence.status === 'skipped') return;
-    if (occurrence.scheduledDate < fromDate) return;
-
-    if (amountChanged) {
-      occurrence.expectedAmount = Math.round(template.defaultAmount);
-      occurrence.actualAmount = null;
-    }
-    occurrence.templateAmountSnapshot = template.defaultAmount;
-    occurrence.typeSnapshot = template.type;
-    occurrence.categoryIdSnapshot = template.categoryId;
-    occurrence.paymentMethodType = template.paymentMethodType;
-    occurrence.accountId = template.accountId;
-    occurrence.cardId = template.cardId;
-    occurrence.templateRevision = template.updatedAt;
-    occurrence.updatedAt = now;
-    changed.push(occurrence);
-  });
-
-  if (changed.length === 0) return;
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-  void syncRecurringOccurrencesToFirestore(changed);
 }
 
 export function saveRecurringTemplate(tmpl: Omit<RecurringTemplate, 'id' | 'createdAt' | 'updatedAt'>): RecurringTemplate {
@@ -933,16 +891,6 @@ export function saveRecurringTemplate(tmpl: Omit<RecurringTemplate, 'id' | 'crea
   localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(newTmpl);
 
-  // Materialize the plan for the salary cycle in progress. That cycle can span
-  // two calendar months, and a due date early in the month belongs to the later
-  // one, so both are generated.
-  const monthStartDay = normalizeMonthStartDay(getUserProfile().monthStartDay);
-  const period = getAccountingPeriod(getCurrentYearMonth(monthStartDay), monthStartDay);
-  generateOccurrencesForMonth(period.startDate.slice(0, 7), [newTmpl], monthStartDay);
-  if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
-    generateOccurrencesForMonth(period.endDate.slice(0, 7), [newTmpl], monthStartDay);
-  }
-
   notifyListeners();
   return newTmpl;
 }
@@ -956,7 +904,6 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
   const nextCategoryId = updates.categoryId ?? tmpls[idx].categoryId;
   assertCategoryMatchesType(nextType, nextCategoryId);
 
-  const previousAmount = tmpls[idx].defaultAmount;
   tmpls[idx] = {
     ...tmpls[idx],
     ...updates,
@@ -965,34 +912,21 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
 
   localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(tmpls[idx]);
-  applyTemplateToPendingOccurrences(
-    tmpls[idx],
-    previousAmount,
-    normalizeMonthStartDay(getUserProfile().monthStartDay),
-  );
   notifyListeners();
   return tmpls[idx];
 }
 
 export function deleteRecurringTemplate(id: string): boolean {
-  let tmpls = getRecurringTemplates();
-  const initialLen = tmpls.length;
-  tmpls = tmpls.filter(t => t.id !== id);
+  const tmpls = getRecurringTemplates();
+  const index = tmpls.findIndex(template => template.id === id && !template.archivedAt);
+  if (index < 0) return false;
 
-  if (tmpls.length !== initialLen) {
-    localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
-    deleteRecurringTemplateFromFirestore(id);
-
-    const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-    const removed = removeUnpostedOccurrencesForTemplate(occurrences, id);
-    if (removed.removedIds.length > 0) {
-      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(removed.occurrences));
-      void deleteRecurringOccurrencesFromFirestore(removed.removedIds);
-    }
-    notifyListeners();
-    return true;
-  }
-  return false;
+  const now = new Date().toISOString();
+  tmpls[index] = { ...tmpls[index], archivedAt: now, updatedAt: now };
+  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
+  syncRecurringTemplateToFirestore(tmpls[index]);
+  notifyListeners();
+  return true;
 }
 
 export function getRecurringOccurrences(yearMonth: string, monthStartDay: number = 1): RecurringOccurrence[] {
@@ -1015,6 +949,11 @@ export function getAllRecurringOccurrences(): RecurringOccurrence[] {
 export function ensureRecurringOccurrences(yearMonth: string, monthStartDay: number = 1) {
   initializeStorageIfEmpty();
   const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const existingPlan = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+    .some(occurrence => isDateInPeriod(occurrence.scheduledDate, period));
+  // A period is a snapshot. Once it has rows, master-list edits wait for the
+  // explicit "새로 불러오기" action instead of silently rewriting the month.
+  if (existingPlan) return { removedCount: 0, upsertedCount: 0 };
   const templates = getRecurringTemplates();
   const startResult = generateOccurrencesForMonth(
     period.startDate.slice(0, 7), templates, period.monthStartDay,
@@ -1189,7 +1128,7 @@ export async function postOccurrenceToTransaction(
   if (!raw) return null;
   const all: RecurringOccurrence[] = JSON.parse(raw);
   const target = all.find(o => o.id === occurrenceId);
-  if (!target || target.status === 'posted') return null;
+  if (!target || target.status === 'posted' || target.status === 'skipped') return null;
 
   const templates = getRecurringTemplates();
   const template = templates.find(t => t.id === target.templateId);

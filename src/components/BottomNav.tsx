@@ -53,7 +53,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
         style={{ paddingBottom: 'calc(0.25rem + env(safe-area-inset-bottom, 0px))' }}
         aria-label="주요 화면"
       >
-        <div className="mx-auto flex max-w-md items-center justify-between gap-1">
+        <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-[clamp(0.25rem,1.5vw,1rem)]">
           {PRIMARY_TABS.slice(0, 2).map(({ tab, label, icon: Icon }) => (
             <button
               key={tab}

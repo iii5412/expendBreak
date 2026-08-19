@@ -27,6 +27,8 @@ import {
   CalendarRange,
   Moon,
   Sun,
+  Search,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   RecurringTemplate,
@@ -107,6 +109,7 @@ interface ManagementViewProps {
   onMergeCategory: (removeId: string, replaceId: string) => void;
   onUpdateUserProfile: (updates: Partial<UserProfile>) => void;
   onExportCSV: () => void;
+  onExportDiagnostic: () => void;
   onResetData: () => void | Promise<void>;
   onRepairClassificationIssues?: () => { repairedTransactions: number; repairedTemplates: number };
   quickEntries?: QuickEntry[];
@@ -141,6 +144,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   onMergeCategory,
   onUpdateUserProfile,
   onExportCSV,
+  onExportDiagnostic,
   onResetData,
   onRepairClassificationIssues,
   quickEntries = [],
@@ -156,7 +160,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   );
 
   // Sub-view inside Recurring items: 'schedule' (일정 목록) vs 'bank_accounts' (계좌/은행별 이체 모아보기)
-  const [recurringViewMode, setRecurringViewMode] = useState<'schedule' | 'bank_accounts'>('bank_accounts');
+  const [recurringViewMode, setRecurringViewMode] = useState<'schedule' | 'bank_accounts'>('schedule');
+  const [masterSearchQuery, setMasterSearchQuery] = useState('');
+  const [masterFilter, setMasterFilter] = useState<'all' | 'income' | 'expense' | 'account' | 'card' | 'active' | 'inactive'>('all');
+  const [masterSort, setMasterSort] = useState<'default' | 'name' | 'day' | 'amount_asc' | 'amount_desc'>('default');
 
   // Modal State for Adding / Editing Recurring Item
   const [isAddRecurringOpen, setIsAddRecurringOpen] = useState(false);
@@ -331,10 +338,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
     if (editingTemplateId && onUpdateRecurringTemplate) {
       onUpdateRecurringTemplate(editingTemplateId, payload);
-      triggerToast(`'${recName}' 정기 항목을 수정했습니다.`);
+      triggerToast(`'${recName}' 원본 항목을 수정했습니다. 정기납부에서 새로 불러오면 월 계획에 반영됩니다.`);
     } else {
       onSaveRecurringTemplate(payload);
-      triggerToast(`'${recName}' 정기 항목을 등록했습니다.`);
+      triggerToast(`'${recName}' 원본 항목을 등록했습니다. 정기납부에서 새로 불러오면 월 계획에 반영됩니다.`);
     }
 
     setIsAddRecurringOpen(false);
@@ -344,8 +351,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   const handleDeleteTemplate = async (id: string, name: string) => {
     const template = recurringTemplates.find(item => item.id === id);
     const accepted = await confirm({
-      title: '이 정기 항목을 삭제할까요?',
-      description: '아직 처리하지 않은 발생 건은 함께 삭제됩니다. 이미 확정된 거래는 그대로 남습니다.',
+      title: '이 고정 항목 원본을 삭제할까요?',
+      description: '선택한 월의 계획과 납부 기록은 유지됩니다. 정기납부에서 새로 불러오면 해당 월의 미처리 목록에서 빠집니다.',
       details: [
         { label: '항목', value: name },
         ...(template
@@ -360,7 +367,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     });
     if (!accepted) return;
     onDeleteRecurringTemplate?.(id);
-    showToast({ message: `'${name}' 정기 항목을 삭제했습니다.`, tone: 'info' });
+    showToast({ message: `'${name}' 원본 항목을 삭제했습니다.`, description: '기존 월 계획은 새로 불러오기 전까지 유지됩니다.', tone: 'info' });
   };
 
   const handleSaveBudgetLimit = async () => {
@@ -421,12 +428,53 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
   };
 
-  // Fixed cash-flow figures come from the shared cash-track model so this
-  // screen cannot drift from the dashboard or the recurring centre.
-  const monthlyFixedIncome = summary.totalExpectedRecurringIncome;
-  const cardPaidFixedExpense = summary.cardFixedExpenses;
-  const nonCardFixedExpense = summary.accountFixedOutflow;
-  const totalFixedOutflow = summary.accountFixedOutflow + summary.cardSettlementOutflow;
+  const masterRecurringTemplates = React.useMemo(
+    () => recurringTemplates.filter(template => !template.archivedAt),
+    [recurringTemplates],
+  );
+  const filteredMasterRecurringTemplates = React.useMemo(() => {
+    const normalizedQuery = masterSearchQuery.trim().toLocaleLowerCase('ko-KR');
+    const originalOrder = new Map(masterRecurringTemplates.map((template, index) => [template.id, index]));
+
+    return masterRecurringTemplates
+      .filter(template => {
+        if (masterFilter === 'income' && template.type !== 'income') return false;
+        if (masterFilter === 'expense' && template.type !== 'expense') return false;
+        if (masterFilter === 'account' && template.paymentMethodType !== 'account') return false;
+        if (masterFilter === 'card' && template.paymentMethodType !== 'card') return false;
+        if (masterFilter === 'active' && !template.active) return false;
+        if (masterFilter === 'inactive' && template.active) return false;
+
+        if (!normalizedQuery) return true;
+        const categoryName = categories.find(category => category.id === template.categoryId)?.name || '';
+        const cardName = paymentCards.find(card => card.id === template.cardId)?.cardName || '';
+        return [
+          template.name,
+          template.counterparty,
+          template.bankName,
+          template.accountHolder,
+          categoryName,
+          cardName,
+        ].some(value => value?.toLocaleLowerCase('ko-KR').includes(normalizedQuery));
+      })
+      .sort((left, right) => {
+        if (masterSort === 'name') return left.name.localeCompare(right.name, 'ko-KR');
+        if (masterSort === 'day') return left.dayOfMonth - right.dayOfMonth || left.name.localeCompare(right.name, 'ko-KR');
+        if (masterSort === 'amount_asc') return left.defaultAmount - right.defaultAmount || left.name.localeCompare(right.name, 'ko-KR');
+        if (masterSort === 'amount_desc') return right.defaultAmount - left.defaultAmount || left.name.localeCompare(right.name, 'ko-KR');
+        return (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0);
+      });
+  }, [categories, masterFilter, masterRecurringTemplates, masterSearchQuery, masterSort, paymentCards]);
+  const monthlyFixedIncome = masterRecurringTemplates
+    .filter(template => template.active && template.type === 'income')
+    .reduce((sum, template) => sum + template.defaultAmount, 0);
+  const nonCardFixedExpense = masterRecurringTemplates
+    .filter(template => template.active && template.type === 'expense' && template.paymentMethodType !== 'card')
+    .reduce((sum, template) => sum + template.defaultAmount, 0);
+  const cardPaidFixedExpense = masterRecurringTemplates
+    .filter(template => template.active && template.type === 'expense' && template.paymentMethodType === 'card')
+    .reduce((sum, template) => sum + template.defaultAmount, 0);
+  const totalFixedOutflow = nonCardFixedExpense + cardPaidFixedExpense;
 
   // Grouping Recurring Items by Bank & Account Number for Transfer Assistance
   const accountGroups = React.useMemo(() => {
@@ -444,7 +492,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       }
     >();
 
-  const activeExpenseTemplates = recurringTemplates.filter(template => {
+  const activeExpenseTemplates = masterRecurringTemplates.filter(template => {
       if (ignoredCardSettlementTemplateIds.includes(template.id)) return false;
       if (!template.active || template.type !== 'expense') return false;
       const occurrence = recurringOccurrences.find(item => item.templateId === template.id);
@@ -491,7 +539,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
 
     return Array.from(groupsMap.values()).sort((a, b) => b.totalExpectedAmount - a.totalExpectedAmount);
-  }, [recurringTemplates, recurringOccurrences, ignoredCardSettlementTemplateIds]);
+  }, [masterRecurringTemplates, recurringOccurrences, ignoredCardSettlementTemplateIds]);
 
   // Total transfer required for registered accounts
   const totalTransferNeeded = accountGroups.reduce((acc, g) => acc + g.totalExpectedAmount, 0);
@@ -509,7 +557,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           }`}
         >
           <Calendar className="w-3.5 h-3.5" />
-          <span>정기/고정 지출</span>
+          <span>고정 항목 원본</span>
         </button>
 
         <button
@@ -569,7 +617,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-emerald-400" />
-                <span>월 고정 현금흐름 요약</span>
+                <span>월과 무관한 고정 항목 원본</span>
               </h3>
 
               <button
@@ -577,35 +625,42 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1 shadow-sm"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>정기 항목 추가</span>
+                <span>원본 항목 추가</span>
               </button>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-center">
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">이번 달 고정 수입</span>
+                <span className="text-slate-400 text-xs block mb-0.5">기본 고정 수입</span>
                 <span className="font-extrabold text-emerald-400">{formatKRW(monthlyFixedIncome)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">계좌 고정 이체</span>
+                <span className="text-slate-400 text-xs block mb-0.5">계좌 고정지출</span>
                 <span className="font-extrabold text-rose-400">{formatKRW(nonCardFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-indigo-500/20">
-                <span className="text-slate-400 text-xs block mb-0.5">이번 주기 카드대금</span>
-                <span className="font-extrabold text-indigo-300">{formatKRW(summary.cardSettlementOutflow)}</span>
+                <span className="text-slate-400 text-xs block mb-0.5">카드 고정지출</span>
+                <span className="font-extrabold text-indigo-300">{formatKRW(cardPaidFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">총 고정 출금</span>
+                <span className="text-slate-400 text-xs block mb-0.5">기본 지출 합계</span>
                 <span className="font-extrabold text-rose-300">{formatKRW(totalFixedOutflow)}</span>
               </div>
             </div>
           </div>
 
+          <div className="rounded-2xl border border-indigo-500/30 bg-indigo-500/10 p-4 text-xs leading-relaxed text-indigo-100">
+            <p className="font-bold">이 목록은 특정 월에 속하지 않는 고정 항목 원본입니다.</p>
+            <p className="mt-1 text-slate-300">
+              여기서 추가·수정·삭제한 뒤 정기납부 메뉴의 <strong className="text-indigo-200">고정 지출 새로 불러오기</strong>를 누르면 선택한 월의 미처리 계획에 최신 원본이 반영됩니다. 이미 납부 완료한 기록은 바뀌지 않습니다.
+            </p>
+          </div>
+
           {/* View Mode Toggle: 계좌/은행별 이체 모아보기 vs 전체 일정 목록 */}
-          <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
+          <div className="hidden items-center justify-between bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
             <button
               onClick={() => setRecurringViewMode('bank_accounts')}
               className={`flex-1 min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
@@ -627,7 +682,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               }`}
             >
               <Calendar className="w-3.5 h-3.5" />
-              <span>📅 월간 일정 목록 ({recurringTemplates.length}건)</span>
+              <span>📋 원본 항목 목록 ({masterRecurringTemplates.length}건)</span>
             </button>
           </div>
 
@@ -812,30 +867,76 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             <div className="space-y-3">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                 <h4 className="text-xs font-bold text-slate-200 flex items-center justify-between">
-                  <span>등록된 정기 고정 항목 관리 ({recurringTemplates.length}건)</span>
+                  <span>
+                    등록된 고정 항목 원본 ({filteredMasterRecurringTemplates.length}/{masterRecurringTemplates.length}건)
+                  </span>
                   <button
                     onClick={openNewRecurringModal}
                     className="text-emerald-400 text-xs hover:underline font-bold flex items-center gap-1"
                   >
-                    <Plus className="w-3.5 h-3.5" /> 항목 추가
+                    <Plus className="w-3.5 h-3.5" /> 원본 추가
                   </button>
                 </h4>
 
+                <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-2.5 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <label className="relative min-w-0">
+                    <span className="sr-only">고정 항목 원본 검색</span>
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="search"
+                      value={masterSearchQuery}
+                      onChange={event => setMasterSearchQuery(event.target.value)}
+                      placeholder="항목명·카테고리·은행 검색"
+                      className="min-h-10 w-full rounded-lg border border-slate-700 bg-slate-900 pl-9 pr-3 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-emerald-500/60"
+                    />
+                  </label>
+
+                  <label className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-2.5">
+                    <span className="shrink-0 text-[11px] font-bold text-slate-400">필터</span>
+                    <select
+                      value={masterFilter}
+                      onChange={event => setMasterFilter(event.target.value as typeof masterFilter)}
+                      className="min-h-10 min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-200 outline-none"
+                      aria-label="고정 항목 원본 필터"
+                    >
+                      <option value="all">전체 항목</option>
+                      <option value="income">고정 수입</option>
+                      <option value="expense">고정 지출</option>
+                      <option value="account">계좌 결제</option>
+                      <option value="card">카드 결제</option>
+                      <option value="active">사용 중</option>
+                      <option value="inactive">사용 안 함</option>
+                    </select>
+                  </label>
+
+                  <label className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-2.5">
+                    <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                    <select
+                      value={masterSort}
+                      onChange={event => setMasterSort(event.target.value as typeof masterSort)}
+                      className="min-h-10 min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-200 outline-none"
+                      aria-label="고정 항목 원본 정렬"
+                    >
+                      <option value="default">기본 순서</option>
+                      <option value="name">이름순</option>
+                      <option value="day">납부일 빠른순</option>
+                      <option value="amount_asc">금액 낮은순</option>
+                      <option value="amount_desc">금액 높은순</option>
+                    </select>
+                  </label>
+                </div>
+
                 <div className="space-y-2">
-                  {recurringTemplates.map(tmpl => {
+                  {filteredMasterRecurringTemplates.map(tmpl => {
                     const cat = categories.find(c => c.id === tmpl.categoryId);
-                    const monthOccurrence = recurringOccurrences.find(occurrence => occurrence.templateId === tmpl.id);
-                    const monthAmount = monthOccurrence
-                      ? monthOccurrence.actualAmount ?? monthOccurrence.expectedAmount
-                      : tmpl.defaultAmount;
 
                     return (
                       <div
                         key={tmpl.id}
-                        className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-3 text-xs"
+                        className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col items-stretch justify-between gap-3 text-xs sm:flex-row sm:items-center"
                       >
                         <div className="space-y-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span
                               className={`text-xs px-1.5 py-0.5 rounded font-extrabold ${
                                 tmpl.type === 'income'
@@ -863,14 +964,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center justify-between gap-3 sm:justify-end">
                           <div className="text-right">
-                            <span className="block font-black text-slate-100">{formatKRW(monthAmount)}</span>
-                            <span className="text-xs text-slate-400">
-                              {monthOccurrence?.actualAmount !== null && monthOccurrence?.actualAmount !== undefined
-                                ? '이번 달 별도 금액'
-                                : '직전 달 승계·기본값'}
-                            </span>
+                            <span className="block font-black text-slate-100">{formatKRW(tmpl.defaultAmount)}</span>
+                            <span className="text-xs text-slate-400">월 반영 기본값</span>
                           </div>
 
                           <div className="flex items-center gap-1">
@@ -893,6 +990,12 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                       </div>
                     );
                   })}
+
+                  {filteredMasterRecurringTemplates.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/50 p-6 text-center text-xs text-slate-400">
+                      검색 또는 필터 조건에 맞는 고정 항목 원본이 없습니다.
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1413,6 +1516,17 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           {/* CSV Export & Data Reset */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
             <h4 className="font-bold text-slate-200">데이터 내보내기 및 초기화</h4>
+
+            <button
+              onClick={onExportDiagnostic}
+              className="w-full bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 font-bold py-2.5 rounded-xl border border-emerald-500/30 flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              <span>진단 데이터 JSON 내보내기</span>
+            </button>
+            <p className="text-xs leading-relaxed text-slate-400">
+              계산 재현에 필요한 금액·날짜·내부 연결 ID를 저장합니다. 사용자 UID·이메일·PIN·계좌번호·예금주·메모·영수증·음성 데이터는 제외합니다.
+            </p>
 
             <div className="flex gap-3">
               <button

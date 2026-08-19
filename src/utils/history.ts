@@ -3,6 +3,20 @@ import { AccountingPeriod, getLocalDateString, isDateInPeriod } from './calculat
 
 /** `period` follows the app-wide accounting period; the rest are rolling windows. */
 export type HistoryPeriod = 'period' | 'all' | 'today' | '7days' | '30days';
+export type HistoryKind = 'regular_expense' | 'fixed_expense' | 'income' | 'all';
+
+/** Recurring postings and the monthly card-bill withdrawal are fixed outflows. */
+export function isFixedExpenseTransaction(transaction: Transaction): boolean {
+  return transaction.type === 'expense'
+    && (Boolean(transaction.recurringTemplateId) || transaction.role === 'card_settlement');
+}
+
+export function matchesHistoryKind(transaction: Transaction, kind: HistoryKind): boolean {
+  if (kind === 'all') return true;
+  if (kind === 'income') return transaction.type === 'income';
+  if (kind === 'fixed_expense') return isFixedExpenseTransaction(transaction);
+  return transaction.type === 'expense' && !isFixedExpenseTransaction(transaction);
+}
 
 function subtractLocalDays(date: Date, days: number): string {
   const result = new Date(date);

@@ -15,11 +15,11 @@ import {
 } from 'recharts';
 import { Sparkles, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-react';
 import {
-  AccountingPeriod,
   MonthSummary,
   formatKRW,
+  getCategoryBreakdown,
   getLocalDateString,
-  isDateInPeriod,
+  isSpendingTransaction,
 } from '../utils/calculations';
 import { Transaction, Category, AIFeedbackResult } from '../types';
 import { FutureCommitmentSummary } from '../utils/futureCommitments';
@@ -28,12 +28,12 @@ import { CashflowTimeline } from '../utils/cashflowTimeline';
 import { CashflowTimelineCard } from './CashflowTimelineCard';
 import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
+import { getInstallmentCharge } from '../utils/installments';
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
   futureCommitments: FutureCommitmentSummary;
   cashflowTimeline: CashflowTimeline;
-  period: AccountingPeriod;
   transactions: Transaction[];
   categories: Category[];
   aiInsightsEnabled?: boolean;
@@ -43,15 +43,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   summary,
   futureCommitments,
   cashflowTimeline,
-  period,
   transactions,
   categories,
   aiInsightsEnabled = true,
 }) => {
   const [feedback, setFeedback] = useState<AIFeedbackResult | null>(null);
   const [isLoadingFeedback, setIsLoadingFeedback] = useState<boolean>(false);
-
-  const catMap = new Map<string, Category>(categories.map(c => [c.id, c]));
 
   // 1. Cash track (income, committed outflows) beside spend track (living expenses)
   const incomeVsExpenseData = [
@@ -62,37 +59,51 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   ];
 
   // 2. Allowance category breakdown (fixed recurring expenses stay separate)
-  const categoryMap: Record<string, number> = {};
-  transactions
-    .filter(t => t.type === 'expense' && !t.recurringTemplateId && isDateInPeriod(t.localDate, period))
-    .forEach(t => {
-      const categoryId = catMap.get(t.categoryId)?.type === 'expense' ? t.categoryId : '__needs_review_expense';
-      categoryMap[categoryId] = (categoryMap[categoryId] || 0) + t.amount;
-    });
-
-  const categoryPieData = Object.entries(categoryMap).map(([catId, amount]) => {
-    const info = catMap.get(catId);
-    return {
-      name: catId === '__needs_review_expense' ? '분류 확인 필요' : info?.name || '기타',
-      value: amount,
-      color: catId === '__needs_review_expense' ? '#F59E0B' : info?.color || '#94A3B8',
-    };
-  });
+  const categoryInfo = Object.fromEntries(categories.map(category => [category.id, category]));
+  const categoryPieData = getCategoryBreakdown(
+    summary.yearMonth,
+    transactions,
+    categoryInfo,
+    { variableOnly: true, monthStartDay: 1 },
+  ).map(item => ({ name: item.categoryName, value: item.amount, color: item.color }));
+  const feedbackCacheKey = [
+    summary.yearMonth,
+    summary.planningIncome,
+    summary.accountFixedOutflow,
+    summary.cardSettlementOutflow,
+    summary.confirmedVariableExpenses,
+    summary.remainingLivingBudget,
+    ...categoryPieData.map(item => `${item.name}:${item.value}`),
+  ].join('|');
 
   // 3. Cumulative daily allowance spend vs allowance limit, walked across the
-  // accounting period so a payday cycle spanning two calendar months still lines up.
+  // calendar spending month, matching MonthSummary.confirmedVariableExpenses.
   const cumulativeData: { day: string; spend: number; limit: number }[] = [];
   let runningTotal = 0;
-  const [periodStartYear, periodStartMonth, periodStartDay] = period.startDate.split('-').map(Number);
+  const [periodStartYear, periodStartMonth, periodStartDay] = summary.spendPeriodStartDate.split('-').map(Number);
+  const installmentAmount = transactions
+    .filter(transaction => transaction.type === 'expense'
+      && !transaction.recurringTemplateId
+      && isSpendingTransaction(transaction)
+      && Boolean(transaction.installment))
+    .reduce((sum, transaction) => (
+      sum + (getInstallmentCharge(transaction.amount, transaction.installment, summary.yearMonth)?.amount ?? 0)
+    ), 0);
 
-  for (let offset = 0; offset < period.daysInMonth; offset++) {
+  for (let offset = 0; offset < summary.spendDaysInMonth; offset++) {
     const dayDate = new Date(periodStartYear, periodStartMonth - 1, periodStartDay + offset);
     const dayStr = getLocalDateString(dayDate);
     const daySpend = transactions
-      .filter(t => t.type === 'expense' && !t.recurringTemplateId && t.localDate === dayStr)
+      .filter(t => t.type === 'expense'
+        && !t.recurringTemplateId
+        && !t.installment
+        && isSpendingTransaction(t)
+        && t.localDate === dayStr)
       .reduce((sum, t) => sum + t.amount, 0);
 
-    runningTotal += daySpend;
+    // An installment round is already committed for the month and has no new
+    // purchase date, so place it at month start instead of replaying the principal.
+    runningTotal += daySpend + (offset === 0 ? installmentAmount : 0);
 
     cumulativeData.push({
       day: `${dayDate.getDate()}일`,
@@ -104,9 +115,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   // Fetch AI Feedback
   const fetchAiFeedback = async (force = false) => {
     if (!aiInsightsEnabled) return;
-    const periodId = summary.yearMonth;
     if (!force) {
-      const cached = getCachedAIFeedback(periodId);
+      const cached = getCachedAIFeedback(feedbackCacheKey);
       if (cached) {
         setFeedback(cached);
         return;
@@ -131,7 +141,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       data.generatedAt = new Date().toISOString();
 
       setFeedback(data);
-      saveCachedAIFeedback(periodId, data);
+      saveCachedAIFeedback(feedbackCacheKey, data);
     } catch (e) {
       console.error(e);
     } finally {
@@ -142,7 +152,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   useEffect(() => {
     if (aiInsightsEnabled) fetchAiFeedback();
     else setFeedback(null);
-  }, [summary.yearMonth, aiInsightsEnabled]);
+  }, [
+    aiInsightsEnabled,
+    feedbackCacheKey,
+  ]);
 
   return (
     <div className="space-y-6 pb-24">
@@ -230,6 +243,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       {/* 1. Income vs Expense Overview Chart */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
         <h3 className="text-sm font-bold text-slate-200 mb-3">수입·고정 출금·생활비 구조</h3>
+        <p className="-mt-2 mb-3 text-xs text-slate-400">
+          카드대금은 계좌 고정 이체와 분리된 현금 출금이며 생활비에 다시 합산하지 않습니다.
+        </p>
         <div className="h-52 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={incomeVsExpenseData}>
@@ -291,6 +307,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       {/* 3. Cumulative Daily Allowance Spend vs Allowance Limit */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
         <h3 className="text-sm font-bold text-slate-200 mb-3">일별 누적 생활비 사용 vs 사용 가능액</h3>
+        <p className="-mt-2 mb-3 text-xs text-slate-400">할부는 원금이 아닌 이번 달 회차 금액을 월초에 반영합니다.</p>
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={cumulativeData}>

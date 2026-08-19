@@ -102,6 +102,16 @@ describe('recurring occurrence normalization', () => {
     expect(result.occurrences.map(item => item.id)).toEqual(['paid-12th']);
     expect(result.removedIds).toEqual(['duplicate-10th']);
   });
+
+  it('preserves a user-excluded month and removes another pending row in the same cycle', () => {
+    const result = normalizeRecurringOccurrencesForMonth([
+      occurrence('excluded-10th', '2026-08-10', 'skipped'),
+      occurrence('duplicate-12th', '2026-08-12'),
+    ], [template], '2026-08', 10);
+
+    expect(result.occurrences.map(item => item.id)).toEqual(['excluded-10th']);
+    expect(result.removedIds).toEqual(['duplicate-12th']);
+  });
 });
 
 describe('holiday shifts stay inside their salary cycle', () => {

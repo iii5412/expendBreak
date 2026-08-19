@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Transaction } from '../types';
-import { isTransactionInPeriod, sortTransactionsNewestFirst } from './history';
+import { isFixedExpenseTransaction, isTransactionInPeriod, matchesHistoryKind, sortTransactionsNewestFirst } from './history';
 
 const transaction = (id: string, localDate: string, occurredAt = `${localDate}T12:00:00.000Z`): Transaction => ({
   id,
@@ -37,5 +37,20 @@ describe('history helpers', () => {
     expect(isTransactionInPeriod(sevenDayBoundary, '7days', today)).toBe(true);
     expect(isTransactionInPeriod(outsideSevenDays, '7days', today)).toBe(false);
     expect(isTransactionInPeriod(thirtyDayBoundary, '30days', today)).toBe(true);
+  });
+
+  it('separates ordinary spending from recurring and card-settlement outflows', () => {
+    const regular = transaction('regular', '2026-08-11');
+    const recurring = { ...transaction('recurring', '2026-08-11'), recurringTemplateId: 'rent' };
+    const cardSettlement = { ...transaction('card-bill', '2026-08-11'), role: 'card_settlement' as const };
+    const income = { ...transaction('income', '2026-08-11'), type: 'income' as const };
+
+    expect(isFixedExpenseTransaction(regular)).toBe(false);
+    expect(isFixedExpenseTransaction(recurring)).toBe(true);
+    expect(isFixedExpenseTransaction(cardSettlement)).toBe(true);
+    expect([regular, recurring, cardSettlement, income].filter(item => matchesHistoryKind(item, 'regular_expense')))
+      .toEqual([regular]);
+    expect([regular, recurring, cardSettlement, income].filter(item => matchesHistoryKind(item, 'fixed_expense')))
+      .toEqual([recurring, cardSettlement]);
   });
 });

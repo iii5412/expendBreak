@@ -60,6 +60,15 @@ export interface MonthlyCardSettlementSummary {
   cards: MonthlyCardSettlement[];
 }
 
+export interface MonthlyCardSettlementOptions {
+  /**
+   * Attribute all usage from the previous calendar month to this payment month.
+   * Used by month-labelled projections where August 1~31 must appear in the
+   * September card bill regardless of payday or statement-closing dates.
+   */
+  usageBasis?: 'statement_window' | 'previous_calendar_month';
+}
+
 function getEstimatedPaymentDate(yearMonth: string, billingDay?: number | null): string | null {
   if (!billingDay) return null;
   const [yearText, monthText] = yearMonth.split('-');
@@ -377,6 +386,7 @@ export function calculateMonthlyCardSettlementSummary(
   monthStartDay: number = 1,
   recurringOccurrences: RecurringOccurrence[] = [],
   recurringTemplates: RecurringTemplate[] = [],
+  options: MonthlyCardSettlementOptions = {},
 ): MonthlyCardSettlementSummary {
   // Cards can close on different days, so each distinct window is computed once.
   const usageSummaries = new Map<string, CardPaymentSummary>();
@@ -400,8 +410,12 @@ export function calculateMonthlyCardSettlementSummary(
   const cards = paymentCards
     .filter(card => card.cardType === 'credit')
     .map(card => {
+      const usePreviousCalendarMonth = options.usageBasis === 'previous_calendar_month';
       const schedule = getCardSettlementSchedule(
-        paymentYearMonth, card.billingDay, monthStartDay, card.statementClosingDay,
+        paymentYearMonth,
+        card.billingDay,
+        usePreviousCalendarMonth ? 1 : monthStartDay,
+        usePreviousCalendarMonth ? null : card.statementClosingDay,
       );
       const estimate = getUsageSummary(schedule)
         .creditCards.find(candidate => candidate.cardId === card.id);

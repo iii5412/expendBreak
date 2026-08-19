@@ -100,6 +100,7 @@ import { findHiddenRecurringItems } from './utils/hiddenRecurring';
 import { buildCycleClosingReport } from './utils/cycleClosing';
 import { buildCashflowTimeline } from './utils/cashflowTimeline';
 import { applyAppTheme } from './utils/theme';
+import { serializeDiagnosticExport } from './utils/diagnosticExport';
 import {
   buildWidgetSnapshot,
   NativeDestination,
@@ -307,13 +308,6 @@ export default function App() {
     [currentYM, monthStartDay],
   );
   const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay]);
-  const recurringTemplateSignature = useMemo(
-    () => recurringTemplates
-      .map(template => `${template.id}:${template.updatedAt}:${template.active ? 1 : 0}`)
-      .sort()
-      .join('|'),
-    [recurringTemplates],
-  );
   // Detection needs the generated bill amounts, which in turn need the card list
   // only — no dependency on planning, so this stays above the planning memos.
   const rawCardSettlementSummary = useMemo(
@@ -321,7 +315,7 @@ export default function App() {
     [currentYM, transactions, paymentCards, monthStartDay],
   );
   const cardSettlementCandidates = useMemo(
-    () => findManualCardSettlementCandidates(recurringTemplates, paymentCards, {
+    () => findManualCardSettlementCandidates(recurringTemplates.filter(template => !template.archivedAt), paymentCards, {
       cardSettlementAmounts: Object.fromEntries(
         rawCardSettlementSummary.cards.map(card => [card.cardId, card.amount]),
       ),
@@ -339,8 +333,9 @@ export default function App() {
     [cardSettlementCandidates],
   );
   const planningRecurringTemplates = useMemo(
-    () => recurringTemplates.filter(template => !duplicateCardSettlementTemplateIds.has(template.id)),
-    [recurringTemplates, duplicateCardSettlementTemplateIds],
+    () => recurringTemplates.filter(template => !duplicateCardSettlementTemplateIds.has(template.id)
+      && (!template.archivedAt || recurringOccurrences.some(occurrence => occurrence.templateId === template.id))),
+    [recurringTemplates, recurringOccurrences, duplicateCardSettlementTemplateIds],
   );
   const planningRecurringOccurrences = useMemo(
     () => recurringOccurrences.filter(occurrence => !duplicateCardSettlementTemplateIds.has(occurrence.templateId)),
@@ -362,7 +357,7 @@ export default function App() {
     if (bootState !== 'ready') return;
     void ensureBudget(currentYM);
     ensureRecurringOccurrences(currentYM, monthStartDay);
-  }, [bootState, currentYM, monthStartDay, recurringTemplateSignature]);
+  }, [bootState, currentYM, monthStartDay]);
 
   // Realign the selected period after login or a monthStartDay change so the app
   // never opens on a period that no longer contains today.
@@ -400,7 +395,11 @@ export default function App() {
       planningRecurringTemplates,
       new Date(),
       monthStartDay,
-      { cardSettlementOutflow: cardSettlementSummary.totalAmount, baseline: cycleBaseline },
+      {
+        cardSettlementOutflow: cardSettlementSummary.totalAmount,
+        baseline: cycleBaseline,
+        reserveUnmaterializedTemplates: false,
+      },
     );
   }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay, cardSettlementSummary, cycleBaseline]);
 
@@ -472,7 +471,7 @@ export default function App() {
   // counts templates and the recurring screen counts occurrences, so the two
   // disagree for good reasons; this names each one instead of leaving a gap.
   const hiddenExpenseItems = useMemo(
-    () => findHiddenRecurringItems(recurringTemplates, planningRecurringOccurrences, period, {
+    () => findHiddenRecurringItems(recurringTemplates.filter(template => !template.archivedAt), planningRecurringOccurrences, period, {
       type: 'expense',
       replacedTemplateIds: duplicateCardSettlementTemplateIds,
     }),
@@ -496,7 +495,7 @@ export default function App() {
 
   // Next Payday badge
   const nextPaydayText = useMemo(() => {
-    const salaryTmpl = recurringTemplates.find(t => t.type === 'income' && t.active);
+    const salaryTmpl = recurringTemplates.find(t => t.type === 'income' && t.active && !t.archivedAt);
     if (!salaryTmpl) return '';
     return `다음 월급일: 매월 ${salaryTmpl.dayOfMonth}일`;
   }, [recurringTemplates]);
@@ -619,6 +618,36 @@ export default function App() {
       : { message: '완료 상태를 되돌리지 못했습니다.', tone: 'error' });
   };
 
+  const handleExcludeRecurringOccurrence = async (occurrenceId: string) => {
+    const occurrence = allRecurringOccurrences.find(item => item.id === occurrenceId);
+    if (!occurrence || occurrence.status === 'posted' || occurrence.status === 'skipped') {
+      showToast({ message: '이미 처리되었거나 제외된 항목입니다.', tone: 'info' });
+      return;
+    }
+    const template = recurringTemplates.find(item => item.id === occurrence.templateId);
+    const isIncome = (occurrence.typeSnapshot ?? template?.type) === 'income';
+    const accepted = await confirm({
+      title: `${template?.name || '정기 항목'}을 이번 달에서 제외할까요?`,
+      description: '고정 항목 원본과 다른 달의 일정은 유지됩니다. 고정 지출을 새로 불러와도 이 달에는 다시 생성되지 않습니다.',
+      details: [
+        { label: '구분', value: isIncome ? '고정 수입' : '고정 지출' },
+        { label: '예정 금액', value: formatKRW(occurrence.actualAmount ?? occurrence.expectedAmount) },
+        { label: '예정일', value: occurrence.scheduledDate },
+      ],
+      confirmLabel: '이번 달 제외',
+      tone: 'danger',
+    });
+    if (!accepted) return;
+
+    updateOccurrenceStatus(occurrenceId, 'skipped');
+    refreshAppData();
+    showToast({
+      message: `${template?.name || '정기 항목'}을 이번 달에서 제외했습니다.`,
+      description: '고정 항목 원본은 그대로 유지됩니다.',
+      tone: 'success',
+    });
+  };
+
   const handleCardSettlementStatus = (cardId: string, status: 'scheduled' | 'paid') => {
     const card = paymentCards.find(candidate => candidate.id === cardId);
     const settlement = cardSettlementSummary.cards.find(candidate => candidate.cardId === cardId);
@@ -719,6 +748,22 @@ export default function App() {
       description: `기존 미처리 ${result.removedCount}건 정리 · 현재 일정 ${result.loadedCount}건`,
       tone: 'success',
     });
+  };
+
+  const handleOpenPaydaySetup = async () => {
+    try {
+      // Payday confirmation must always start from the latest master list.
+      // Posted and explicitly skipped rows survive this refresh by design.
+      await reloadRecurringOccurrences(currentYM, monthStartDay);
+      refreshAppData();
+      setIsPaydaySheetOpen(true);
+    } catch (error) {
+      showToast({
+        message: '급여일 고정지출을 새로 불러오지 못했습니다.',
+        description: error instanceof Error ? error.message : undefined,
+        tone: 'error',
+      });
+    }
   };
 
   const handleSaveTransaction = (tx: Parameters<typeof saveTransaction>[0]) => {
@@ -941,6 +986,44 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportDiagnostic = () => {
+    const json = serializeDiagnosticExport({
+      selectedYearMonth: currentYM,
+      userProfile,
+      bankAccounts,
+      paymentCards,
+      recurringTemplates,
+      recurringOccurrences: allRecurringOccurrences,
+      transactions,
+      categories,
+      budget,
+      cycleBaseline,
+      monthSummary: summary,
+      cardSettlementSummary,
+      futureCommitments,
+      cardSettlementCandidates,
+      excludedCardSettlementTemplateIds: [...duplicateCardSettlementTemplateIds],
+      planningTemplateIds: planningRecurringTemplates.map(template => template.id),
+      planningOccurrenceIds: planningAllRecurringOccurrences.map(occurrence => occurrence.id),
+      planningTransactionIds: planningTransactions.map(transaction => transaction.id),
+    });
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `지출브레이크_진단데이터_${currentYM}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast({
+      message: '진단 데이터 파일을 저장했습니다.',
+      description: '다운로드한 JSON 파일을 대화에 첨부해 주세요.',
+      tone: 'success',
+    });
   };
 
   if (bootState === 'checking' || bootState === 'loading') {
@@ -974,7 +1057,7 @@ export default function App() {
 
       {/* Main View Area */}
       <main
-        className="max-w-md sm:max-w-xl md:max-w-2xl lg:max-w-4xl mx-auto px-4 py-5"
+        className="mx-auto w-full max-w-6xl px-[clamp(0.75rem,3vw,2rem)] py-5"
         style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom, 0px))' }}
       >
         {/* One period control for every screen that shows period-scoped amounts. */}
@@ -1000,10 +1083,10 @@ export default function App() {
             onOpenAddModal={() => setIsAddModalOpen(true)}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}
-            showSetupPrompt={recurringTemplates.length === 0 && !userProfile.onboardingCompletedAt}
+            showSetupPrompt={recurringTemplates.every(template => Boolean(template.archivedAt)) && !userProfile.onboardingCompletedAt}
             onStartSetup={() => setIsOnboardingOpen(true)}
             showPaydayPrompt={showPaydayPrompt}
-            onStartPayday={() => setIsPaydaySheetOpen(true)}
+            onStartPayday={() => void handleOpenPaydaySetup()}
             onRefreshBaseline={() => void handleConfirmBaseline(summary.savingsReserve)}
             onDismissBaselineChange={() => setDismissedDelta(summary.unplannedDelta)}
             baselineChangeDismissed={dismissedDelta === summary.unplannedDelta}
@@ -1062,6 +1145,7 @@ export default function App() {
               refreshAppData();
             }}
             onUndoPostedOccurrence={occurrenceId => void handleUndoPostedOccurrence(occurrenceId)}
+            onExcludeOccurrence={occurrenceId => void handleExcludeRecurringOccurrence(occurrenceId)}
             onUpdateOccurrencePlan={(occId, amount, pType, accId, cId) => {
               updateOccurrencePlan(occId, {
                 amount,
@@ -1144,8 +1228,7 @@ export default function App() {
             summary={summary}
             futureCommitments={futureCommitments}
             cashflowTimeline={cashflowTimeline}
-            period={period}
-            transactions={transactions}
+            transactions={planningTransactions}
             categories={categories}
             aiInsightsEnabled={userProfile.aiInsightsEnabled}
           />
@@ -1177,6 +1260,7 @@ export default function App() {
             onMergeCategory={mergeAndRemoveCategory}
             onUpdateUserProfile={updateUserProfile}
             onExportCSV={handleExportCSV}
+            onExportDiagnostic={handleExportDiagnostic}
             onResetData={resetAllData}
             onRepairClassificationIssues={repairClassificationIssues}
             quickEntries={quickEntries}

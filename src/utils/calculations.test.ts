@@ -92,6 +92,44 @@ describe('financial calculations', () => {
     expect(summary.spendableLimit).toBe(1_000_000);
   });
 
+  it('keeps settlements and transfers out of category spending and charges only one installment round', () => {
+    const categoryMap = Object.fromEntries(categories.map(category => [category.id, category]));
+    const transactions = [
+      tx({ id: 'normal', amount: 50_000 }),
+      tx({ id: 'settlement', amount: 900_000, role: 'card_settlement' }),
+      tx({ id: 'transfer', amount: 300_000, role: 'transfer' }),
+      tx({
+        id: 'installment',
+        amount: 300_000,
+        installment: { totalMonths: 3, currentRound: 1, baseYearMonth: '2026-08' },
+        paymentMethodType: 'card',
+      }),
+    ];
+
+    const breakdown = getCategoryBreakdown('2026-08', transactions, categoryMap, { variableOnly: true });
+
+    expect(breakdown).toEqual([expect.objectContaining({ categoryName: '식비', amount: 150_000 })]);
+    expect(calculateMonthSummary('2026-08', transactions, [], budget, [], now).confirmedVariableExpenses)
+      .toBe(150_000);
+  });
+
+  it('keeps an existing monthly plan unchanged until the master list is explicitly reloaded', () => {
+    const newlyAddedMaster: RecurringTemplate = {
+      id: 'new-insurance', type: 'expense', name: '새 보험료', defaultAmount: 180_000,
+      categoryId: 'food', counterparty: '보험사', expenseNature: 'fixed', frequency: 'monthly', dayOfMonth: 25,
+      holidayPolicy: 'next_business_day', postingMode: 'confirm', allowAmountChange: true,
+      startDate: '2026-08-01', nextDueDate: '2026-08-25', active: true,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    };
+
+    const summary = calculateMonthSummary(
+      '2026-08', [], [], budget, [newlyAddedMaster], now, 1,
+      { reserveUnmaterializedTemplates: false },
+    );
+
+    expect(summary.totalExpectedFixedExpenses).toBe(0);
+  });
+
   it('spends the same money whether a fixed expense leaves early or late in the cycle', () => {
     // Only cycle membership matters to "what is left": a bill due 8/28 and one
     // due 9/10 both leave the 8/25~9/24 cycle, and paying one changes nothing

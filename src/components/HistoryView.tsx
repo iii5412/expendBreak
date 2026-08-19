@@ -19,7 +19,13 @@ import { Transaction, Category, BankAccount, PaymentCard, PaymentMethodType } fr
 import { AccountingPeriod, formatKRW, formatPeriodRange, getLocalDateString } from '../utils/calculations';
 import { normalizeTags } from '../utils/receipt';
 import { ReceiptDetailsModal } from './ReceiptDetailsModal';
-import { HistoryPeriod, isTransactionInPeriod, sortTransactionsNewestFirst } from '../utils/history';
+import {
+  HistoryKind,
+  HistoryPeriod,
+  isTransactionInPeriod,
+  matchesHistoryKind,
+  sortTransactionsNewestFirst,
+} from '../utils/history';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
@@ -68,7 +74,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
+  const [historyKind, setHistoryKind] = useState<HistoryKind>('regular_expense');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [aiOnlyFilter, setAiOnlyFilter] = useState(false);
   const [receiptOnlyFilter, setReceiptOnlyFilter] = useState(false);
@@ -89,7 +95,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const filteredTransactions = useMemo(() => {
     const filtered = transactions.filter(t => {
       if (!isTransactionInPeriod(t, periodFilter, new Date(), period)) return false;
-      if (typeFilter !== 'all' && t.type !== typeFilter) return false;
+      if (!matchesHistoryKind(t, historyKind)) return false;
       if (selectedCategory !== 'all' && t.categoryId !== selectedCategory) return false;
       if (aiOnlyFilter && t.source === 'manual') return false;
       if (receiptOnlyFilter && !t.receipt) return false;
@@ -108,7 +114,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       return true;
     });
     return sortTransactionsNewestFirst(filtered);
-  }, [transactions, periodFilter, period, typeFilter, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap]);
+  }, [transactions, periodFilter, period, historyKind, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap]);
 
   const periodRange = formatPeriodRange(period);
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
@@ -201,7 +207,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     setCurrentPage(1);
     // Selections refer to rows that may no longer be listed after a filter change.
     setSelectedIds(new Set());
-  }, [periodFilter, typeFilter, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, pageSize]);
+  }, [periodFilter, historyKind, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, pageSize]);
 
   useEffect(() => {
     setCurrentPage(page => Math.min(page, totalPages));
@@ -248,6 +254,36 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   return (
     <div className="space-y-4 pb-24">
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1.5 text-xs sm:grid-cols-4">
+        {([
+          ['regular_expense', '일반지출'],
+          ['fixed_expense', '고정지출'],
+          ['income', '수입'],
+          ['all', '전체 내역'],
+        ] as Array<[HistoryKind, string]>).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => {
+              setHistoryKind(value);
+              setSelectedCategory('all');
+            }}
+            aria-pressed={historyKind === value}
+            className={`min-h-11 rounded-lg px-3 py-2 font-bold transition-colors ${
+              historyKind === value
+                ? value === 'fixed_expense'
+                  ? 'border border-amber-500/40 bg-amber-500/15 text-amber-300'
+                  : value === 'income'
+                    ? 'border border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                    : 'border border-rose-500/40 bg-rose-500/15 text-rose-300'
+                : 'border border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* Search & Filters */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-3">
         {/* Search Input */}
@@ -297,34 +333,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
         {/* Filter Pills */}
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-          {/* Type filter */}
-          <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800">
-            <button
-              onClick={() => setTypeFilter('all')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
-                typeFilter === 'all' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              전체
-            </button>
-            <button
-              onClick={() => setTypeFilter('income')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
-                typeFilter === 'income' ? 'bg-emerald-500/20 text-emerald-300 font-bold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              수입
-            </button>
-            <button
-              onClick={() => setTypeFilter('expense')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
-                typeFilter === 'expense' ? 'bg-rose-500/20 text-rose-300 font-bold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              지출
-            </button>
-          </div>
-
           {/* Category Dropdown */}
           <select
             value={selectedCategory}

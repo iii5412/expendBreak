@@ -30,20 +30,24 @@ describe('manual card settlement duplicate detection', () => {
     ], [card]).size).toBe(0);
   });
 
-  // An item named just "신한카드" misses the 카드대금 pattern, so it used to be
-  // counted as a transfer *and* as the generated bill.
-  it('flags a loosely named card bill for review instead of double counting silently', () => {
+  it('replaces an account transfer named exactly after its linked card', () => {
     const loose = template({ id: 'loose', name: '신한카드', counterparty: '' });
     const candidates = findManualCardSettlementCandidates([loose], [card], {
       cardSettlementAmounts: { shinhan: 320_000 },
     });
 
     expect(candidates).toHaveLength(1);
-    expect(candidates[0]).toMatchObject({ templateId: 'loose', cardId: 'shinhan', status: 'needs_review' });
-    // Still counted until the user answers, so nothing disappears behind their back.
+    expect(candidates[0]).toMatchObject({ templateId: 'loose', cardId: 'shinhan', status: 'replaced' });
     expect(getDuplicateManualCardSettlementTemplateIds([loose], [card], {
       cardSettlementAmounts: { shinhan: 320_000 },
-    }).size).toBe(0);
+    })).toEqual(new Set(['loose']));
+  });
+
+  it('replaces an explicitly named card bill when only one card uses the account', () => {
+    const generic = template({ id: 'generic', name: '카드대금', counterparty: '' });
+
+    expect(getDuplicateManualCardSettlementTemplateIds([generic], [card]))
+      .toEqual(new Set(['generic']));
   });
 
   it('leaves a same-account expense alone when the amount is nothing like the bill', () => {

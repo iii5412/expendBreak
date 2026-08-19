@@ -167,24 +167,28 @@ export function normalizeRecurringOccurrencesForMonth(
     // one due on the 10th, which opens the very next cycle.
     if (template.frequency === 'monthly') {
       const closedCycles = new Set(candidates
-        .filter(occurrence => occurrence.status === 'posted')
+        .filter(occurrence => occurrence.status === 'posted' || occurrence.status === 'skipped')
         .map(occurrence => cycleOf(occurrence.scheduledDate, monthStartDay)));
       candidates
         .filter(occurrence => occurrence.status !== 'posted'
+          && occurrence.status !== 'skipped'
           && closedCycles.has(cycleOf(occurrence.scheduledDate, monthStartDay)))
         .forEach(occurrence => removedIds.add(occurrence.id));
     }
 
     candidates
-      .filter(occurrence => occurrence.status !== 'posted' && !canonicalDates.has(occurrence.scheduledDate))
+      .filter(occurrence => occurrence.status !== 'posted'
+        && occurrence.status !== 'skipped'
+        && !canonicalDates.has(occurrence.scheduledDate))
       .forEach(occurrence => removedIds.add(occurrence.id));
 
     canonicalDates.forEach(date => {
       const duplicates = candidates
         .filter(occurrence => occurrence.scheduledDate === date && !removedIds.has(occurrence.id))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-      const posted = duplicates.find(occurrence => occurrence.status === 'posted');
-      const keeper = posted || duplicates[0];
+      const closed = duplicates.find(occurrence => occurrence.status === 'posted')
+        || duplicates.find(occurrence => occurrence.status === 'skipped');
+      const keeper = closed || duplicates[0];
       duplicates.forEach(occurrence => {
         if (keeper && occurrence.id !== keeper.id && occurrence.status !== 'posted') removedIds.add(occurrence.id);
       });

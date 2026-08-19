@@ -13,11 +13,10 @@ import {
 } from '../types';
 import {
   calculateMonthSummary,
-  getAccountingPeriod,
+  getCategoryBreakdown,
   getCurrentYearMonth,
   getLocalDateString,
   getYearMonthString,
-  isDateInPeriod,
 } from './calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 
@@ -194,8 +193,7 @@ export function createAssistantFinancialSnapshot(args: {
   const now = args.now || new Date();
   const monthStartDay = args.monthStartDay ?? 1;
   const yearMonth = getCurrentYearMonth(monthStartDay, now);
-  const period = getAccountingPeriod(yearMonth, monthStartDay, now);
-  const categoryMap = new Map(args.categories.map(category => [category.id, category.name]));
+  const categoryMap = Object.fromEntries(args.categories.map(category => [category.id, category]));
   const cardSummary = calculateCardPaymentSummary(
     yearMonth,
     args.transactions,
@@ -223,25 +221,21 @@ export function createAssistantFinancialSnapshot(args: {
     monthStartDay,
     { cardSettlementOutflow: cardSettlementSummary.totalAmount },
   );
-  const expenseByCategory = new Map<string, number>();
-  args.transactions
-    .filter(transaction => transaction.type === 'expense'
-      && !transaction.recurringTemplateId
-      && isDateInPeriod(transaction.localDate, period))
-    .forEach(transaction => {
-      expenseByCategory.set(
-        transaction.categoryId,
-        (expenseByCategory.get(transaction.categoryId) || 0) + Math.round(transaction.amount),
-      );
-    });
+  const expenseByCategory = getCategoryBreakdown(
+    yearMonth,
+    args.transactions,
+    categoryMap,
+    { variableOnly: true, monthStartDay: 1 },
+  );
 
   return {
     기준월: yearMonth,
     확정수입: summary.confirmedIncome,
     이번달수입: summary.totalIncome,
     확정전체지출: summary.confirmedExpenses,
-    확정고정비: summary.confirmedFixedExpenses,
-    예정고정비: summary.remainingScheduledExpenses,
+    확정계좌고정지출: summary.confirmedAccountFixedOutflow,
+    예정계좌고정지출: summary.scheduledAccountFixedOutflow,
+    카드고정비참고: summary.cardFixedExpenses,
     계좌고정이체: summary.accountFixedOutflow,
     이번주기카드대금: summary.cardSettlementOutflow,
     이번주기고정출금합계: summary.totalExpectedFixedExpenses,
@@ -276,10 +270,9 @@ export function createAssistantFinancialSnapshot(args: {
       잔액: Math.round(account.balance || 0),
       기준일: account.balanceAsOf || null,
     })),
-    용돈상위카테고리: [...expenseByCategory.entries()]
-      .sort((left, right) => right[1] - left[1])
+    용돈상위카테고리: expenseByCategory
       .slice(0, 5)
-      .map(([categoryId, amount]) => ({ 카테고리: categoryMap.get(categoryId) || '미분류', 금액: amount })),
+      .map(item => ({ 카테고리: item.categoryName, 금액: item.amount })),
   };
 }
 
