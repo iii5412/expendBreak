@@ -542,6 +542,15 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                       이번 주기 일정 만들기
                     </button>
                   )}
+                  {item.reason === 'card_settlement_replaced' && (
+                    <button
+                      type="button"
+                      onClick={() => onResolveCardSettlementReview(item.templateId, null)}
+                      className="mt-2 min-h-9 w-full rounded-lg border border-slate-700 bg-slate-900 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-800"
+                    >
+                      별개 고정지출로 되돌리기
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

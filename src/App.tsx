@@ -319,8 +319,9 @@ export default function App() {
       cardSettlementAmounts: Object.fromEntries(
         rawCardSettlementSummary.cards.map(card => [card.cardId, card.amount]),
       ),
+      bankAccounts,
     }),
-    [recurringTemplates, paymentCards, rawCardSettlementSummary],
+    [recurringTemplates, paymentCards, bankAccounts, rawCardSettlementSummary],
   );
   const duplicateCardSettlementTemplateIds = useMemo(
     () => new Set(cardSettlementCandidates

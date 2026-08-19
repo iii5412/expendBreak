@@ -133,6 +133,79 @@ describe('calculateCardPaymentSummary', () => {
     }));
   });
 
+  it('projects an active card template when a future occurrence does not exist yet', () => {
+    const template: RecurringTemplate = {
+      id: 'future-subscription', type: 'expense', name: '구독료', defaultAmount: 45_000,
+      categoryId: 'subscriptions', counterparty: '구독 서비스', frequency: 'monthly',
+      dayOfMonth: 25, holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true,
+      paymentMethodType: 'card', cardId: 'credit', startDate: '2026-01-01', nextDueDate: '2026-08-25',
+      active: true, createdAt: now, updatedAt: now,
+    };
+
+    const summary = calculateCardPaymentSummary(
+      '2026-12', [], cards, 1, [], [template], undefined,
+      { reserveUnmaterializedCardTemplates: true },
+    );
+
+    expect(summary.estimatedNextPaymentTotal).toBe(45_000);
+    expect(summary.scheduledFixedCardUsage).toBe(45_000);
+  });
+
+  it('does not project an archived card template', () => {
+    const archived: RecurringTemplate = {
+      id: 'archived-subscription', type: 'expense', name: '이전 구독', defaultAmount: 45_000,
+      categoryId: 'subscriptions', counterparty: '', frequency: 'monthly', dayOfMonth: 25,
+      holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true,
+      paymentMethodType: 'card', cardId: 'credit', startDate: '2026-01-01', nextDueDate: '2026-08-25',
+      active: true, archivedAt: now, createdAt: now, updatedAt: now,
+    };
+
+    const summary = calculateCardPaymentSummary(
+      '2026-12', [], cards, 1, [], [archived], undefined,
+      { reserveUnmaterializedCardTemplates: true },
+    );
+
+    expect(summary.estimatedNextPaymentTotal).toBe(0);
+  });
+
+  it('does not project a due day from before the template start date', () => {
+    const notStarted: RecurringTemplate = {
+      id: 'not-started', type: 'expense', name: '새 구독', defaultAmount: 29_000,
+      categoryId: 'subscriptions', counterparty: '', frequency: 'monthly', dayOfMonth: 4,
+      holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true,
+      paymentMethodType: 'card', cardId: 'credit', startDate: '2026-08-10', nextDueDate: '2026-09-04',
+      active: true, createdAt: now, updatedAt: now,
+    };
+
+    const summary = calculateCardPaymentSummary(
+      '2026-08', [], cards, 1, [], [notStarted], undefined,
+      { reserveUnmaterializedCardTemplates: true },
+    );
+
+    expect(summary.estimatedNextPaymentTotal).toBe(0);
+  });
+
+  it('does not add a template fallback when that month already has its recurring transaction', () => {
+    const template: RecurringTemplate = {
+      id: 'moved-date', type: 'expense', name: '날짜 변경 구독', defaultAmount: 7_890,
+      categoryId: 'subscriptions', counterparty: '', frequency: 'monthly', dayOfMonth: 10,
+      holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true,
+      paymentMethodType: 'card', cardId: 'credit', startDate: '2026-01-01', nextDueDate: '2026-08-10',
+      active: true, createdAt: now, updatedAt: now,
+    };
+    const posted = transaction({
+      id: 'posted-moved-date', amount: 7_890, localDate: '2026-08-25',
+      cardId: 'credit', recurringTemplateId: template.id,
+    });
+
+    const summary = calculateCardPaymentSummary(
+      '2026-08', [posted], cards, 1, [], [template], undefined,
+      { reserveUnmaterializedCardTemplates: true },
+    );
+
+    expect(summary.estimatedNextPaymentTotal).toBe(7_890);
+  });
+
   it('includes only the applicable installment round in each projected card month', () => {
     const installmentTx = transaction({
       id: 'installment', cardId: 'credit', amount: 300_000, localDate: '2026-06-10',

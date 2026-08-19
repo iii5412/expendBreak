@@ -1,5 +1,5 @@
 import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
-import { getAccountingPeriod, getLocalDateString, getMonthlyDueDateInPeriod, isDateInPeriod, shiftYearMonth } from './calculations';
+import { getAccountingPeriod, getLocalDateString, getMonthlyDueDateInPeriod, getScheduledDatesInPeriod, isDateInPeriod, shiftYearMonth } from './calculations';
 import { getInstallmentCharge } from './installments';
 
 export interface CreditCardPaymentEstimate {
@@ -67,6 +67,8 @@ export interface MonthlyCardSettlementOptions {
    * September card bill regardless of payday or statement-closing dates.
    */
   usageBasis?: 'statement_window' | 'previous_calendar_month';
+  /** Keep active card fixed expenses visible beyond the generated occurrence horizon. */
+  reserveUnmaterializedCardTemplates?: boolean;
 }
 
 function getEstimatedPaymentDate(yearMonth: string, billingDay?: number | null): string | null {
@@ -185,6 +187,11 @@ export interface CardUsageWindow {
   endDate: string;
 }
 
+export interface CardPaymentCalculationOptions {
+  /** Project active card-paid templates when a future occurrence has not been generated yet. */
+  reserveUnmaterializedCardTemplates?: boolean;
+}
+
 export function calculateCardPaymentSummary(
   yearMonth: string,
   transactions: Transaction[],
@@ -193,6 +200,7 @@ export function calculateCardPaymentSummary(
   recurringOccurrences: RecurringOccurrence[] = [],
   recurringTemplates: RecurringTemplate[] = [],
   usageWindow?: CardUsageWindow,
+  options: CardPaymentCalculationOptions = {},
 ): CardPaymentSummary {
   // A real statement window rarely aligns to any month, so callers that know it
   // pass the dates and `yearMonth` stays the installment-round anchor only.
@@ -272,35 +280,75 @@ export function calculateCardPaymentSummary(
   // occurrence is posted. Posted occurrences are already represented by their
   // transaction above and must not be counted twice.
   const templateMap = new Map(recurringTemplates.map(template => [template.id, template]));
+  const addScheduledFixedCardUsage = (amount: number, cardId?: string | null) => {
+    const card = cardId ? cardMap.get(cardId) : undefined;
+    scheduledFixedCardUsage += amount;
+    totalCardUsage += amount;
+    if (!card) {
+      unassignedCardUsage += amount;
+      return;
+    }
+    if (card.cardType === 'debit') {
+      debitCardUsage += amount;
+      return;
+    }
+    const estimate = creditCards.get(card.id);
+    if (!estimate) return;
+    estimate.totalAmount += amount;
+    estimate.fixedAmount += amount;
+    estimate.scheduledFixedAmount += amount;
+  };
+
   recurringOccurrences
     .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period)
       && occurrence.status !== 'posted'
       && occurrence.status !== 'skipped')
     .forEach(occurrence => {
       const template = templateMap.get(occurrence.templateId);
+      if (template?.archivedAt) return;
       if ((occurrence.typeSnapshot ?? template?.type) !== 'expense') return;
       const paymentMethodType = occurrence.paymentMethodType ?? template?.paymentMethodType;
       if (paymentMethodType !== 'card') return;
 
       const amount = Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
       const cardId = occurrence.cardId ?? template?.cardId;
-      const card = cardId ? cardMap.get(cardId) : undefined;
-      scheduledFixedCardUsage += amount;
-      totalCardUsage += amount;
-      if (!card) {
-        unassignedCardUsage += amount;
-        return;
-      }
-      if (card.cardType === 'debit') {
-        debitCardUsage += amount;
-        return;
-      }
-      const estimate = creditCards.get(card.id);
-      if (!estimate) return;
-      estimate.totalAmount += amount;
-      estimate.fixedAmount += amount;
-      estimate.scheduledFixedAmount += amount;
+      addScheduledFixedCardUsage(amount, cardId);
     });
+
+  if (options.reserveUnmaterializedCardTemplates) {
+    const occurrenceDates = new Set(
+      recurringOccurrences.map(occurrence => `${occurrence.templateId}|${occurrence.scheduledDate}`),
+    );
+    const materializedMonthlyTemplateIds = new Set<string>();
+    recurringOccurrences
+      .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period))
+      .forEach(occurrence => materializedMonthlyTemplateIds.add(occurrence.templateId));
+    transactions
+      .filter(transaction => transaction.recurringTemplateId
+        && isDateInPeriod(transaction.localDate, period))
+      .forEach(transaction => materializedMonthlyTemplateIds.add(transaction.recurringTemplateId as string));
+
+    recurringTemplates
+      .filter(template => template.active
+        && !template.archivedAt
+        && template.type === 'expense'
+        && template.paymentMethodType === 'card')
+      .forEach(template => {
+        getScheduledDatesInPeriod(template, period).forEach(scheduledDate => {
+          // Calendar-month card projections must not pull a due day from before
+          // the template was registered merely because it shares a payday cycle.
+          if (scheduledDate < template.startDate || (template.endDate && scheduledDate > template.endDate)) return;
+          // Any materialized row is authoritative: pending rows were added
+          // above, posted rows have transactions, and skipped rows stay skipped.
+          if (occurrenceDates.has(`${template.id}|${scheduledDate}`)) return;
+          // A monthly row may have kept an older scheduled date after the master
+          // due day changed. Its transaction/occurrence still represents that
+          // month's one charge and must block a fallback duplicate.
+          if (template.frequency === 'monthly' && materializedMonthlyTemplateIds.has(template.id)) return;
+          addScheduledFixedCardUsage(Math.round(template.defaultAmount), template.cardId);
+        });
+      });
+  }
 
   const estimates = [...creditCards.values()].sort((left, right) => right.totalAmount - left.totalAmount);
   const creditCardUsage = estimates.reduce((sum, card) => sum + card.totalAmount, 0);
@@ -402,6 +450,7 @@ export function calculateMonthlyCardSettlementSummary(
       recurringOccurrences,
       recurringTemplates,
       { startDate: schedule.usageStartDate, endDate: schedule.usageEndDate },
+      { reserveUnmaterializedCardTemplates: options.reserveUnmaterializedCardTemplates },
     );
     usageSummaries.set(key, summary);
     return summary;

@@ -49,7 +49,7 @@ export function calculateFutureCommitments(
     // occurrences generated yet, so the template is the only source.
     const accountFixed = recurringTemplates
       .filter(template => {
-        if (!template.active || template.type !== 'expense') return false;
+        if (!template.active || template.archivedAt || template.type !== 'expense') return false;
         if (template.paymentMethodType === 'card' || template.cardSettlementCardId) return false;
         return getScheduledDatesInPeriod(template, period).length > 0;
       })
@@ -64,7 +64,10 @@ export function calculateFutureCommitments(
       monthStartDay,
       recurringOccurrences,
       recurringTemplates,
-      { usageBasis: 'previous_calendar_month' },
+      {
+        usageBasis: 'previous_calendar_month',
+        reserveUnmaterializedCardTemplates: true,
+      },
     );
 
     // Installment rounds sit inside the card bill; split them out so the bar can

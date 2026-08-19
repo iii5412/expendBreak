@@ -84,6 +84,32 @@ describe('future commitments', () => {
     expect(months.map(month => month.accountFixed)).toEqual([700_000, 700_000, 700_000, 0, 0, 0]);
   });
 
+  it('does not project an archived account template even when old occurrences remain', () => {
+    const archived = { ...RENT, archivedAt: '2026-08-19T00:00:00.000Z' };
+    const { months } = calculateFutureCommitments('2026-08', [], [archived], [], [], SALARY_DAY, 2);
+
+    expect(months.map(month => month.accountFixed)).toEqual([0, 0]);
+  });
+
+  it('keeps active card fixed expenses across the full horizon without generated occurrences', () => {
+    const subscription: RecurringTemplate = {
+      ...RENT,
+      id: 'card-subscription',
+      name: '카드 구독',
+      defaultAmount: 45_000,
+      dayOfMonth: 15,
+      paymentMethodType: 'card',
+      accountId: null,
+      cardId: CARD.id,
+    };
+
+    const { months } = calculateFutureCommitments(
+      '2026-09', [], [subscription], [], [CARD], SALARY_DAY, 3,
+    );
+
+    expect(months.map(month => month.cardSettlement)).toEqual([45_000, 45_000, 45_000]);
+  });
+
   it('carries an installment for its remaining rounds and then frees the money', () => {
     const purchase = makeTransaction({
       amount: 300_000,

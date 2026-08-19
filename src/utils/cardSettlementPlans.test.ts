@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PaymentCard, RecurringTemplate } from '../types';
+import { BankAccount, PaymentCard, RecurringTemplate } from '../types';
 import {
   findManualCardSettlementCandidates,
   getDuplicateManualCardSettlementTemplateIds,
@@ -10,6 +10,10 @@ const card: PaymentCard = {
   id: 'shinhan', cardName: '신한카드', cardCompany: '신한카드', cardType: 'credit',
   linkedAccountId: 'saemaeul', billingDay: 15, createdAt: now, updatedAt: now,
 };
+const account = (id: string, accountName = '생활통장'): BankAccount => ({
+  id, bankName: '새마을금고', accountName, accountNumber: '', accountHolder: '', balance: 0,
+  createdAt: now, updatedAt: now,
+});
 const template = (overrides: Partial<RecurringTemplate>): RecurringTemplate => ({
   id: 'manual-card-bill', type: 'expense', name: '신한카드 대금', defaultAmount: 300_000,
   categoryId: 'etc_expense', counterparty: '신한카드', frequency: 'monthly', dayOfMonth: 15,
@@ -26,8 +30,31 @@ describe('manual card settlement duplicate detection', () => {
   it('does not hide an unrelated fixed expense or another account', () => {
     expect(getDuplicateManualCardSettlementTemplateIds([
       template({ id: 'rent', name: '월세', counterparty: '임대인' }),
-      template({ id: 'other-account', accountId: 'other' }),
+      template({ id: 'other-account', name: '보험료', counterparty: '보험사', accountId: 'other' }),
     ], [card]).size).toBe(0);
+  });
+
+  it('matches equivalent duplicate account records for amount-based review', () => {
+    const ambiguous = template({
+      id: 'duplicate-account-bill', name: '신한카드 차할부', counterparty: '',
+      accountId: 'old-account', defaultAmount: 305_000,
+    });
+    const candidates = findManualCardSettlementCandidates([ambiguous], [card], {
+      bankAccounts: [account('old-account'), account('saemaeul')],
+      cardSettlementAmounts: { shinhan: 300_000 },
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({ templateId: ambiguous.id, cardId: card.id, status: 'needs_review' }),
+    ]);
+  });
+
+  it('recognizes a short card name with the 카드 suffix across account ids', () => {
+    const shortNameCard: PaymentCard = { ...card, id: 'woori', cardName: '우리', cardCompany: '기타' };
+    const manual = template({ id: 'woori-bill', name: '우리카드', counterparty: '', accountId: 'legacy' });
+
+    expect(getDuplicateManualCardSettlementTemplateIds([manual], [shortNameCard]))
+      .toEqual(new Set(['woori-bill']));
   });
 
   it('replaces an account transfer named exactly after its linked card', () => {
