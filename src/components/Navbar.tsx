@@ -21,7 +21,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   syncStatusSlot,
 }) => {
   return (
-    <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 text-slate-100">
+    <header
+      className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 text-slate-100"
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+    >
       <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-[clamp(0.75rem,3vw,2rem)] py-3">
         {/* Brand */}
         <div className="flex items-center gap-2.5">

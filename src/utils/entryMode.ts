@@ -7,11 +7,14 @@
  */
 import { getAccountStorageKey } from './auth';
 
-const entryModeKey = () => getAccountStorageKey('brake_entry_mode');
+// V2 separates the old combined voice screen into independent GPT Live and
+// Gemini recording tabs. A new key keeps the previous `voice` value from being
+// misread as the newly named Gemini-only tab.
+const entryModeKey = () => getAccountStorageKey('brake_entry_mode_v2');
 
-export type EntryMode = 'receipt' | 'voice' | 'ai' | 'manual';
+export type EntryMode = 'receipt' | 'live' | 'voice' | 'ai' | 'manual';
 
-const ENTRY_MODES: EntryMode[] = ['receipt', 'voice', 'ai', 'manual'];
+const ENTRY_MODES: EntryMode[] = ['receipt', 'live', 'voice', 'ai', 'manual'];
 
 function store(): Storage | null {
   try {
@@ -36,5 +39,5 @@ export function savePreferredEntryMode(mode: EntryMode) {
 export function readPreferredEntryMode(aiClassificationEnabled: boolean): EntryMode {
   if (!aiClassificationEnabled) return 'manual';
   const raw = store()?.getItem(entryModeKey());
-  return ENTRY_MODES.includes(raw as EntryMode) ? raw as EntryMode : 'voice';
+  return ENTRY_MODES.includes(raw as EntryMode) ? raw as EntryMode : 'live';
 }

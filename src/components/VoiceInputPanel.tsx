@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Play, RotateCcw, Sparkles, Loader2, AlertCircle, ShieldCheck, Volume2 } from 'lucide-react';
+import { Mic, Square, Play, RotateCcw, Sparkles, Loader2, AlertCircle, ShieldCheck, Volume2, Settings } from 'lucide-react';
 import { Category, MerchantRule, BankAccount, PaymentCard, VoiceAnalysisResult } from '../types';
 import { authenticatedFetch } from '../utils/auth';
 import { getLocalDateString } from '../utils/calculations';
 import { validateAudioInput } from '../utils/voice';
+import { ensureMicrophoneAccess, isNativeMicrophonePlatform, openMicrophoneSettings } from '../utils/microphonePermission';
 
 interface VoiceInputPanelProps {
   categories: Category[];
@@ -28,6 +29,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
   const [volumeLevel, setVolumeLevel] = useState<number>(0);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [permissionSettingsRequired, setPermissionSettingsRequired] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -86,10 +88,24 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
 
   const startRecording = async () => {
     setErrorMessage(null);
+    setPermissionSettingsRequired(false);
     setAudioBlob(null);
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl);
       setAudioUrl(null);
+    }
+
+    try {
+      const permission = await ensureMicrophoneAccess();
+      if (permission === 'settings-required') {
+        setPermissionSettingsRequired(true);
+        setErrorMessage('마이크 권한이 꺼져 있습니다. 앱 설정에서 마이크를 허용한 뒤 다시 눌러주세요.');
+        return;
+      }
+    } catch {
+      setPermissionSettingsRequired(true);
+      setErrorMessage('Android 마이크 권한 상태를 확인하지 못했습니다. 앱 설정에서 권한을 확인해주세요.');
+      return;
     }
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -189,7 +205,11 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
     } catch (err: any) {
       console.error('Microphone access error:', err);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setErrorMessage('마이크 권한이 거부되었습니다. 브라우저 설정에서 마이크 접근을 허용해주세요.');
+        const isNative = isNativeMicrophonePlatform();
+        setPermissionSettingsRequired(isNative);
+        setErrorMessage(isNative
+          ? '마이크 권한이 거부되었습니다. 앱 설정에서 마이크를 허용해주세요.'
+          : '마이크 권한이 거부되었습니다. 브라우저의 사이트 권한에서 마이크를 허용해주세요.');
       } else {
         setErrorMessage('마이크 연결 상태를 확인해주세요.');
       }
@@ -303,9 +323,21 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
       </div>
 
       {errorMessage && (
-        <div className="flex items-center gap-2 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{errorMessage}</span>
+        <div className="space-y-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          {permissionSettingsRequired && (
+            <button
+              type="button"
+              onClick={() => void openMicrophoneSettings()}
+              className="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-rose-400/30 bg-slate-950/70 font-bold text-rose-200"
+            >
+              <Settings className="h-4 w-4" />
+              앱 설정에서 마이크 허용
+            </button>
+          )}
         </div>
       )}
 

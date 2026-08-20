@@ -3,7 +3,7 @@ import path from 'path';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createHash, createHmac, pbkdf2Sync, timingSafeEqual } from 'node:crypto';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { applicationDefault, getApps as getAdminApps, initializeApp as initializeAdminApp } from 'firebase-admin/app';
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
@@ -11,6 +11,7 @@ import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json';
 import { shouldTriggerVoiceFallback, sanitizeVoiceResult } from './src/utils/voice';
 import { createRealtimeSessionForm, parseRealtimeSdpBody } from './src/utils/realtimeSession';
+import { extractExplicitKrwAmount, needsAiDateResolution } from './src/utils/aiClassify';
 
 dotenv.config();
 
@@ -1002,27 +1003,7 @@ Instructions:
 // Local heuristic keyword matcher as instant fallback or pre-processor
 function fallbackClassify(text: string, categories: any[], merchantRules: any[], defaultDate: string) {
   const textLower = text.toLowerCase().trim();
-
-  // Extract amount using regex
-  const numberMatches = text.match(/(\d{1,3}(?:,\d{3})*|\d+)(?:\s*원|\s*만원)?/g);
-  let amount = 0;
-
-  if (numberMatches && numberMatches.length > 0) {
-    // Look for numbers in text
-    for (const match of numberMatches) {
-      if (match.includes('만원')) {
-        const num = parseFloat(match.replace(/[^\d.]/g, ''));
-        amount = Math.round(num * 10000);
-        break;
-      } else {
-        const cleanNum = parseInt(match.replace(/[^\d]/g, ''), 10);
-        if (cleanNum > 0) {
-          amount = cleanNum;
-          break;
-        }
-      }
-    }
-  }
+  const amount = extractExplicitKrwAmount(text);
 
   // Check merchant rules
   let suggestedCategoryId = 'etc_expense';
@@ -1051,7 +1032,7 @@ function fallbackClassify(text: string, categories: any[], merchantRules: any[],
 
   return {
     type,
-    amount: amount || 10000,
+    amount,
     date: defaultDate,
     merchant,
     memo: text,
@@ -1094,6 +1075,28 @@ app.post('/api/ai/classify', async (req, res) => {
     const textLower = text.toLowerCase();
     const matchedRule = safeMerchantRules.find((r: any) => r.pattern && textLower.includes(r.pattern.toLowerCase()));
 
+    // Repeated merchants with an explicit amount are deterministic. Returning
+    // them before creating a Gemini client makes the common path effectively
+    // instant while relative dates and unknown merchants retain AI handling.
+    if (matchedRule && !needsAiDateResolution(text)) {
+      const matchedCategory = safeCategories.find((category: any) => category.id === matchedRule.categoryId);
+      const explicitAmount = extractExplicitKrwAmount(text);
+      if (matchedCategory && explicitAmount > 0) {
+        return res.json({
+          type: matchedCategory.type,
+          amount: explicitAmount,
+          date: todayStr,
+          merchant: matchedRule.pattern,
+          memo: text,
+          suggestedCategoryId: matchedRule.categoryId,
+          suggestedNewCategoryName: null,
+          confidence: 0.98,
+          reason: '저장된 사용처 규칙으로 즉시 분류',
+          needsConfirmation: true,
+        });
+      }
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
       // Fallback response if API key not present
@@ -1102,7 +1105,7 @@ app.post('/api/ai/classify', async (req, res) => {
     }
 
     const catListStr = safeCategories
-      .map((c: any) => `ID: "${c.id}", Name: "${c.name}", Type: "${c.type}"`)
+      .map((c: any) => `${c.id}|${c.name}|${c.type}`)
       .join('\n');
 
     const prompt = `Analyze this Korean transaction text and return a JSON object with classification details:
@@ -1120,9 +1123,11 @@ Rules:
 5. Do NOT invent new category IDs. If no existing category fits well, suggest a short name in "suggestedNewCategoryName", but put the closest existing category ID in "suggestedCategoryId".`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: process.env.GEMINI_CLASSIFY_MODEL?.trim() || 'gemini-3.5-flash-lite',
       contents: prompt,
       config: {
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        maxOutputTokens: 512,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,

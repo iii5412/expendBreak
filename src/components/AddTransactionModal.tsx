@@ -41,7 +41,7 @@ import {
   readTransactionDraft,
   saveTransactionDraft,
 } from '../utils/transactionDraft';
-import { readPreferredEntryMode, savePreferredEntryMode } from '../utils/entryMode';
+import { EntryMode, readPreferredEntryMode, savePreferredEntryMode } from '../utils/entryMode';
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { LiveVoicePanel } from './LiveVoicePanel';
@@ -100,8 +100,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   onManageQuickEntries,
   onPostOccurrence,
 }) => {
-  const [activeMode, setActiveMode] = useState<'receipt' | 'voice' | 'ai' | 'manual'>('voice');
-  const [voiceInputKind, setVoiceInputKind] = useState<'live' | 'quick'>('live');
+  const [activeMode, setActiveMode] = useState<EntryMode>('live');
 
   // Manual Form State
   const [type, setType] = useState<'income' | 'expense'>('expense');
@@ -161,12 +160,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
    * deliberately not routed through here — they are a step inside another flow,
    * not a statement about how this person prefers to enter transactions.
    */
-  const selectMode = (mode: 'receipt' | 'voice' | 'ai' | 'manual') => {
+  const selectMode = (mode: EntryMode) => {
     setActiveMode(mode);
     savePreferredEntryMode(mode);
   };
 
-  const selectProtectedMode = async (mode: 'receipt' | 'voice' | 'ai') => {
+  const selectProtectedMode = async (mode: Exclude<EntryMode, 'manual'>) => {
     if (!aiClassificationEnabled) {
       const enabled = await onEnableAI?.();
       if (!enabled) return;
@@ -187,7 +186,6 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setActiveMode(readPreferredEntryMode(aiClassificationEnabled));
-      setVoiceInputKind('live');
       setVoiceResult(null);
       setSaveError(null);
       setRecurringMatchPrompt(null);
@@ -244,8 +242,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         },
         body: JSON.stringify({
           text: aiPromptText,
-          categories,
-          merchantRules,
+          categories: categories
+            .filter(category => category.active)
+            .map(({ id, name, type }) => ({ id, name, type })),
+          merchantRules: merchantRules.map(({ pattern, categoryId }) => ({ pattern, categoryId })),
           defaultDate: getLocalDateString(),
         }),
       });
@@ -565,7 +565,6 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setAiResult(null);
     setVoiceResult(null);
     setVoiceDurationMs(0);
-    setVoiceInputKind('live');
     setConfirmTranscript('');
     setAmount('');
     setMerchant('');
@@ -687,7 +686,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       labelledById="add-transaction-title"
       dismissOnBackdrop={false}
       backdropClassName="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4"
-      panelClassName="bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 space-y-4 shadow-2xl"
+      panelClassName="app-viewport-sheet bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-y-auto p-5 space-y-4 shadow-2xl"
     >
       <>
         {/* Modal Header */}
@@ -814,7 +813,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </section>
         )}
 
-        {/* Mode Switcher - 2x2 Grid on Mobile for 4 modes */}
+        {/* GPT Live and Gemini recording are independent entry modes. */}
         {!aiClassificationEnabled && (
           <div className="flex items-start gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
             <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
@@ -822,17 +821,29 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-950 p-1.5 sm:grid-cols-4">
+        <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-800 bg-slate-950 p-1.5 sm:grid-cols-5">
             <button
-              onClick={() => void selectProtectedMode('voice')}
+              onClick={() => void selectProtectedMode('live')}
               className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
-                activeMode === 'voice'
+                activeMode === 'live'
                   ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Mic className="w-4 h-4 shrink-0 text-purple-300" />
               <span>GPT 라이브</span>
+            </button>
+
+            <button
+              onClick={() => void selectProtectedMode('voice')}
+              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors ${
+                activeMode === 'voice'
+                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Volume2 className="h-4 w-4 shrink-0 text-purple-300" />
+              <span>Gemini 음성</span>
             </button>
 
             <button
@@ -898,11 +909,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           />
         )}
 
-        {/* MODE 2: Voice Input */}
-        {activeMode === 'voice' && (
+        {/* GPT Live and Gemini recording share the same review form only. */}
+        {(activeMode === 'live' || activeMode === 'voice') && (
           <div className="space-y-4">
             {!voiceResult ? (
-              voiceInputKind === 'live' ? (
+              activeMode === 'live' ? (
                 <LiveVoicePanel
                   categories={categories}
                   merchantRules={merchantRules}
@@ -914,26 +925,15 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   recurringTemplates={recurringTemplates}
                   monthStartDay={monthStartDay}
                   onDraftReady={handleVoiceAnalysisComplete}
-                  onUseQuickVoice={() => setVoiceInputKind('quick')}
                 />
               ) : (
-                <div className="space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => setVoiceInputKind('live')}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-cyan-500/20 bg-cyan-500/5 py-2.5 text-xs font-semibold text-cyan-200"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                    GPT 라이브 음성으로 돌아가기
-                  </button>
-                  <VoiceInputPanel
-                    categories={categories}
-                    merchantRules={merchantRules}
-                    bankAccounts={bankAccounts}
-                    paymentCards={paymentCards}
-                    onAnalysisComplete={handleVoiceAnalysisComplete}
-                  />
-                </div>
+                <VoiceInputPanel
+                  categories={categories}
+                  merchantRules={merchantRules}
+                  bankAccounts={bankAccounts}
+                  paymentCards={paymentCards}
+                  onAnalysisComplete={handleVoiceAnalysisComplete}
+                />
               )
             ) : (
               /* Voice Confirmation Drawer / Panel */

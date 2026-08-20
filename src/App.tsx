@@ -240,7 +240,7 @@ export default function App() {
     if (userProfile.aiClassificationEnabled) return true;
     const accepted = await confirm({
       title: 'AI 지출 등록 기능을 사용할까요?',
-      description: 'GPT Live, 빠른 음성, AI 문장 입력, 영수증 분석을 이 계정에서도 사용할 수 있습니다. 입력한 내용과 이 계정의 분류용 금융 정보만 AI API로 전송됩니다.',
+      description: 'GPT Live, Gemini 음성, AI 문장 입력, 영수증 분석을 이 계정에서도 사용할 수 있습니다. 입력한 내용과 이 계정의 분류용 금융 정보만 AI API로 전송됩니다.',
       confirmLabel: '동의하고 사용',
     });
     if (!accepted) return false;
@@ -1029,7 +1029,7 @@ export default function App() {
 
   if (bootState === 'checking' || bootState === 'loading') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+      <div className="min-h-[100dvh] bg-slate-950 text-slate-100 flex items-center justify-center p-6">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 mx-auto rounded-full border-4 border-slate-800 border-t-emerald-400 animate-spin" />
           <p className="font-bold">운영 데이터를 안전하게 불러오는 중입니다.</p>
@@ -1044,7 +1044,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-rose-500 selection:text-white">
+    <div className="min-h-[100dvh] bg-slate-950 text-slate-100 font-sans antialiased selection:bg-rose-500 selection:text-white">
       {/* Top Navbar */}
       <Navbar
         userProfile={userProfile}
@@ -1059,7 +1059,7 @@ export default function App() {
       {/* Main View Area */}
       <main
         className="mx-auto w-full max-w-6xl px-[clamp(0.75rem,3vw,2rem)] py-5"
-        style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom, 0px))' }}
+        style={{ paddingBottom: 'calc(6.5rem + env(safe-area-inset-bottom, 0px))' }}
       >
         {/* One period control for every screen that shows period-scoped amounts. */}
         <div className="mb-4">

@@ -7,6 +7,7 @@ import {
   MicOff,
   PhoneOff,
   Radio,
+  Settings,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
@@ -30,6 +31,7 @@ import {
   LiveTransactionToolArguments,
   searchTransactionsForAssistant,
 } from '../utils/liveVoice';
+import { ensureMicrophoneAccess, isNativeMicrophonePlatform, openMicrophoneSettings } from '../utils/microphonePermission';
 
 type LiveStatus = 'idle' | 'connecting' | 'listening' | 'speaking' | 'error';
 type TranscriptMessage = { id: string; role: 'user' | 'assistant'; text: string };
@@ -46,7 +48,6 @@ interface LiveVoicePanelProps {
   /** Accounting cycle start day, so the assistant reports the same period as the UI. */
   monthStartDay?: number;
   onDraftReady: (result: VoiceAnalysisResult, durationMs: number, mimeType: string) => void;
-  onUseQuickVoice: () => void;
 }
 
 const REALTIME_MODEL = 'gpt-realtime-2.1-mini';
@@ -77,11 +78,11 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
   recurringTemplates,
   monthStartDay,
   onDraftReady,
-  onUseQuickVoice,
 }) => {
   const [status, setStatus] = useState<LiveStatus>('idle');
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [permissionSettingsRequired, setPermissionSettingsRequired] = useState(false);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
 
   const peerRef = useRef<RTCPeerConnection | null>(null);
@@ -390,10 +391,16 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
   const startSession = async () => {
     setStatus('connecting');
     setErrorMessage(null);
+    setPermissionSettingsRequired(false);
     setMessages([]);
     handledToolCallsRef.current.clear();
 
     try {
+      const permission = await ensureMicrophoneAccess();
+      if (permission === 'settings-required') {
+        setPermissionSettingsRequired(true);
+        throw new DOMException('앱 설정에서 마이크 권한을 허용한 뒤 다시 눌러주세요.', 'NotAllowedError');
+      }
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
         throw new Error('이 브라우저는 GPT 라이브 음성을 지원하지 않습니다.');
       }
@@ -460,7 +467,11 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
     } catch (error: any) {
       cleanupResources();
       if (error?.name === 'NotAllowedError') {
-        setErrorMessage('마이크 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.');
+        const isNative = isNativeMicrophonePlatform();
+        setPermissionSettingsRequired(isNative);
+        setErrorMessage(error?.message || (isNative
+          ? '마이크 권한이 거부되었습니다. 앱 설정에서 허용해주세요.'
+          : '마이크 권한이 거부되었습니다. 브라우저 사이트 설정에서 허용해주세요.'));
       } else {
         setErrorMessage(error?.message || 'GPT 라이브 음성 연결에 실패했습니다.');
       }
@@ -501,9 +512,21 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
       </div>
 
       {errorMessage && (
-        <div className="flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{errorMessage}</span>
+        <div className="space-y-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          {permissionSettingsRequired && (
+            <button
+              type="button"
+              onClick={() => void openMicrophoneSettings()}
+              className="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-rose-400/30 bg-slate-950/70 font-bold text-rose-100"
+            >
+              <Settings className="h-4 w-4" />
+              앱 설정에서 마이크 허용
+            </button>
+          )}
         </div>
       )}
 
@@ -604,13 +627,6 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onUseQuickVoice}
-        className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2.5 text-xs font-semibold text-slate-400 hover:text-white"
-      >
-        연결이 어렵다면 Gemini 8초 빠른 음성 입력 사용
-      </button>
     </div>
   );
 };

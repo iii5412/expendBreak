@@ -32,6 +32,7 @@ npm run account:hash -- wife "와이프" 654321
 - `APP_ACCOUNTS_JSON`: 추가 계정의 `uid`, 표시 이름, PIN hash 배열
 - `APP_SESSION_SECRET`: 세션 서명용 긴 임의 문자열. 다중 계정 운영에서는 명시적으로 설정 권장
 - `GEMINI_API_KEY`: AI 기능을 사용할 경우
+- `GEMINI_CLASSIFY_MODEL`: AI 문장 분류 모델. 기본값 `gemini-3.5-flash-lite`
 - `OPENAI_API_KEY`: GPT 라이브 음성을 사용할 경우. 브라우저 환경변수로 노출하지 않고 서버 secret으로만 등록
 - `OPENAI_REALTIME_MODEL`: 기본값 `gpt-realtime-2.1-mini`
 - `OPENAI_REALTIME_VOICE`: 기본값 `marin`
@@ -79,7 +80,7 @@ Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 �
 - GPT 라이브에서 마이크 권한, 응답 음성, 사용자 발화 자막, 대화 중 끼어들기가 동작한다.
 - GPT가 만든 거래는 즉시 저장되지 않고 수정 가능한 확인 화면으로 이동한다.
 - GPT에게 월 지출·잔액을 질문했을 때 계좌번호는 전송하거나 음성으로 읽지 않는다.
-- `OPENAI_API_KEY`가 없거나 연결이 실패하면 Gemini 8초 빠른 음성 입력으로 전환할 수 있다.
+- GPT 라이브와 Gemini 음성이 독립 탭으로 표시되고 각 탭에서 마이크 권한 요청·복구가 동작한다.
 - 영수증 촬영 후 OCR 결과를 수정할 수 있고, 저장한 원본은 거래 내역에서만 조회된다.
 - 다른 UID 또는 로그아웃 상태에서 영수증 Storage 경로의 읽기·쓰기·목록 조회가 거부된다.
 - 전체 초기화는 운영 백업을 확인하기 전 사용하지 않는다.

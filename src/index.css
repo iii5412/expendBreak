@@ -4,6 +4,34 @@
   color-scheme: dark;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+}
+
+/* Android WebView sizes `dvh` against the visible device area, including
+   rotations and the software keyboard. Safe-area padding keeps sheet actions
+   above gesture navigation instead of cropping the final row. */
+.app-viewport-sheet {
+  max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  overscroll-behavior: contain;
+}
+
+@media (min-width: 640px) {
+  .app-viewport-sheet {
+    max-height: 90dvh;
+    padding-bottom: 1.25rem;
+  }
+}
+
 /* The existing interface uses Tailwind's slate scale as its surface/text
    palette. Reversing that scale under a root attribute gives every screen,
    modal and form a coherent light mode without duplicating component markup. */
