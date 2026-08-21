@@ -34,6 +34,7 @@ import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { ManualCardSettlementCandidate } from '../utils/cardSettlementPlans';
 import { HiddenRecurringItem } from '../utils/hiddenRecurring';
 import { CategoryIcon } from './ui/CategoryIcon';
+import { ScreenHeader } from './ui/ScreenHeader';
 
 /** Why a registered fixed expense produces no row in the selected cycle. */
 const HIDDEN_REASON_LABELS: Record<HiddenRecurringItem['reason'], string> = {
@@ -288,37 +289,28 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   return (
     <div className="space-y-6 pb-20">
       {/* Month & Title Bar */}
-      <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <Receipt className="w-6 h-6 text-emerald-400" />
-            정기 수입 · 지출 관리 센터
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            급여 등 고정 수입과 월별 고정지출을 처리하고, 전월 카드 사용액을 이번 달 결제계좌 출금액으로 함께 확인합니다.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-          <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs">
-            <span className="font-bold text-white">{period.yearMonth.replace('-', '년 ')}월</span>
-            {periodRange && <span className="ml-1.5 text-slate-400">{periodRange}</span>}
-          </div>
+      <ScreenHeader
+        eyebrow="Recurring control"
+        title="정기 수입·지출"
+        description="입금과 계좌 고정 이체를 처리하고, 카드로 결제한 고정비는 실제 카드대금과 분리해서 확인합니다."
+        icon={<Receipt className="h-4 w-4" />}
+        meta={<span>{period.yearMonth.replace('-', '년 ')}월{periodRange ? ` · ${periodRange}` : ''}</span>}
+        actions={(
           <button
             type="button"
             onClick={() => void handleReload()}
             disabled={isReloading}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 text-xs font-bold text-indigo-200 transition-colors hover:bg-indigo-500/20 disabled:cursor-wait disabled:opacity-60"
+            className="inline-flex min-h-11 items-center gap-1.5 border border-slate-700 bg-slate-900 px-3 text-xs font-bold text-slate-200 transition-colors hover:border-blue-400/50 hover:bg-blue-400/10 disabled:cursor-wait disabled:opacity-60"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isReloading ? 'animate-spin' : ''}`} />
             {isReloading ? '불러오는 중...' : '고정 지출 새로 불러오기'}
           </button>
-        </div>
-      </div>
+        )}
+      />
 
       {/* Metrics Cards */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[1.1fr_1.1fr_1fr_0.8fr]">
+        <div className="eb-panel rounded-xl p-4">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 text-emerald-400 text-xs font-semibold">
               <TrendingUp className="w-4 h-4" />
@@ -326,7 +318,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             </span>
             <span className="text-xs text-emerald-400/80 font-medium">입금 완료: {formatKRW(totalPostedIncome)}</span>
           </div>
-          <p className="text-xl font-extrabold text-emerald-400 mt-1">{formatKRW(totalScheduledIncome)}</p>
+          <p className="eb-tabular mt-1 text-2xl font-extrabold text-emerald-400">{formatKRW(totalScheduledIncome)}</p>
           <p className="text-xs text-slate-400 mt-1">
             남은 입금 예정: <strong className="text-emerald-300">{formatKRW(pendingIncomeAmount)}</strong>
           </p>
@@ -340,7 +332,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
             </span>
             <span className="text-xs text-slate-400 font-medium">납부 완료: {formatKRW(totalPostedExpense)}</span>
           </div>
-          <p className="text-xl font-extrabold text-white mt-1">{formatKRW(totalScheduledExpense)}</p>
+          <p className="eb-tabular mt-1 text-2xl font-extrabold text-white">{formatKRW(totalScheduledExpense)}</p>
           <p className="text-xs text-slate-400 mt-1">
             남은 납부 예정: <strong className="text-amber-300">{formatKRW(pendingExpenseAmount)}</strong>
           </p>
@@ -349,24 +341,24 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
           </p>
         </div>
 
-        <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/5 p-4">
-          <div className="flex items-center gap-2 text-xs font-semibold text-indigo-300">
+        <div className="rounded-xl border border-blue-400/25 bg-blue-400/5 p-4">
+          <div className="flex items-center gap-2 text-xs font-semibold text-blue-300">
             <CreditCard className="h-4 w-4" />
             카드 결제 고정항목
           </div>
-          <p className="mt-1 text-xl font-extrabold text-indigo-300">{formatKRW(summary.cardFixedExpenses)}</p>
+          <p className="eb-tabular mt-1 text-2xl font-extrabold text-blue-300">{formatKRW(summary.cardFixedExpenses)}</p>
           <p className="mt-1 text-xs text-slate-400">
             미처리 {pendingCardExpenseCount}건 · 카드대금에 포함되는 참고 금액
           </p>
-          <p className="mt-1 text-xs font-semibold text-indigo-200/80">계좌 고정지출 합계에서는 제외</p>
+          <p className="mt-1 text-xs font-semibold text-blue-200/80">계좌 고정지출 합계에서는 제외</p>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
-          <div className="flex items-center gap-2 text-indigo-400 text-xs font-semibold">
+        <div className="eb-panel-quiet rounded-xl p-4">
+          <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
             <Clock className="w-4 h-4" />
             미처리 항목 건수
           </div>
-          <p className="text-xl font-extrabold text-indigo-300 mt-1">
+          <p className="eb-tabular mt-1 text-2xl font-extrabold text-amber-300">
             {incomeOccurrences.filter(occurrence => occurrence.status !== 'posted').length + pendingAccountExpenseCount + pendingCardExpenseCount}건
           </p>
           <p className="text-xs text-slate-400 mt-1">
@@ -375,7 +367,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/5 p-3 text-xs leading-relaxed text-indigo-100">
+      <div className="border-l-2 border-blue-400 bg-blue-400/5 px-4 py-3 text-xs leading-relaxed text-blue-100">
         <strong>카드 고정비는 지출 합계에 다시 더하지 않습니다.</strong>
         <span className="ml-1 text-slate-300">
           카드 결제 고정항목 {formatKRW(summary.cardFixedExpenses)}은 카드 사용 내역이며, 실제 통장 출금은 카드 결제일이 속한 주기의 카드대금으로 한 번만 반영됩니다. 이번 주기 카드대금은 {formatKRW(summary.cardSettlementOutflow)}입니다.

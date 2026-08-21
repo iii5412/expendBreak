@@ -29,6 +29,7 @@ import { CashflowTimelineCard } from './CashflowTimelineCard';
 import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
 import { getInstallmentCharge } from '../utils/installments';
+import { ScreenHeader } from './ui/ScreenHeader';
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
@@ -54,8 +55,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   const incomeVsExpenseData = [
     { name: '수입', amount: summary.planningIncome, fill: '#10B981' },
     { name: '계좌 고정 이체', amount: summary.accountFixedOutflow, fill: '#64748B' },
-    { name: '카드대금', amount: summary.cardSettlementOutflow, fill: '#6366F1' },
-    { name: '생활비 사용', amount: summary.confirmedVariableExpenses, fill: '#F43F5E' },
+    { name: '카드대금', amount: summary.cardSettlementOutflow, fill: '#78A9FF' },
+    { name: '생활비 사용', amount: summary.confirmedVariableExpenses, fill: '#FF4D3D' },
   ];
 
   // 2. Allowance category breakdown (fixed recurring expenses stay separate)
@@ -157,25 +158,34 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     feedbackCacheKey,
   ]);
 
+  const ruleBasedConclusion = summary.projectedDepletionDate
+    ? `현재 속도면 ${summary.projectedDepletionDate}에 생활비가 끝날 가능성이 있습니다.`
+    : summary.budgetUsagePercent > summary.periodProgressPercent + 10
+      ? `기간 경과보다 생활비 사용이 ${summary.budgetUsagePercent - summary.periodProgressPercent}%p 빠릅니다.`
+      : '현재 지출 속도면 이번 주기 생활비를 유지할 수 있습니다.';
+
   return (
     <div className="space-y-6 pb-24">
+      <ScreenHeader
+        eyebrow="Spending intelligence"
+        title="지출 분석"
+        description="차트를 해석하는 대신, 이번 주기의 결론과 원인 그리고 지금 바꿀 행동을 먼저 보여드립니다."
+        icon={<TrendingUp className="h-4 w-4" />}
+        meta={<span>{summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 생활비 {summary.budgetUsagePercent}% 사용</span>}
+      />
+
       {/* Top AI Report Header */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center justify-center">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">지출 브레이크 AI 맞춤 리포트</h2>
-              <p className="text-xs text-slate-400">수치 원본에 기반한 절약 및 위험 분석</p>
-            </div>
+      <section className="eb-instrument rounded-xl p-5" aria-labelledby="weekly-conclusion-title">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <p className="eb-kicker text-amber-300">Decision first</p>
+            <h3 id="weekly-conclusion-title" className="eb-display mt-1 text-lg font-extrabold text-white">이번 주 결론</h3>
           </div>
 
           <button
             onClick={() => fetchAiFeedback(true)}
             disabled={isLoadingFeedback || !aiInsightsEnabled}
-            className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
+            className="flex min-h-11 items-center gap-1 border border-slate-700 bg-slate-900 px-3 text-xs text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFeedback ? 'animate-spin' : ''}`} />
             <span>재분석</span>
@@ -183,13 +193,14 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         </div>
 
         {!aiInsightsEnabled ? (
-          <div className="text-center py-6 text-xs text-slate-400 bg-slate-950/60 rounded-xl border border-slate-800">
-            AI 월간 리포트가 꺼져 있습니다. 설정에서 다시 활성화할 수 있습니다.
+          <div className="border-l-2 border-emerald-500 bg-slate-950/55 px-4 py-3">
+            <p className="text-sm font-bold leading-relaxed text-slate-100">{ruleBasedConclusion}</p>
+            <p className="mt-1 text-xs text-slate-400">AI가 꺼져 있어도 확정된 수치로 계산한 결론은 계속 제공됩니다.</p>
           </div>
         ) : feedback ? (
           <div className="space-y-3.5 text-xs">
-            <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 font-bold text-slate-100 text-sm">
-              "{feedback.oneLiner}"
+            <div className="border-l-2 border-amber-400 bg-slate-950/55 px-4 py-3 text-sm font-bold leading-relaxed text-slate-100">
+              {feedback.oneLiner || ruleBasedConclusion}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -230,18 +241,21 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
           </div>
         ) : (
-          <div className="text-center py-6 text-xs text-slate-400">
-            {isLoadingFeedback ? 'AI 리포트를 생성하는 중입니다...' : 'AI 분석을 불러오는 중...'}
+          <div className="border-l-2 border-slate-600 bg-slate-950/55 px-4 py-3">
+            <p className="text-sm font-bold leading-relaxed text-slate-100">{ruleBasedConclusion}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              {isLoadingFeedback ? 'AI가 근거와 추천 행동을 정리하고 있습니다.' : '확정된 수치로 계산한 기본 결론입니다.'}
+            </p>
           </div>
         )}
-      </div>
+      </section>
 
       <CashflowTimelineCard timeline={cashflowTimeline} />
 
       <FutureCommitmentsCard summary={futureCommitments} />
 
       {/* 1. Income vs Expense Overview Chart */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <section className="eb-panel rounded-xl p-4">
         <h3 className="text-sm font-bold text-slate-200 mb-3">수입·고정 출금·생활비 구조</h3>
         <p className="-mt-2 mb-3 text-xs text-slate-400">
           카드대금은 계좌 고정 이체와 분리된 현금 출금이며 생활비에 다시 합산하지 않습니다.
@@ -259,10 +273,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </BarChart>
           </ResponsiveContainer>
         </div>
-      </div>
+      </section>
 
       {/* 2. Donut Category Breakdown Chart */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <section className="eb-panel rounded-xl p-4">
         <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 생활비 사용 비중</h3>
         {categoryPieData.length === 0 ? (
           <div className="text-center py-10 text-xs text-slate-400">지출 기록이 없습니다.</div>
@@ -302,25 +316,25 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
           </div>
         )}
-      </div>
+      </section>
 
       {/* 3. Cumulative Daily Allowance Spend vs Allowance Limit */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+      <section className="eb-panel rounded-xl p-4">
         <h3 className="text-sm font-bold text-slate-200 mb-3">일별 누적 생활비 사용 vs 사용 가능액</h3>
         <p className="-mt-2 mb-3 text-xs text-slate-400">할부는 원금이 아닌 이번 달 회차 금액을 월초에 반영합니다.</p>
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={cumulativeData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#30363C" />
               <XAxis dataKey="day" stroke="#94A3B8" fontSize={10} />
               <YAxis stroke="#94A3B8" fontSize={10} tickFormatter={v => `${v / 10000}만`} />
               <Tooltip formatter={(val: any) => formatKRW(val)} />
-              <Line type="monotone" dataKey="spend" name="누적 생활비 사용" stroke="#F43F5E" strokeWidth={3} dot={false} />
+              <Line type="monotone" dataKey="spend" name="누적 생활비 사용" stroke="#FF4D3D" strokeWidth={3} dot={false} />
               <Line type="monotone" dataKey="limit" name="사용 가능 생활비" stroke="#10B981" strokeWidth={2} strokeDasharray="5 5" dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </div>
+      </section>
     </div>
   );
 };

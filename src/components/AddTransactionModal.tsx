@@ -821,75 +821,95 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-800 bg-slate-950 p-1.5 sm:grid-cols-5">
+        <div className="grid gap-2 border-y border-slate-800 py-3 sm:grid-cols-[1fr_1fr_0.58fr]" aria-label="거래 입력 방식">
+          <div className="space-y-1.5">
+            <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">말하기</p>
+            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1">
             <button
+              type="button"
               onClick={() => void selectProtectedMode('live')}
-              className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
+              className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
                 activeMode === 'live'
-                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  ? 'bg-rose-500 text-white'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Mic className="w-4 h-4 shrink-0 text-purple-300" />
-              <span>GPT 라이브</span>
+              <Mic className="h-4 w-4 shrink-0" />
+              <span>GPT</span>
             </button>
 
             <button
+              type="button"
               onClick={() => void selectProtectedMode('voice')}
-              className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition-colors ${
+              className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
                 activeMode === 'voice'
-                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  ? 'bg-rose-500 text-white'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Volume2 className="h-4 w-4 shrink-0 text-purple-300" />
-              <span>Gemini 음성</span>
+              <Volume2 className="h-4 w-4 shrink-0" />
+              <span>Gemini</span>
             </button>
+            </div>
+          </div>
 
+          <div className="space-y-1.5">
+            <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">쓰기</p>
+            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1">
             <button
+              type="button"
               onClick={() => {
                 void selectProtectedMode('ai');
                 setVoiceResult(null);
               }}
-              className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
+              className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
                 activeMode === 'ai'
-                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
+                  ? 'bg-rose-500 text-white'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Sparkles className="w-4 h-4 shrink-0 text-amber-300" />
+              <Sparkles className="h-4 w-4 shrink-0" />
               <span>AI 문장</span>
             </button>
 
-            <button
-              onClick={() => {
-                void selectProtectedMode('receipt');
-                setVoiceResult(null);
-              }}
-              className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
-                activeMode === 'receipt'
-                  ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Camera className="w-4 h-4 shrink-0" />
-              <span>영수증</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  selectMode('manual');
+                  setVoiceResult(null);
+                }}
+                className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
+                  activeMode === 'manual'
+                    ? 'bg-rose-500 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <PenTool className="h-4 w-4 shrink-0" />
+                <span>직접 입력</span>
+              </button>
+            </div>
+          </div>
 
-          <button
-            onClick={() => {
-              selectMode('manual');
-              setVoiceResult(null);
-            }}
-            className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg text-xs font-semibold transition-colors ${
-              activeMode === 'manual'
-                ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <PenTool className="w-4 h-4 shrink-0" />
-            <span>직접 입력</span>
-          </button>
+          <div className="space-y-1.5">
+            <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">찍기</p>
+            <div className="bg-slate-950 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  void selectProtectedMode('receipt');
+                  setVoiceResult(null);
+                }}
+                className={`flex min-h-11 w-full items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
+                  activeMode === 'receipt'
+                    ? 'bg-rose-500 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Camera className="h-4 w-4 shrink-0" />
+                <span>영수증</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* MODE 1: Receipt Capture */}

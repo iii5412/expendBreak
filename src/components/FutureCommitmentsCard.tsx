@@ -15,19 +15,19 @@ interface FutureCommitmentsCardProps {
 
 const SEGMENTS = [
   { key: 'accountFixed', label: '계좌 고정지출', className: 'bg-slate-500' },
-  { key: 'installments', label: '할부', className: 'bg-indigo-400' },
-  { key: 'cardSettlement', label: '카드대금', className: 'bg-indigo-600' },
+  { key: 'installments', label: '할부', className: 'bg-blue-300' },
+  { key: 'cardSettlement', label: '카드대금', className: 'bg-blue-500' },
 ] as const;
 
 export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ summary }) => {
   if (summary.peak <= 0) return null;
 
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-md">
+    <section className="eb-panel rounded-xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100">
-            <CalendarClock className="h-4 w-4 text-indigo-300" />
+            <CalendarClock className="h-4 w-4 text-blue-300" />
             앞으로 6주기에 이미 정해진 지출
           </h3>
           <p className="mt-0.5 text-xs text-slate-400">
@@ -50,11 +50,11 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
           <li key={month.yearMonth} className="space-y-1">
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-slate-300">{month.yearMonth}</span>
-              <span className="font-bold text-slate-100">{formatKRW(month.total)}</span>
+              <span className="eb-tabular font-bold text-slate-100">{formatKRW(month.total)}</span>
             </div>
 
             <div
-              className="flex h-3 w-full overflow-hidden rounded-full border border-slate-800 bg-slate-950"
+              className="flex h-3 w-full overflow-hidden border border-slate-800 bg-slate-950"
               role="img"
               aria-label={`${month.yearMonth} 확정 지출 ${formatKRW(month.total)}: 계좌 고정지출 ${formatKRW(month.accountFixed)}, 할부 ${formatKRW(month.installments)}, 카드대금 ${formatKRW(month.cardSettlement)}`}
             >
@@ -87,6 +87,6 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
           </li>
         ))}
       </ol>
-    </div>
+    </section>
   );
 };

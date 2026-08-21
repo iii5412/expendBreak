@@ -30,6 +30,7 @@ import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { normalizeInstallmentPlan } from '../utils/installments';
+import { ScreenHeader } from './ui/ScreenHeader';
 
 const HISTORY_PAGE_SIZES = [10, 20, 50];
 
@@ -130,6 +131,16 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       else expense += Math.round(transaction.amount);
     }
     return { income, expense, net: income - expense };
+  }, [filteredTransactions]);
+
+  const dailyExpenseTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const transaction of filteredTransactions) {
+      if (transaction.type !== 'income') {
+        totals.set(transaction.localDate, (totals.get(transaction.localDate) || 0) + Math.round(transaction.amount));
+      }
+    }
+    return totals;
   }, [filteredTransactions]);
 
   const isPageFullySelected = paginatedTransactions.length > 0
@@ -254,7 +265,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   return (
     <div className="space-y-4 pb-24">
-      <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-slate-900 p-1.5 text-xs sm:grid-cols-4">
+      <ScreenHeader
+        eyebrow="Transaction ledger"
+        title="거래 내역"
+        description="무엇을, 언제, 어떤 결제수단으로 기록했는지 확인하고 필요한 항목만 빠르게 좁혀보세요."
+        icon={<ReceiptText className="h-4 w-4" />}
+        meta={<span>{periodRange || period.yearMonth} · 현재 조건 {filteredTransactions.length}건</span>}
+      />
+
+      <div className="grid grid-cols-2 gap-1 border-b border-slate-800 pb-3 text-xs sm:grid-cols-4">
         {([
           ['regular_expense', '일반지출'],
           ['fixed_expense', '고정지출'],
@@ -269,14 +288,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               setSelectedCategory('all');
             }}
             aria-pressed={historyKind === value}
-            className={`min-h-11 rounded-lg px-3 py-2 font-bold transition-colors ${
+            className={`min-h-11 border px-3 py-2 font-bold transition-colors ${
               historyKind === value
                 ? value === 'fixed_expense'
                   ? 'border border-amber-500/40 bg-amber-500/15 text-amber-300'
                   : value === 'income'
                     ? 'border border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
                     : 'border border-rose-500/40 bg-rose-500/15 text-rose-300'
-                : 'border border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-200'
             }`}
           >
             {label}
@@ -285,7 +304,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       </div>
 
       {/* Search & Filters */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-3">
+      <div className="eb-panel space-y-3 rounded-xl p-3.5">
         {/* Search Input */}
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -375,18 +394,18 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       </div>
 
       {/* Totals for the current filter, so the list reconciles with the home card. */}
-      <dl className="grid grid-cols-3 gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs">
-        <div>
+      <dl className="eb-panel grid grid-cols-3 divide-x divide-slate-800 rounded-xl px-1 py-3 text-xs">
+        <div className="px-3">
           <dt className="text-slate-400">수입</dt>
-          <dd className="mt-0.5 font-bold text-emerald-400">{formatKRW(filteredTotals.income)}</dd>
+          <dd className="eb-tabular mt-1 text-sm font-extrabold text-emerald-400">{formatKRW(filteredTotals.income)}</dd>
         </div>
-        <div>
+        <div className="px-3">
           <dt className="text-slate-400">지출</dt>
-          <dd className="mt-0.5 font-bold text-rose-300">{formatKRW(filteredTotals.expense)}</dd>
+          <dd className="eb-tabular mt-1 text-sm font-extrabold text-rose-300">{formatKRW(filteredTotals.expense)}</dd>
         </div>
-        <div>
+        <div className="px-3">
           <dt className="text-slate-400">순액</dt>
-          <dd className={`mt-0.5 font-bold ${filteredTotals.net >= 0 ? 'text-emerald-400' : 'text-rose-300'}`}>
+          <dd className={`eb-tabular mt-1 text-sm font-extrabold ${filteredTotals.net >= 0 ? 'text-emerald-400' : 'text-rose-300'}`}>
             {filteredTotals.net >= 0 ? '+' : '-'}{formatKRW(Math.abs(filteredTotals.net))}
           </dd>
         </div>
@@ -461,18 +480,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             return (
               <React.Fragment key={t.id}>
                 {startsNewDate && (
-                  <div className="flex items-center gap-2 px-1 pt-2 text-xs font-bold text-slate-400">
-                    <span>{t.localDate === todayText ? '오늘' : t.localDate}</span>
+                  <div className="flex items-center gap-2 px-1 pt-3 text-xs font-bold text-slate-400">
+                    <span className="text-slate-200">{t.localDate === todayText ? '오늘' : t.localDate}</span>
                     {t.localDate === todayText && <span className="font-normal text-slate-400">{t.localDate}</span>}
                     <span className="h-px flex-1 bg-slate-800" />
+                    <span className="eb-tabular font-semibold text-rose-300">지출 {formatKRW(dailyExpenseTotals.get(t.localDate) || 0)}</span>
                   </div>
                 )}
-                <div className={`flex items-center justify-between gap-3 rounded-xl border p-3.5 text-xs transition-colors ${
+                <div className={`flex items-center justify-between gap-3 border-b border-l-2 p-3.5 text-xs transition-colors ${
                   selectedIds.has(t.id)
-                    ? 'border-rose-500/50 bg-rose-500/5'
-                    : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                    ? 'border-rose-500 bg-rose-500/5'
+                    : 'border-b-slate-800 border-l-transparent bg-slate-900/55 hover:bg-slate-900'
                 }`}>
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <input
                     type="checkbox"
                     checked={selectedIds.has(t.id)}
@@ -482,15 +502,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   />
                   {/* Category color indicator */}
                   <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 font-bold"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center font-bold text-white"
                     style={{ backgroundColor: cat?.color || '#64748B' }}
                   >
                     {t.type === 'income' ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
                   </div>
 
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-100">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate font-bold text-slate-100">
                         {highlight(t.merchant || '사용처 미입력', searchTerm)}
                       </span>
                       <span className="text-xs bg-slate-800 text-slate-300 border border-slate-700 px-1.5 py-0.5 rounded">
@@ -536,9 +556,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   </div>
                 </div>
 
-                <div className="text-right shrink-0">
+                <div className="shrink-0 text-right">
                   <div
-                    className={`font-extrabold text-sm ${
+                    className={`eb-tabular text-sm font-extrabold ${
                       t.type === 'income' ? 'text-emerald-400' : 'text-slate-100'
                     }`}
                   >

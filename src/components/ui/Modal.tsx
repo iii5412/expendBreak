@@ -32,7 +32,7 @@ export const Modal: React.FC<ModalProps> = ({
   onClose,
   labelledById,
   ariaLabel,
-  panelClassName = 'bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-5',
+  panelClassName = 'app-viewport-sheet eb-panel w-full max-w-md overflow-y-auto rounded-2xl p-5',
   backdropClassName = 'fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4',
   dismissOnBackdrop = true,
   children,
@@ -113,6 +113,7 @@ export const Modal: React.FC<ModalProps> = ({
     >
       <div
         ref={panelRef}
+        data-eb-modal-panel
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledById || (ariaLabel ? undefined : fallbackLabelId)}

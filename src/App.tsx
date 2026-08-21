@@ -1,15 +1,8 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { BottomNav, NavTab } from './components/BottomNav';
 import { DashboardView } from './components/DashboardView';
-import { HistoryView } from './components/HistoryView';
-import { AnalyticsView } from './components/AnalyticsView';
-import { ManagementView } from './components/ManagementView';
-import { AccountsView } from './components/AccountsView';
-import { RecurringPaymentView } from './components/RecurringPaymentView';
-import { AddTransactionModal } from './components/AddTransactionModal';
 import { AppLockModal } from './components/AppLockModal';
-import { PaydaySetupSheet } from './components/PaydaySetupSheet';
 import { CashflowModelNotice } from './components/CashflowModelNotice';
 import { CycleClosingCard } from './components/CycleClosingCard';
 
@@ -93,7 +86,22 @@ import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { QuickEntryBar } from './components/QuickEntryBar';
 import { QuickEntrySuggestion, suggestQuickEntryCandidates } from './utils/quickEntrySuggestions';
-import { OnboardingResult, OnboardingSheet } from './components/OnboardingSheet';
+import type { OnboardingResult } from './components/OnboardingSheet';
+
+const HistoryView = lazy(() => import('./components/HistoryView').then(module => ({ default: module.HistoryView })));
+const AnalyticsView = lazy(() => import('./components/AnalyticsView').then(module => ({ default: module.AnalyticsView })));
+const ManagementView = lazy(() => import('./components/ManagementView').then(module => ({ default: module.ManagementView })));
+const AccountsView = lazy(() => import('./components/AccountsView').then(module => ({ default: module.AccountsView })));
+const RecurringPaymentView = lazy(() => import('./components/RecurringPaymentView').then(module => ({ default: module.RecurringPaymentView })));
+const AddTransactionModal = lazy(() => import('./components/AddTransactionModal').then(module => ({ default: module.AddTransactionModal })));
+const PaydaySetupSheet = lazy(() => import('./components/PaydaySetupSheet').then(module => ({ default: module.PaydaySetupSheet })));
+const OnboardingSheet = lazy(() => import('./components/OnboardingSheet').then(module => ({ default: module.OnboardingSheet })));
+
+const ViewLoading = () => (
+  <div className="eb-panel flex min-h-40 items-center justify-center rounded-xl text-sm text-slate-400" role="status">
+    화면을 준비하고 있습니다…
+  </div>
+);
 import { findManualCardSettlementCandidates } from './utils/cardSettlementPlans';
 import { calculateFutureCommitments } from './utils/futureCommitments';
 import { findHiddenRecurringItems } from './utils/hiddenRecurring';
@@ -1044,7 +1052,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-[100dvh] bg-slate-950 text-slate-100 font-sans antialiased selection:bg-rose-500 selection:text-white">
+    <div className="eb-app-shell min-h-[100dvh] bg-slate-950 text-slate-100 antialiased selection:bg-rose-500 selection:text-white">
       {/* Top Navbar */}
       <Navbar
         userProfile={userProfile}
@@ -1058,7 +1066,7 @@ export default function App() {
 
       {/* Main View Area */}
       <main
-        className="mx-auto w-full max-w-6xl px-[clamp(0.75rem,3vw,2rem)] py-5"
+        className="mx-auto w-full max-w-6xl px-[clamp(0.75rem,3vw,2rem)] py-4 sm:py-5"
         style={{ paddingBottom: 'calc(6.5rem + env(safe-area-inset-bottom, 0px))' }}
       >
         {/* One period control for every screen that shows period-scoped amounts. */}
@@ -1070,6 +1078,7 @@ export default function App() {
           />
         </div>
 
+        <Suspense fallback={<ViewLoading />}>
         {activeTab === 'home' && (
           <DashboardView
             summary={summary}
@@ -1277,10 +1286,12 @@ export default function App() {
             onReorderQuickEntry={(id, direction) => reorderQuickEntry(id, direction)}
           />
         )}
+        </Suspense>
       </main>
 
       {/* Central Add Transaction Modal */}
-      <AddTransactionModal
+      <Suspense fallback={null}>
+      {isAddModalOpen && <AddTransactionModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         categories={categories}
@@ -1307,7 +1318,7 @@ export default function App() {
           refreshAppData();
           showToast({ message: '정기 항목을 확정했습니다.', tone: 'success' });
         }}
-      />
+      />}
 
       {/* One-time explanation of why the numbers moved. Only for users who
           actually have a card bill to reconcile. */}
@@ -1320,7 +1331,7 @@ export default function App() {
         }}
       />
 
-      <PaydaySetupSheet
+      {isPaydaySheetOpen && <PaydaySetupSheet
         isOpen={isPaydaySheetOpen}
         onClose={() => setIsPaydaySheetOpen(false)}
         period={period}
@@ -1341,14 +1352,15 @@ export default function App() {
           void navigator.clipboard.writeText(text);
           showToast({ message, tone: 'success' });
         }}
-      />
+      />}
 
-      <OnboardingSheet
+      {isOnboardingOpen && <OnboardingSheet
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
         onSkip={handleSkipOnboarding}
         onComplete={handleCompleteOnboarding}
-      />
+      />}
+      </Suspense>
 
       {/* Fixed Bottom Navigation Bar */}
       <BottomNav

@@ -42,14 +42,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
   // 44px minimum touch target on every control.
   const tabClass = (isActive: boolean) =>
-    `flex min-h-11 min-w-11 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-xs transition-colors ${
-      isActive ? 'font-bold text-rose-400' : 'text-slate-400 hover:text-slate-200'
+    `relative flex min-h-12 min-w-11 flex-1 flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-xs transition-colors ${
+      isActive ? 'font-extrabold text-rose-400' : 'font-medium text-slate-400 hover:text-slate-200'
     }`;
 
   return (
     <>
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-800 bg-slate-900/95 px-2 pt-1 backdrop-blur-md"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-700/80 bg-slate-950/94 px-2 pt-1 backdrop-blur-xl"
         style={{ paddingBottom: 'calc(0.25rem + env(safe-area-inset-bottom, 0px))' }}
         aria-label="주요 화면"
       >
@@ -72,7 +72,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
             className="-mt-5 flex h-14 w-14 shrink-0 items-center justify-center transition-transform active:scale-95"
             aria-label="새 거래 작성"
           >
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-r from-rose-500 to-amber-500 text-white shadow-lg shadow-rose-950/40 ring-4 ring-slate-900">
+            <span className="flex h-12 w-12 items-center justify-center bg-rose-500 text-white shadow-[0_10px_30px_rgba(255,77,61,0.32)] ring-4 ring-slate-950 transition-transform hover:-translate-y-0.5">
               <PlusCircle className="h-6 w-6" />
             </span>
           </button>

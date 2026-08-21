@@ -292,73 +292,54 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* 1. Core Allowance Control Card */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden">
-        {/* Subtle Ambient Background Gradient */}
-        <div className="absolute top-0 right-0 w-64 h-64 bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
-
-        {/* Top Header & Alert Level Badge */}
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full border bg-slate-800/80 text-slate-300 border-slate-700">
-              {summary.yearMonth} 기준
-            </span>
-            <span className="text-xs text-slate-400">남은 날짜 {summary.daysRemaining}일</span>
-            {summary.isProjected && (
-              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-300">
-                급여 입금 예정 기준
-              </span>
-            )}
-            {summary.isBaselineLocked && (
-              <span className="flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs font-semibold text-emerald-300">
-                <Lock className="h-3 w-3" />
-                생활비 확정됨
-              </span>
-            )}
+      {/* 1. Core control-room instrument. One number, one status, one action. */}
+      <section className="eb-instrument eb-enter rounded-xl p-5 sm:p-6" aria-labelledby="safe-money-title">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+            <span className="font-bold uppercase tracking-[0.16em] text-rose-400">Brake status</span>
+            <span>{shortDate(summary.spendPeriodStartDate)}–{shortDate(summary.spendPeriodEndDate)}</span>
+            <span>남은 {summary.spendDaysRemaining}일</span>
           </div>
-
-          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold ${badgeProps.bg}`}>
-            <AlertIcon className="w-3.5 h-3.5" />
+          <div className={`flex min-h-8 items-center gap-1.5 border px-3 text-xs font-extrabold ${badgeProps.bg}`}>
+            <AlertIcon className="h-3.5 w-3.5" />
             <span>{badgeProps.text}</span>
           </div>
         </div>
 
-        {/* Primary Focus: Today's Safe Allowance */}
-        <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-4 mb-4">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span className="flex items-center gap-1.5 font-medium text-slate-300">
-              <Zap className="w-4 h-4 text-amber-400" />
-              오늘 쓸 수 있는 돈
-            </span>
-            <span className="text-xs text-slate-400">(남은 생활비 / 남은 {summary.spendDaysRemaining}일)</span>
-          </div>
-          <div className="flex items-baseline justify-between">
-            <div className="text-3xl font-extrabold text-white tracking-tight">
+        <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="min-w-0">
+            <h2 id="safe-money-title" className="eb-display text-sm font-bold tracking-tight text-slate-300 sm:text-base">
+              오늘 안전하게 쓸 수 있는 돈
+            </h2>
+            <p className="eb-display eb-tabular mt-2 break-keep text-[clamp(2.55rem,11vw,4.25rem)] font-extrabold leading-none tracking-[-0.065em] text-white">
               {formatKRW(summary.dailySafeAllowance)}
-            </div>
-            <button
-              onClick={onOpenAddModal}
-              className="bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1 shadow-md shadow-rose-950/30"
-            >
-              + 지출 기록
-            </button>
+            </p>
+            <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-400">
+              급여에서 계좌 고정 이체와 카드대금을 먼저 확보하고, 남은 생활비를 {summary.spendDaysRemaining}일로 나눈 안전선입니다.
+            </p>
           </div>
-          <p className="text-xs text-slate-400 mt-2 border-t border-slate-800/60 pt-2 flex items-center justify-between">
-            <span>급여에서 계좌 고정 이체와 카드대금을 먼저 확보한 뒤 계산합니다</span>
-            <span className="font-semibold text-rose-300">남은 생활비: {formatKRW(summary.remainingAllowance)}</span>
-          </p>
+
+          <button
+            onClick={onOpenAddModal}
+            className="flex min-h-12 w-full items-center justify-center gap-2 bg-rose-500 px-6 text-sm font-extrabold text-white shadow-[0_14px_34px_rgba(255,77,61,0.24)] transition-[transform,background-color] hover:-translate-y-0.5 hover:bg-rose-600 lg:w-auto"
+          >
+            <Zap className="h-4 w-4" />
+            <span>지출 기록하기</span>
+          </button>
         </div>
 
-        {/* Budget Usage Progress Bar */}
-        <div className="space-y-2 mb-4">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400">
-              생활비 사용 ({shortDate(summary.spendPeriodStartDate)}~{shortDate(summary.spendPeriodEndDate)})
-            </span>
-            <div className="text-slate-200 font-semibold">
-              <span className="text-white font-bold">{formatKRW(summary.confirmedVariableExpenses)}</span>
-              <span className="text-slate-400"> / 사용 가능 {formatKRW(summary.spendableLimit)}</span>
-              <span className="ml-2 font-bold text-rose-400">({summary.budgetUsagePercent}%)</span>
+        <div className="mt-7 border-t border-slate-800/90 pt-4">
+          <div className="flex flex-wrap items-end justify-between gap-2 text-xs">
+            <div>
+              <span className="text-slate-400">이번 주기 생활비 사용</span>
+              <p className="eb-tabular mt-1 text-sm font-bold text-slate-100">
+                {formatKRW(summary.confirmedVariableExpenses)}
+                <span className="font-medium text-slate-400"> / {formatKRW(summary.spendableLimit)}</span>
+              </p>
+            </div>
+            <div className="text-right">
+              <strong className="eb-tabular text-lg text-white">{summary.budgetUsagePercent}%</strong>
+              <p className="text-slate-400">기간 {summary.periodProgressPercent}% 경과</p>
             </div>
           </div>
 
@@ -368,66 +349,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-label={`이번 주기 생활비 사용률 ${summary.budgetUsagePercent}%`}
-            className="w-full h-3 bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-800"
+            className="relative mt-3 h-2 overflow-hidden bg-slate-950"
           >
             <div
-              className={`h-full rounded-full transition-all duration-500 ${badgeProps.barBg}`}
+              className={`h-full transition-[width] duration-500 motion-reduce:transition-none ${badgeProps.barBg}`}
               style={{ width: `${Math.min(100, summary.budgetUsagePercent)}%` }}
             />
           </div>
 
-          <p className="text-xs text-slate-400 flex items-center justify-between">
-            <span>남은 생활비: {formatKRW(summary.remainingAllowance)}</span>
+          <div className="mt-3 flex flex-col justify-between gap-1 text-xs text-slate-400 sm:flex-row sm:items-center">
+            <span className="eb-tabular">남은 생활비 <strong className="text-slate-200">{formatKRW(summary.remainingAllowance)}</strong></span>
             <span>{badgeProps.desc}</span>
-          </p>
+          </div>
 
-          {/* Pace: the diagnosis, not just the plan. */}
           {summary.spendDaysPassed >= 3 && (
-            <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2.5 text-xs">
-              <div className="flex items-center justify-between text-slate-400">
-                <span>기간 {summary.periodProgressPercent}% 지남</span>
-                <span
-                  className={`font-semibold ${
-                    summary.budgetUsagePercent > summary.periodProgressPercent + 10
-                      ? 'text-rose-300'
-                      : summary.budgetUsagePercent < summary.periodProgressPercent - 10
-                        ? 'text-emerald-300'
-                        : 'text-slate-300'
-                  }`}
-                >
-                  생활비 {summary.budgetUsagePercent}% 사용 ·{' '}
-                  {summary.budgetUsagePercent > summary.periodProgressPercent + 10
-                    ? '빠름'
-                    : summary.budgetUsagePercent < summary.periodProgressPercent - 10
-                      ? '여유'
-                      : '적정'}
-                </span>
-              </div>
-
+            <div className="mt-3 border-l-2 border-slate-700 bg-slate-950/45 px-3 py-2.5 text-xs leading-relaxed text-slate-300">
               {summary.projectedDepletionDate ? (
-                <p className="mt-1.5 border-t border-slate-800/70 pt-1.5 leading-relaxed text-slate-300">
-                  <span className="font-semibold text-rose-300">
-                    지금 속도면 {summary.projectedDepletionDate}에 생활비가 바닥납니다
-                    {summary.projectedShortfallDays > 0 && ` (${summary.projectedShortfallDays}일 부족)`}
-                  </span>
+                <>
+                  <strong className="text-rose-300">
+                    지금 속도면 {summary.projectedDepletionDate}에 생활비가 끝납니다
+                    {summary.projectedShortfallDays > 0 && ` · ${summary.projectedShortfallDays}일 부족`}
+                  </strong>
                   {summary.requiredDailyPace > 0 && (
-                    <>
-                      <br />
-                      하루 {formatKRW(summary.requiredDailyPace)}로 줄이면 {summary.spendDaysRemaining}일을 채울 수 있습니다.
-                    </>
+                    <span> 하루 {formatKRW(summary.requiredDailyPace)}로 조정하면 주기 끝까지 유지할 수 있습니다.</span>
                   )}
-                </p>
+                </>
               ) : (
-                <p className="mt-1.5 border-t border-slate-800/70 pt-1.5 text-slate-400">
-                  현재 속도면 이번 주기 끝까지 생활비가 남습니다.
-                </p>
+                <span>현재 속도면 이번 주기 끝까지 생활비가 남습니다.</span>
               )}
             </div>
           )}
         </div>
 
         {/* Cash track: how the salary splits before any spending happens. */}
-        <div className="pt-3 border-t border-slate-800">
+        <div className="mt-5 border-t border-slate-800 pt-4">
           <div className="mb-2 flex items-center justify-between gap-2 text-xs">
             <span className="flex items-center gap-1.5 font-semibold text-slate-300">
               <Lock className="h-3.5 w-3.5 text-indigo-400" />
@@ -571,7 +526,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
       {/* 1b. Repeat spending, one tap. Sits directly under the allowance figure
           it moves, and above the cards that only explain the month. */}

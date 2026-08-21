@@ -46,7 +46,7 @@ export const CashflowTimelineCard: React.FC<CashflowTimelineCardProps> = ({ time
     .slice(0, 4);
 
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-md">
+    <section className="eb-panel rounded-xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100">
@@ -130,6 +130,6 @@ export const CashflowTimelineCard: React.FC<CashflowTimelineCardProps> = ({ time
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 };

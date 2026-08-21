@@ -21,6 +21,7 @@ import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 import { formatAmountInput, parseAmountInput } from '../utils/amount';
+import { ScreenHeader } from './ui/ScreenHeader';
 
 interface AccountsViewProps {
   currentYM: string;
@@ -318,24 +319,19 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   return (
     <div className="space-y-6 pb-20">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-4 rounded-2xl">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <Building2 className="w-6 h-6 text-rose-400" />
-            계좌 및 카드 관리
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            지출 및 납부 시 사용할 은행 계좌와 신용/체크카드를 통합 관리합니다.
-          </p>
-        </div>
-
-        {/* Tab Buttons */}
-        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+      <ScreenHeader
+        eyebrow="Payment sources"
+        title="계좌·카드"
+        description="카드대금이 빠져나갈 계좌와 결제 후 예상 잔액을 먼저 확인하고, 결제수단 정보를 관리합니다."
+        icon={<Building2 className="h-4 w-4" />}
+        meta={<span>계좌 {bankAccounts.length}개 · 카드 {paymentCards.length}개</span>}
+        actions={(
+          <div className="flex items-center gap-1 border border-slate-800 bg-slate-950 p-1">
           <button
             onClick={() => setActiveTab('accounts')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`flex min-h-11 items-center gap-1.5 px-3 text-xs font-semibold transition-colors ${
               activeTab === 'accounts'
-                ? 'bg-rose-500 text-white shadow-md'
+                ? 'bg-rose-500 text-white'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -344,52 +340,53 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('cards')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`flex min-h-11 items-center gap-1.5 px-3 text-xs font-semibold transition-colors ${
               activeTab === 'cards'
-                ? 'bg-rose-500 text-white shadow-md'
+                ? 'bg-rose-500 text-white'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <CreditCard className="w-4 h-4" />
             신용/체크카드 ({paymentCards.length})
           </button>
-        </div>
-      </div>
+          </div>
+        )}
+      />
 
-      <div className="grid grid-cols-1 gap-3 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4 sm:grid-cols-3">
+      <section className="eb-instrument grid grid-cols-1 gap-3 rounded-xl p-4 sm:grid-cols-[0.85fr_1.1fr_1.1fr]" aria-label="카드대금 출금 준비 상태">
         <label className="text-xs text-slate-400">
           <span className="mb-1 block font-medium">카드대금 관리 월</span>
           <input
             type="month"
             value={cardPaymentMonth}
             onChange={event => setCardPaymentMonth(event.target.value || currentYM)}
-            className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 font-bold text-slate-100 focus:border-indigo-500 focus:outline-none"
+            className="min-h-11 w-full border border-slate-800 bg-slate-950 px-3 py-2 font-bold text-slate-100 focus:border-blue-400 focus:outline-none"
           />
         </label>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+        <div className="border-l-2 border-blue-400 bg-slate-950/55 p-3">
           <div className="text-xs text-slate-400">연결 계좌 고정 출금</div>
           <div className="mt-1 text-base font-bold text-rose-300">{formatKRW(selectedMonthSettlement.linkedAccountTotal)}</div>
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+        <div className={`border-l-2 bg-slate-950/55 p-3 ${selectedMonthSettlement.unlinkedAmount > 0 ? 'border-amber-400' : 'border-slate-600'}`}>
           <div className="text-xs text-slate-400">출금 계좌 미연결</div>
           <div className={`mt-1 text-base font-bold ${selectedMonthSettlement.unlinkedAmount > 0 ? 'text-amber-300' : 'text-slate-300'}`}>
             {formatKRW(selectedMonthSettlement.unlinkedAmount)}
           </div>
         </div>
-      </div>
+      </section>
 
       {/* ACCOUNTS TAB */}
       {activeTab === 'accounts' && (
         <div className="space-y-4">
           {/* Top Summary Box */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col xs:flex-row items-center justify-between gap-3">
+          <div className="eb-panel flex flex-col items-center justify-between gap-3 rounded-xl p-4 xs:flex-row">
             <div>
               <span className="text-xs text-slate-400 font-medium">직접 입력 잔액 합계</span>
-              <p className="text-2xl font-bold text-white mt-0.5">{formatKRW(totalAccountBalance)}</p>
+              <p className="eb-tabular mt-1 text-3xl font-extrabold text-white">{formatKRW(totalAccountBalance)}</p>
             </div>
             <button
               onClick={() => handleOpenAccountModal()}
-              className="w-full xs:w-auto flex items-center justify-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-rose-950/30 transition-all"
+              className="flex min-h-11 w-full items-center justify-center gap-1.5 bg-rose-500 px-4 text-xs font-bold text-white transition-colors hover:bg-rose-600 xs:w-auto"
             >
               <Plus className="w-4 h-4" />
               새 계좌 등록
@@ -539,14 +536,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       {/* CARDS TAB */}
       {activeTab === 'cards' && (
         <div className="space-y-4">
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col xs:flex-row items-center justify-between gap-3">
+          <div className="eb-panel flex flex-col items-center justify-between gap-3 rounded-xl p-4 xs:flex-row">
             <div>
               <span className="text-xs text-slate-400 font-medium">등록 카드 수</span>
               <p className="text-xl font-bold text-white mt-0.5">{paymentCards.length} 개</p>
             </div>
             <button
               onClick={() => handleOpenCardModal()}
-              className="w-full xs:w-auto flex items-center justify-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg shadow-rose-950/30 transition-all"
+              className="flex min-h-11 w-full items-center justify-center gap-1.5 bg-rose-500 px-4 text-xs font-bold text-white transition-colors hover:bg-rose-600 xs:w-auto"
             >
               <Plus className="w-4 h-4" />
               새 카드 등록

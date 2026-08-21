@@ -226,12 +226,12 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
         <li key={label} className="flex items-center gap-1.5">
           <span
             aria-current={index === step ? 'step' : undefined}
-            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition-colors ${
+            className={`border px-2 py-1 text-[11px] font-bold transition-colors ${
               index === step
-                ? 'bg-emerald-500 text-slate-950'
+                ? 'border-emerald-500 bg-emerald-500 text-slate-950'
                 : index < step
-                  ? 'bg-emerald-500/15 text-emerald-300'
-                  : 'bg-slate-800 text-slate-400'
+                  ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                  : 'border-slate-800 bg-slate-900 text-slate-400'
             }`}
           >
             {index + 1}. {label}
@@ -246,16 +246,16 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       ariaLabel="급여일 확정"
-      panelClassName="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5"
+      panelClassName="app-viewport-sheet eb-panel w-full max-w-lg overflow-y-auto rounded-t-3xl p-5 sm:rounded-2xl"
     >
       <div className="space-y-4">
         <header className="space-y-2">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="flex items-center gap-2 text-lg font-bold text-white">
-                <Sparkles className="h-5 w-5 text-amber-300" />
-                급여일 확정
-              </h2>
+              <p className="eb-kicker flex items-center gap-1.5 text-emerald-300">
+                <Sparkles className="h-3.5 w-3.5" /> Payday routine
+              </p>
+              <h2 className="eb-display mt-1 text-xl font-extrabold tracking-tight text-white">급여일 확정</h2>
               <p className="mt-0.5 text-xs text-slate-400">
                 {period.yearMonth} 주기{periodRange && ` · ${periodRange}`} · {period.daysInMonth}일
               </p>
@@ -263,7 +263,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
+              className="min-h-11 border border-slate-700 px-3 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
             >
               나중에
             </button>
@@ -550,9 +550,9 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
         {/* Step 4 — commit */}
         {step === 3 && (
           <section className="space-y-3">
-            <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-4 text-center">
+            <div className="eb-instrument rounded-xl p-5 text-center">
               <p className="text-xs font-semibold text-emerald-300">이번 주기에 쓸 수 있는 돈</p>
-              <p className="mt-1 text-3xl font-extrabold tracking-tight text-white">
+              <p className="eb-display eb-tabular mt-2 text-4xl font-extrabold tracking-[-0.05em] text-white">
                 {formatKRW(previewLivingBudget)}
               </p>
               <p className="mt-1 text-xs text-slate-300">
@@ -621,7 +621,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
             type="button"
             onClick={() => setStep(current => Math.max(0, current - 1))}
             disabled={step === 0}
-            className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-slate-700 px-3 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-40"
+            className="inline-flex min-h-11 items-center gap-1 border border-slate-700 px-3 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-40"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             이전
@@ -631,7 +631,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
             <button
               type="button"
               onClick={() => setStep(current => Math.min(STEPS.length - 1, current + 1))}
-              className="inline-flex min-h-11 items-center gap-1 rounded-lg bg-slate-100 px-4 text-xs font-extrabold text-slate-950 transition-colors hover:bg-white"
+              className="inline-flex min-h-11 items-center gap-1 bg-slate-100 px-4 text-xs font-extrabold text-slate-950 transition-colors hover:bg-white"
             >
               다음
               <ArrowRight className="h-3.5 w-3.5" />
@@ -641,7 +641,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
               type="button"
               onClick={() => void handleFinish()}
               disabled={isSaving}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-emerald-500 px-4 text-xs font-extrabold text-slate-950 transition-colors hover:bg-emerald-600 disabled:cursor-wait disabled:opacity-60"
+              className="inline-flex min-h-11 items-center gap-1.5 bg-emerald-500 px-4 text-xs font-extrabold text-slate-950 transition-colors hover:bg-emerald-600 disabled:cursor-wait disabled:opacity-60"
             >
               <Wallet className="h-4 w-4" />
               {isSaving ? '저장 중...' : '이대로 시작하기'}

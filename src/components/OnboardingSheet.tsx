@@ -53,7 +53,7 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
       <select
         value={value}
         onChange={event => onChange(Number(event.target.value))}
-        className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2.5 text-sm font-bold text-slate-100 focus:border-rose-500 focus:outline-none"
+        className="w-full border border-slate-800 bg-slate-950 px-3 py-2.5 text-sm font-bold text-slate-100 focus:border-rose-500 focus:outline-none"
       >
         {Array.from({ length: 31 }, (_, index) => index + 1).map(day => (
           <option key={day} value={day}>매월 {day}일</option>
@@ -69,14 +69,14 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
       labelledById="onboarding-title"
       dismissOnBackdrop={false}
       backdropClassName="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/85 p-0 backdrop-blur-md sm:items-center sm:p-4"
-      panelClassName="w-full max-w-md space-y-4 rounded-t-3xl border border-slate-800 bg-slate-900 p-5 shadow-2xl sm:rounded-2xl"
+      panelClassName="app-viewport-sheet eb-panel w-full max-w-md space-y-4 overflow-y-auto rounded-t-3xl p-5 sm:rounded-2xl"
     >
       <div className="space-y-1">
-        <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
-          <Sparkles className="h-4 w-4" />
-          <span>{step + 1} / {STEP_COUNT} 단계</span>
+        <div className="eb-kicker flex items-center gap-1.5 text-rose-400">
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>Safety setup · {step + 1}/{STEP_COUNT}</span>
         </div>
-        <h2 id="onboarding-title" className="text-base font-bold text-slate-100">
+        <h2 id="onboarding-title" className="eb-display pt-1 text-xl font-extrabold tracking-tight text-slate-100">
           {step === 0 && '월 수입을 알려주세요'}
           {step === 1 && '매달 나가는 고정비가 있나요?'}
           {step === 2 && '한 달 용돈 한도를 정해주세요'}
@@ -88,9 +88,9 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
         </p>
       </div>
 
-      <div className="h-1 w-full overflow-hidden rounded-full bg-slate-800">
+      <div className="h-1 w-full overflow-hidden bg-slate-800">
         <div
-          className="h-full rounded-full bg-rose-500 transition-all"
+          className="h-full bg-rose-500 transition-all motion-reduce:transition-none"
           style={{ width: `${((step + 1) / STEP_COUNT) * 100}%` }}
         />
       </div>
@@ -112,18 +112,6 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
       {step === 2 && (
         <div className="space-y-3">
           <AmountInput value={allowanceLimit} onChange={setAllowanceLimit} showQuickAdd autoFocus />
-          <dl className="space-y-1.5 rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs">
-            <div className="flex items-center justify-between">
-              <dt className="text-slate-400">고정비 뺀 여유</dt>
-              <dd className="font-semibold text-slate-100">{formatKRW(remainingAfterFixed)}</dd>
-            </div>
-            <div className="flex items-center justify-between border-t border-slate-800 pt-1.5">
-              <dt className="text-slate-400">{plannedSavings >= 0 ? '저축 예정액' : '한도 초과'}</dt>
-              <dd className={`font-bold ${plannedSavings >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {formatKRW(Math.abs(plannedSavings))}
-              </dd>
-            </div>
-          </dl>
           {plannedSavings < 0 && (
             <p role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
               용돈 한도가 수입에서 고정비를 뺀 금액보다 큽니다. 그대로 저장할 수 있지만 매달 부족해집니다.
@@ -132,12 +120,29 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
         </div>
       )}
 
+      <dl className="eb-instrument space-y-2 rounded-xl p-3 text-xs" aria-label="설정 결과 미리보기">
+        <div className="flex items-center justify-between">
+          <dt className="text-slate-400">월 수입</dt>
+          <dd className="eb-tabular font-semibold text-emerald-300">{formatKRW(monthlyIncome)}</dd>
+        </div>
+        <div className="flex items-center justify-between">
+          <dt className="text-slate-400">고정비를 뺀 금액</dt>
+          <dd className="eb-tabular font-semibold text-slate-100">{formatKRW(remainingAfterFixed)}</dd>
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-800 pt-2">
+          <dt className="font-semibold text-slate-300">{plannedSavings >= 0 ? '예상 저축' : '생활비 부족'}</dt>
+          <dd className={`eb-tabular text-base font-extrabold ${plannedSavings >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {formatKRW(Math.abs(plannedSavings))}
+          </dd>
+        </div>
+      </dl>
+
       <div className="flex items-center gap-2 border-t border-slate-800 pt-3">
         {step > 0 ? (
           <button
             type="button"
             onClick={() => setStep(current => current - 1)}
-            className="flex min-h-11 items-center gap-1 rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
+            className="flex min-h-11 items-center gap-1 border border-slate-700 bg-slate-950 px-3 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>이전</span>
@@ -146,7 +151,7 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
           <button
             type="button"
             onClick={onSkip}
-            className="min-h-11 rounded-xl px-3 text-xs font-semibold text-slate-400 transition-colors hover:text-slate-200"
+            className="min-h-11 px-3 text-xs font-semibold text-slate-400 transition-colors hover:text-slate-200"
           >
             나중에 하기
           </button>
@@ -162,7 +167,7 @@ export const OnboardingSheet: React.FC<OnboardingSheetProps> = ({
             }
             onComplete({ monthlyIncome, incomeDay, fixedExpense, fixedExpenseDay, allowanceLimit });
           }}
-          className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-500 px-4 text-xs font-bold text-white transition-colors hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-11 flex-1 items-center justify-center gap-1.5 bg-rose-500 px-4 text-xs font-bold text-white transition-colors hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {step < STEP_COUNT - 1 ? (
             <>

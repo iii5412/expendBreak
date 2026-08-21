@@ -60,6 +60,7 @@ import { IDLE_LOCK_OPTIONS, describeIdleLockMinutes, normalizeIdleLockMinutes } 
 import { InstallAppCard } from './InstallAppCard';
 import { AndroidAppCard } from './AndroidAppCard';
 import { normalizeAppTheme } from '../utils/theme';
+import { ScreenHeader } from './ui/ScreenHeader';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -543,17 +544,32 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   // Total transfer required for registered accounts
   const totalTransferNeeded = accountGroups.reduce((acc, g) => acc + g.totalExpectedAmount, 0);
+  const activeSectionLabel = {
+    recurring: '고정 항목 원본',
+    budget: '예산 설정',
+    category: '카테고리',
+    quick_entries: '퀵등록',
+    settings: '설정·AI',
+  }[subTab];
 
   return (
     <div className="space-y-5 pb-24 relative">
+      <ScreenHeader
+        eyebrow="Operations desk"
+        title="관리·설정"
+        description="매달 반복되는 원본 항목과 생활비 기준, 분류 방식, 앱 동작을 한곳에서 관리합니다."
+        icon={<SettingsIcon className="h-4 w-4" />}
+        meta={<span>현재 섹션 · {activeSectionLabel}</span>}
+      />
+
       {/* Top Sub-Navigation Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-1.5 grid grid-cols-3 gap-1 text-xs">
+      <div className="no-scrollbar flex gap-1 overflow-x-auto border-b border-slate-800 pb-3 text-xs">
         <button
           onClick={() => setSubTab('recurring')}
-          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`flex min-h-11 shrink-0 items-center justify-center gap-1.5 border px-3 py-2 font-bold transition-colors ${
             subTab === 'recurring'
-              ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-              : 'text-slate-400 hover:text-slate-200'
+              ? 'border-rose-500 bg-rose-500 text-white'
+              : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-200'
           }`}
         >
           <Calendar className="w-3.5 h-3.5" />
@@ -562,10 +578,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
         <button
           onClick={() => setSubTab('budget')}
-          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`flex min-h-11 shrink-0 items-center justify-center gap-1.5 border px-3 py-2 font-bold transition-colors ${
             subTab === 'budget'
-              ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-              : 'text-slate-400 hover:text-slate-200'
+              ? 'border-rose-500 bg-rose-500 text-white'
+              : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-200'
           }`}
         >
           <DollarSign className="w-3.5 h-3.5" />
@@ -574,10 +590,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
         <button
           onClick={() => setSubTab('category')}
-          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`flex min-h-11 shrink-0 items-center justify-center gap-1.5 border px-3 py-2 font-bold transition-colors ${
             subTab === 'category'
-              ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-              : 'text-slate-400 hover:text-slate-200'
+              ? 'border-rose-500 bg-rose-500 text-white'
+              : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-200'
           }`}
         >
           <Layers className="w-3.5 h-3.5" />
@@ -586,10 +602,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
         <button
           onClick={() => setSubTab('quick_entries')}
-          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`flex min-h-11 shrink-0 items-center justify-center gap-1.5 border px-3 py-2 font-bold transition-colors ${
             subTab === 'quick_entries'
-              ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-              : 'text-slate-400 hover:text-slate-200'
+              ? 'border-rose-500 bg-rose-500 text-white'
+              : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-200'
           }`}
         >
           <Zap className="w-3.5 h-3.5" />
@@ -598,10 +614,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
         <button
           onClick={() => setSubTab('settings')}
-          className={`min-h-11 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-1.5 ${
+          className={`flex min-h-11 shrink-0 items-center justify-center gap-1.5 border px-3 py-2 font-bold transition-colors ${
             subTab === 'settings'
-              ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30'
-              : 'text-slate-400 hover:text-slate-200'
+              ? 'border-rose-500 bg-rose-500 text-white'
+              : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-200'
           }`}
         >
           <SettingsIcon className="w-3.5 h-3.5" />
@@ -613,7 +629,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       {subTab === 'recurring' && (
         <div className="space-y-4">
           {/* Summary Box */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="eb-panel space-y-3 rounded-xl p-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-emerald-400" />
@@ -1006,7 +1022,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       {/* SUBTAB 2: 예산 설정 (BUDGET LIMITS) */}
       {subTab === 'budget' && (
         <div className="space-y-4 text-xs">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="eb-panel space-y-3 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <DollarSign className="w-4 h-4 text-rose-400" />
               <span>월 용돈 한도 설정</span>
@@ -1128,7 +1144,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           </div>
 
           {/* AI Category Name Recommendation */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="eb-panel space-y-3 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-300" />
               <span>AI 카테고리 이름 추천</span>
@@ -1260,7 +1276,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       {subTab === 'settings' && (
         <div className="space-y-4 text-xs">
           {/* Accounting cycle */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="eb-panel space-y-3 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <CalendarRange className="w-4 h-4 text-rose-300" />
               <span>급여 사용 주기</span>
@@ -1315,7 +1331,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           </div>
 
           {/* Account-scoped appearance */}
-          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <div className="eb-panel space-y-3 rounded-xl p-4">
             <h3 className="flex items-center gap-2 text-sm font-bold text-white">
               <Sun className="h-4 w-4 text-amber-300" />
               <span>화면 테마</span>
@@ -1339,7 +1355,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                       triggerToast(`${option.label} 테마로 변경했습니다.`);
                     }}
                     aria-pressed={selected}
-                    className={`flex min-h-12 items-center justify-center gap-2 rounded-xl border px-3 py-2 font-bold transition-colors ${selected
+                    className={`flex min-h-12 items-center justify-center gap-2 border px-3 py-2 font-bold transition-colors ${selected
                       ? 'border-rose-400 bg-rose-500/15 text-rose-300'
                       : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-700'
                     }`}
@@ -1356,7 +1372,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           <AndroidAppCard userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
 
           {/* AI Settings Toggles */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="eb-panel space-y-3 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-300" />
               <span>AI 기능 및 데이터 설정</span>
@@ -1420,7 +1436,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           </div>
 
           {/* PIN Security Status */}
-          <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 space-y-3.5 relative overflow-hidden">
+          <div className="eb-panel relative space-y-3.5 overflow-hidden rounded-xl border-emerald-500/30 p-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <Lock className="w-4 h-4 text-emerald-400" />

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, UserCheck, Sparkles, Calendar, Lock } from 'lucide-react';
+import { UserCheck, Sparkles, Calendar, Lock } from 'lucide-react';
 import { UserProfile } from '../types';
 
 interface NavbarProps {
@@ -22,25 +22,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   return (
     <header
-      className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 text-slate-100"
+      className="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-950/88 text-slate-100 backdrop-blur-xl"
       style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
     >
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-[clamp(0.75rem,3vw,2rem)] py-3">
+      <div className="mx-auto flex min-h-16 w-full max-w-6xl items-center justify-between gap-3 px-[clamp(0.75rem,3vw,2rem)] py-2.5">
         {/* Brand */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-rose-500 via-amber-500 to-emerald-500 p-0.5 shadow-md shadow-rose-950/20">
-            <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-              <Zap className="w-5 h-5 text-rose-400" />
-            </div>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center border border-rose-500/45 bg-rose-500/10" aria-hidden="true">
+            <span className="h-5 w-1.5 -skew-x-12 bg-rose-500" />
+            <span className="ml-1 h-5 w-1.5 -skew-x-12 border border-rose-400" />
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h1 className="font-bold text-lg tracking-tight text-white leading-none">지출브레이크</h1>
-              <span className="text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded-full">
-                강한 통제
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 mt-0.5">안전하게 쓸 수 있는 돈을 계산하는 지출 통제 앱</p>
+          <div className="min-w-0">
+            <h1 className="eb-display truncate text-[17px] font-extrabold leading-none tracking-[-0.04em] text-white sm:text-lg">
+              지출브레이크
+            </h1>
+            <p className="mt-1 hidden truncate text-xs text-slate-400 sm:block">오늘 써도 되는 돈을 계산합니다</p>
           </div>
         </div>
 
@@ -49,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {syncStatusSlot}
 
           {nextPaydayText && (
-            <div className="hidden sm:flex items-center gap-1.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/60 text-xs px-2.5 py-1.5 rounded-lg text-slate-300">
+            <div className="hidden min-h-10 items-center gap-1.5 border border-slate-700/70 bg-slate-900 px-3 text-xs text-slate-300 md:flex">
               <Calendar className="w-3.5 h-3.5 text-emerald-400" />
               <span>{nextPaydayText}</span>
             </div>
@@ -57,7 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={onOpenSettings}
-            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 px-3 py-1.5 rounded-lg transition-colors"
+            className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 border border-slate-700 bg-slate-900 px-3 text-xs text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-800"
           >
             <UserCheck className="w-3.5 h-3.5 text-slate-400" />
             <span className="font-medium hidden xs:inline">{accountName}</span>
@@ -71,7 +67,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={onLock}
-            className="flex items-center gap-1.5 bg-slate-800 hover:bg-rose-500/20 border border-slate-700 hover:border-rose-500/40 text-xs text-slate-200 px-2.5 py-1.5 rounded-lg transition-colors"
+            className="flex min-h-11 min-w-11 items-center justify-center gap-1.5 border border-slate-700 bg-slate-900 px-2.5 text-xs text-slate-200 transition-colors hover:border-rose-500/50 hover:bg-rose-500/10"
             title="앱 잠금"
             aria-label="앱 잠금"
           >
