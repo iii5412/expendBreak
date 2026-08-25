@@ -14,6 +14,7 @@ import {
   Zap,
   Settings2,
   LockKeyhole,
+  MessageCircle,
 } from 'lucide-react';
 import {
   Category,
@@ -45,6 +46,7 @@ import { EntryMode, readPreferredEntryMode, savePreferredEntryMode } from '../ut
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { LiveVoicePanel } from './LiveVoicePanel';
+import { FinanceChatPanel } from './FinanceChatPanel';
 import { normalizeInstallmentPlan } from '../utils/installments';
 import { RecurringMatchCandidate, findRecurringMatches } from '../utils/recurringMatch';
 
@@ -821,7 +823,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </div>
         )}
 
-        <div className="grid gap-2 border-y border-slate-800 py-3 sm:grid-cols-[1fr_1fr_0.58fr]" aria-label="거래 입력 방식">
+        <div className="grid gap-2 border-y border-slate-800 py-3 sm:grid-cols-[1fr_1.35fr_0.58fr]" aria-label="거래 입력 방식">
           <div className="space-y-1.5">
             <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">말하기</p>
             <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1">
@@ -855,7 +857,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
           <div className="space-y-1.5">
             <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">쓰기</p>
-            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1">
+            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1">
             <button
               type="button"
               onClick={() => {
@@ -871,6 +873,22 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
               <Sparkles className="h-4 w-4 shrink-0" />
               <span>AI 문장</span>
             </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void selectProtectedMode('chat');
+                  setVoiceResult(null);
+                }}
+                className={`flex min-h-11 items-center justify-center gap-1 px-1.5 text-xs font-semibold transition-colors ${
+                  activeMode === 'chat'
+                    ? 'bg-indigo-500 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <MessageCircle className="h-4 w-4 shrink-0" />
+                <span>재무챗</span>
+              </button>
 
               <button
                 type="button"
@@ -911,6 +929,20 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Text-only Q&A uses a redacted financial snapshot and never writes transactions. */}
+        {activeMode === 'chat' && (
+          <FinanceChatPanel
+            categories={categories}
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
+            transactions={transactions}
+            budget={budget}
+            recurringOccurrences={recurringOccurrences}
+            recurringTemplates={recurringTemplates}
+            monthStartDay={monthStartDay}
+          />
+        )}
 
         {/* MODE 1: Receipt Capture */}
         {activeMode === 'receipt' && (

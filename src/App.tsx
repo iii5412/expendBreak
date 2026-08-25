@@ -247,8 +247,8 @@ export default function App() {
   const handleEnableTransactionAi = async () => {
     if (userProfile.aiClassificationEnabled) return true;
     const accepted = await confirm({
-      title: 'AI 지출 등록 기능을 사용할까요?',
-      description: 'GPT Live, Gemini 음성, AI 문장 입력, 영수증 분석을 이 계정에서도 사용할 수 있습니다. 입력한 내용과 이 계정의 분류용 금융 정보만 AI API로 전송됩니다.',
+      title: 'AI 지출·재무 기능을 사용할까요?',
+      description: 'GPT Live, Gemini 음성, AI 문장 입력, 영수증 분석, 재무 채팅을 이 계정에서도 사용할 수 있습니다. 입력한 내용과 계좌·카드 번호를 제외한 재무 요약 및 거래 정보만 선택한 AI API로 전송됩니다.',
       confirmLabel: '동의하고 사용',
     });
     if (!accepted) return false;
@@ -257,7 +257,7 @@ export default function App() {
       aiClassificationEnabled: true,
       aiConsentAt: userProfile.aiConsentAt || new Date().toISOString(),
     });
-    showToast({ message: '이 계정에서도 AI 지출 등록 기능을 사용할 수 있습니다.', tone: 'success' });
+    showToast({ message: '이 계정에서도 AI 지출·재무 기능을 사용할 수 있습니다.', tone: 'success' });
     return true;
   };
 

@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.0.0",
+    "@capacitor/camera": "^8.0.0",
     "@capacitor/core": "^8.0.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, CheckCircle2, FileImage, Loader2, Plus, ReceiptText, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { Camera as NativeCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
+import { Camera as CameraIcon, CheckCircle2, FileImage, Loader2, Plus, ReceiptText, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import {
   AIReceiptResult,
   BankAccount,
@@ -26,6 +28,8 @@ interface ReceiptCapturePanelProps {
   onDone: () => void;
 }
 
+const OCR_TIMEOUT_MS = 60_000;
+
 export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
   categories,
   merchantRules,
@@ -38,6 +42,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
 }) => {
   const [prepared, setPrepared] = useState<PreparedReceiptImage | null>(null);
   const [result, setResult] = useState<AIReceiptResult | null>(null);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [isReading, setIsReading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,15 +85,49 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
     }
   };
 
+  const handleNativeCapture = async () => {
+    setIsCapturing(true);
+    setError(null);
+    try {
+      const photo = await NativeCamera.getPhoto({
+        source: CameraSource.Camera,
+        resultType: CameraResultType.Uri,
+        quality: 90,
+        width: 2000,
+        height: 2000,
+        correctOrientation: true,
+        allowEditing: false,
+      });
+      if (!photo.webPath) throw new Error('촬영한 사진을 불러오지 못했습니다.');
+
+      const response = await fetch(photo.webPath);
+      if (!response.ok) throw new Error('촬영한 사진 파일을 열지 못했습니다.');
+      const blob = await response.blob();
+      const format = photo.format === 'png' ? 'png' : photo.format === 'webp' ? 'webp' : 'jpeg';
+      const mimeType = `image/${format}`;
+      await handleFile(new File([blob], `receipt-${Date.now()}.${format === 'jpeg' ? 'jpg' : format}`, { type: mimeType }));
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : '';
+      if (!/cancel|취소/i.test(message)) {
+        setError(message || '카메라를 실행하지 못했습니다. 앱의 카메라 권한을 확인해 주세요.');
+      }
+    } finally {
+      setIsCapturing(false);
+    }
+  };
+
   const handleReadReceipt = async () => {
     if (!prepared) return;
     setIsReading(true);
     setError(null);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), OCR_TIMEOUT_MS);
     try {
       const imageBase64 = await blobToBase64(prepared.blob);
       const response = await authenticatedFetch('/api/ai/receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           imageBase64,
           mimeType: prepared.mimeType,
@@ -114,8 +153,15 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
       setCategoryId(safeCategoryId);
       setMemo(receiptResult.memo || '영수증 촬영 등록');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '영수증을 읽는 중 오류가 발생했습니다.');
+      setError(
+        nextError instanceof DOMException && nextError.name === 'AbortError'
+          ? 'OCR 응답이 60초 안에 도착하지 않았습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.'
+          : nextError instanceof Error
+            ? nextError.message
+            : '영수증을 읽는 중 오류가 발생했습니다.',
+      );
     } finally {
+      window.clearTimeout(timeoutId);
       setIsReading(false);
     }
   };
@@ -208,10 +254,17 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 py-3 font-bold text-rose-200">
-          <Camera className="h-4 w-4" /> 바로 촬영
-          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={event => { void handleFile(event.target.files?.[0]); event.target.value = ''; }} />
-        </label>
+        {Capacitor.isNativePlatform() ? (
+          <button type="button" disabled={isCapturing || isReading} onClick={() => { void handleNativeCapture(); }} className="flex items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 py-3 font-bold text-rose-200 disabled:opacity-50">
+            {isCapturing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CameraIcon className="h-4 w-4" />}
+            {isCapturing ? '카메라 여는 중...' : '바로 촬영'}
+          </button>
+        ) : (
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 py-3 font-bold text-rose-200">
+            <CameraIcon className="h-4 w-4" /> 바로 촬영
+            <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={event => { void handleFile(event.target.files?.[0]); event.target.value = ''; }} />
+          </label>
+        )}
         <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 py-3 font-bold text-slate-200">
           <FileImage className="h-4 w-4" /> 사진 선택
           <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={event => { void handleFile(event.target.files?.[0]); event.target.value = ''; }} />
@@ -329,7 +382,7 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
         </div>
       )}
 
-      {!prepared && <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-400"><Camera className="mx-auto mb-2 h-8 w-8" /><p>구겨진 영수증은 펴고, 그림자가 적게 촬영하면 인식률이 좋아집니다.</p></div>}
+      {!prepared && <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center text-slate-400"><CameraIcon className="mx-auto mb-2 h-8 w-8" /><p>구겨진 영수증은 펴고, 그림자가 적게 촬영하면 인식률이 좋아집니다.</p></div>}
     </div>
   );
 };

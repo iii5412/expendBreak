@@ -12,9 +12,9 @@ import { getAccountStorageKey } from './auth';
 // misread as the newly named Gemini-only tab.
 const entryModeKey = () => getAccountStorageKey('brake_entry_mode_v2');
 
-export type EntryMode = 'receipt' | 'live' | 'voice' | 'ai' | 'manual';
+export type EntryMode = 'receipt' | 'live' | 'voice' | 'chat' | 'ai' | 'manual';
 
-const ENTRY_MODES: EntryMode[] = ['receipt', 'live', 'voice', 'ai', 'manual'];
+const ENTRY_MODES: EntryMode[] = ['receipt', 'live', 'voice', 'chat', 'ai', 'manual'];
 
 function store(): Storage | null {
   try {

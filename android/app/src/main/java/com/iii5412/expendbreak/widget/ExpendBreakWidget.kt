@@ -10,6 +10,8 @@ import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.Image
+import androidx.glance.ImageProvider
 import androidx.glance.LocalSize
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
@@ -18,23 +20,27 @@ import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.action.actionStartActivity
+import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.provideContent
 import androidx.glance.action.clickable
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
+import androidx.glance.layout.ContentScale
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.iii5412.expendbreak.MainActivity
+import com.iii5412.expendbreak.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,8 +59,8 @@ private const val MAX_QUICK_ENTRY_CHIPS = 4
 
 /** 2x2 and smaller: only the headline figure fits. */
 private val SMALL_WIDGET = DpSize(110.dp, 110.dp)
-/** 4x2: budget on the left, two quick entries on the right. */
-private val MEDIUM_WIDGET = DpSize(240.dp, 110.dp)
+/** 4x2: the primary, intentionally designed widget size. */
+private val MEDIUM_WIDGET = DpSize(250.dp, 110.dp)
 /** 4x3 and larger: room for four quick entry chips. */
 private val LARGE_WIDGET = DpSize(240.dp, 180.dp)
 
@@ -182,12 +188,13 @@ private fun WidgetContent(context: Context, data: WidgetViewData) {
     val colors = GlanceTheme.colors
 
     val pad = if (wide) 12.dp else 10.dp
-    val gap = if (tall) 7.dp else 5.dp
+    val gap = if (tall) 7.dp else 6.dp
 
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .background(colors.widgetBackground)
+            .background(ImageProvider(R.drawable.widget_background), ContentScale.FillBounds)
+            .appWidgetBackground()
             .padding(pad)
             .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://home"))),
     ) {
@@ -240,8 +247,14 @@ private fun WidgetContent(context: Context, data: WidgetViewData) {
 private fun WidgetHeader(context: Context, data: WidgetViewData, wide: Boolean) {
     val colors = GlanceTheme.colors
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+        Image(
+            provider = ImageProvider(R.drawable.ic_widget_mark),
+            contentDescription = null,
+            modifier = GlanceModifier.size(20.dp),
+        )
+        Spacer(modifier = GlanceModifier.width(6.dp))
         Text(
-            if (wide) "⚡ 지출브레이크" else "⚡ 지출",
+            if (wide) "지출브레이크" else "생활비",
             style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
             maxLines = 1,
         )
@@ -249,8 +262,8 @@ private fun WidgetHeader(context: Context, data: WidgetViewData, wide: Boolean) 
         Text(
             statusLabel(data),
             modifier = GlanceModifier
-                .background(colors.surfaceVariant)
-                .padding(horizontal = 7.dp, vertical = 3.dp)
+                .background(statusBackground(data), ContentScale.FillBounds)
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .clickable(actionRunCallback<RefreshWidgetAction>()),
             style = TextStyle(color = statusColor(data), fontWeight = FontWeight.Bold, fontSize = 9.sp),
             maxLines = 1,
@@ -258,12 +271,12 @@ private fun WidgetHeader(context: Context, data: WidgetViewData, wide: Boolean) 
         if (wide) {
             Spacer(modifier = GlanceModifier.width(5.dp))
             Text(
-                "＋",
+                "＋  기록",
                 modifier = GlanceModifier
-                    .background(colors.primary)
-                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                    .background(ImageProvider(R.drawable.widget_accent_button), ContentScale.FillBounds)
+                    .padding(horizontal = 9.dp, vertical = 4.dp)
                     .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://transaction/new"))),
-                style = TextStyle(color = colors.onPrimary, fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                style = TextStyle(color = ColorProvider(android.graphics.Color.WHITE), fontWeight = FontWeight.Bold, fontSize = 9.sp),
                 maxLines = 1,
             )
         }
@@ -274,22 +287,24 @@ private fun WidgetHeader(context: Context, data: WidgetViewData, wide: Boolean) 
 private fun BudgetSummary(data: WidgetViewData, wide: Boolean) {
     val colors = GlanceTheme.colors
     Text(
-        "오늘 써도 되는 돈",
-        style = TextStyle(color = colors.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 10.sp),
+        "오늘 사용 가능",
+        style = TextStyle(color = colors.onSurfaceVariant, fontWeight = FontWeight.Medium, fontSize = 10.sp),
         maxLines = 1,
     )
+    Spacer(modifier = GlanceModifier.height(1.dp))
     Text(
         formatKrw(data.dailySafeAllowance),
         style = TextStyle(
             color = statusColor(data),
             fontWeight = FontWeight.Bold,
-            fontSize = if (wide) 24.sp else 19.sp,
+            fontSize = if (wide) 22.sp else 19.sp,
         ),
         maxLines = 1,
     )
+    Spacer(modifier = GlanceModifier.height(1.dp))
     Text(
-        "잔액 ${formatKrw(data.remainingAllowance)}  ·  ${data.daysRemaining}일",
-        style = TextStyle(color = colors.onSurfaceVariant, fontSize = 10.sp),
+        "잔액 ${formatKrw(data.remainingAllowance)} · ${data.daysRemaining}일 남음",
+        style = TextStyle(color = colors.onSurfaceVariant, fontSize = 9.sp),
         maxLines = 1,
     )
 }
@@ -302,23 +317,28 @@ private fun MediumContent(context: Context, data: WidgetViewData) {
         Column(modifier = GlanceModifier.defaultWeight()) {
             BudgetSummary(data, true)
         }
-        Spacer(modifier = GlanceModifier.width(10.dp))
-        Column(modifier = GlanceModifier.defaultWeight()) {
+        Spacer(modifier = GlanceModifier.width(8.dp))
+        Column(
+            modifier = GlanceModifier
+                .width(104.dp)
+                .background(ImageProvider(R.drawable.widget_panel), ContentScale.FillBounds)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        ) {
             Text(
-                "바로 기록",
-                style = TextStyle(color = colors.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 9.sp),
+                "빠른 기록",
+                style = TextStyle(color = colors.onSurfaceVariant, fontWeight = FontWeight.Medium, fontSize = 8.sp),
                 maxLines = 1,
             )
             Spacer(modifier = GlanceModifier.height(3.dp))
             if (data.quickEntries.isEmpty()) {
                 Text(
-                    "＋ 지출 입력",
+                    "＋  지출 추가",
                     modifier = GlanceModifier
                         .fillMaxWidth()
-                        .background(colors.primary)
-                        .padding(horizontal = 8.dp, vertical = 7.dp)
+                        .background(ImageProvider(R.drawable.widget_accent_button), ContentScale.FillBounds)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                         .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://transaction/new"))),
-                    style = TextStyle(color = colors.onPrimary, fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                    style = TextStyle(color = ColorProvider(android.graphics.Color.WHITE), fontWeight = FontWeight.Bold, fontSize = 9.sp),
                     maxLines = 1,
                 )
             } else {
@@ -364,15 +384,15 @@ private fun QuickEntryChip(
     Text(
         "${if (entry.amount == null) "₩" else "＋"} ${entry.label}",
         modifier = modifier
-            .background(colors.primaryContainer)
-            .padding(horizontal = if (compact) 7.dp else 9.dp, vertical = if (compact) 5.dp else 6.dp)
+            .background(ImageProvider(R.drawable.widget_chip), ContentScale.FillBounds)
+            .padding(horizontal = if (compact) 7.dp else 9.dp, vertical = if (compact) 4.dp else 6.dp)
             .clickable(
                 actionStartActivity(
                     deepLinkIntent(context, "expendbreak://quick/${entry.id}"),
                 ),
             ),
         style = TextStyle(
-            color = colors.onPrimaryContainer,
+            color = colors.onSurface,
             fontWeight = FontWeight.Bold,
             fontSize = if (compact) 9.sp else 10.sp,
         ),
@@ -387,17 +407,17 @@ private fun ActionRow(context: Context) {
         Text(
             "＋ 지출",
             modifier = GlanceModifier
-                .background(colors.surfaceVariant)
+                .background(ImageProvider(R.drawable.widget_accent_button), ContentScale.FillBounds)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .clickable(actionStartActivity(deepLinkIntent(context, "expendbreak://transaction/new"))),
-            style = TextStyle(color = colors.onSurface, fontWeight = FontWeight.Bold, fontSize = 12.sp),
+            style = TextStyle(color = ColorProvider(android.graphics.Color.WHITE), fontWeight = FontWeight.Bold, fontSize = 12.sp),
             maxLines = 1,
         )
         Spacer(modifier = GlanceModifier.width(8.dp))
         Text(
             "새로고침",
             modifier = GlanceModifier
-                .background(colors.surfaceVariant)
+                .background(ImageProvider(R.drawable.widget_chip), ContentScale.FillBounds)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .clickable(actionRunCallback<RefreshWidgetAction>()),
             style = TextStyle(color = colors.onSurfaceVariant, fontSize = 12.sp),
@@ -439,5 +459,15 @@ private fun statusColor(data: WidgetViewData): ColorProvider = when {
     data.alertLevel == "caution" -> GlanceTheme.colors.secondary
     else -> GlanceTheme.colors.primary
 }
+
+private fun statusBackground(data: WidgetViewData): ImageProvider = ImageProvider(
+    when {
+        data.state == "stale" || data.state == "locked" || data.state == "hidden" || data.state == "no_data" ->
+            R.drawable.widget_status_neutral
+        data.alertLevel == "danger" || data.alertLevel == "warning" -> R.drawable.widget_status_danger
+        data.alertLevel == "caution" -> R.drawable.widget_status_caution
+        else -> R.drawable.widget_status_safe
+    },
+)
 
 private fun formatKrw(value: Long): String = "${NumberFormat.getNumberInstance(Locale.KOREA).format(value)}원"
