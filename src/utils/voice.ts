@@ -50,16 +50,9 @@ export function shouldTriggerVoiceFallback(data: Partial<VoiceAnalysisResult> | 
   // 4. Category checks
   if (!data.suggestedCategoryId || typeof data.suggestedCategoryId !== 'string') return true;
 
-  // 5. Date format checks (YYYY-MM-DD)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data.date || ''))) return true;
-
-  // 6. Confidence threshold (must be >= 0.75)
-  const confidence = Number(data.confidence);
-  if (!Number.isFinite(confidence) || confidence < 0.75) return true;
-
-  // 7. Multiple transactions detected
-  if (data.multipleTransactionsDetected === true) return true;
-
+  // Date, confidence, and multiple-transaction warnings can be corrected in
+  // the confirmation screen. Retrying the same audio sequentially for those
+  // review-only conditions doubles latency without recovering missing speech.
   return false;
 }
 

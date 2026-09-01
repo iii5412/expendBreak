@@ -298,6 +298,10 @@ export interface AIClassifyResult {
   memo: string;
   suggestedCategoryId: string;
   suggestedNewCategoryName?: string | null;
+  paymentMethodType?: PaymentMethodType;
+  suggestedAccountId?: string | null;
+  suggestedCardId?: string | null;
+  tags?: string[];
   confidence: number;
   reason: string;
   needsConfirmation: boolean;

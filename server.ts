@@ -1094,6 +1094,8 @@ Instructions:
           ],
         }],
         config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          maxOutputTokens: 512,
           responseMimeType: 'application/json',
           responseSchema,
         },
@@ -1124,6 +1126,8 @@ Instructions:
             ],
           }],
           config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+            maxOutputTokens: 512,
             responseMimeType: 'application/json',
             responseSchema,
           },
@@ -1209,11 +1213,28 @@ function fallbackClassify(text: string, categories: any[], merchantRules: any[],
 // Endpoint 1: Natural Language Transaction Classifier
 app.post('/api/ai/classify', async (req, res) => {
   try {
-    const { text, categories = [], merchantRules = [], defaultDate } = req.body;
+    const {
+      text,
+      categories = [],
+      merchantRules = [],
+      bankAccounts = [],
+      paymentCards = [],
+      defaultDate,
+    } = req.body;
     if (!text || typeof text !== 'string' || text.trim().length > 500) {
       return res.status(400).json({ error: 'Text prompt is required' });
     }
-    if (!Array.isArray(categories) || categories.length === 0 || categories.length > 100 || !Array.isArray(merchantRules) || merchantRules.length > 200) {
+    if (
+      !Array.isArray(categories)
+      || categories.length === 0
+      || categories.length > 100
+      || !Array.isArray(merchantRules)
+      || merchantRules.length > 200
+      || !Array.isArray(bankAccounts)
+      || bankAccounts.length > 30
+      || !Array.isArray(paymentCards)
+      || paymentCards.length > 30
+    ) {
       return res.status(400).json({ error: 'Invalid classification context' });
     }
 
@@ -1226,6 +1247,22 @@ app.post('/api/ai/classify', async (req, res) => {
       typeof rule?.pattern === 'string'
       && rule.pattern.length <= 100
       && typeof rule?.categoryId === 'string',
+    );
+    const safeBankAccounts = bankAccounts.filter((account: any) =>
+      typeof account?.id === 'string'
+      && typeof account?.bankName === 'string'
+      && typeof account?.accountName === 'string'
+      && account.id.length <= 100
+      && account.bankName.length <= 100
+      && account.accountName.length <= 100,
+    );
+    const safePaymentCards = paymentCards.filter((card: any) =>
+      typeof card?.id === 'string'
+      && typeof card?.cardName === 'string'
+      && typeof card?.cardCompany === 'string'
+      && card.id.length <= 100
+      && card.cardName.length <= 100
+      && card.cardCompany.length <= 100,
     );
 
     const todayStr = defaultDate || new Date().toISOString().split('T')[0];
@@ -1266,6 +1303,12 @@ app.post('/api/ai/classify', async (req, res) => {
     const catListStr = safeCategories
       .map((c: any) => `${c.id}|${c.name}|${c.type}`)
       .join('\n');
+    const accountListStr = safeBankAccounts
+      .map((account: any) => `${account.id}|${account.bankName}|${account.accountName}`)
+      .join('\n');
+    const cardListStr = safePaymentCards
+      .map((card: any) => `${card.id}|${card.cardCompany}|${card.cardName}`)
+      .join('\n');
 
     const prompt = `Analyze this Korean transaction text and return a JSON object with classification details:
 Transaction Text: "${text}"
@@ -1274,12 +1317,20 @@ Current Date: "${todayStr}"
 Available Categories:
 ${catListStr}
 
+Available Bank Accounts (ID|bank|registered alias):
+${accountListStr || 'None'}
+
+Available Payment Cards (ID|company|registered name):
+${cardListStr || 'None'}
+
 Rules:
 1. "amount" MUST be an integer representing KRW (e.g. 24,900 -> 24900, 18만원 -> 180000). If no amount is found or ambiguous, set amount to 0.
 2. "type" MUST be "income" or "expense".
 3. "suggestedCategoryId" MUST be selected from the available category IDs listed above that best matches the merchant/memo.
 4. "confidence" MUST be a float between 0.0 and 1.0.
-5. Do NOT invent new category IDs. If no existing category fits well, suggest a short name in "suggestedNewCategoryName", but put the closest existing category ID in "suggestedCategoryId".`;
+5. Do NOT invent new category IDs. If no existing category fits well, suggest a short name in "suggestedNewCategoryName", but put the closest existing category ID in "suggestedCategoryId".
+6. Set "paymentMethodType" to "account", "card", "cash", or "other". Match a mentioned registered alias to its exact ID. Treat Korean "계좌" and "통장", and "급여" and "월급", as equivalent alias words.
+7. "tags" contains up to 5 short Korean purchase-detail tags. Exclude the merchant, category, amount, payment source, and generic verbs. Example: "36000원 쿠팡 아이신발 구매 급여계좌" -> ["아이신발"].`;
 
     const response = await ai.models.generateContent({
       model: process.env.GEMINI_CLASSIFY_MODEL?.trim() || 'gemini-3.5-flash-lite',
@@ -1298,6 +1349,10 @@ Rules:
             memo: { type: Type.STRING, description: 'Brief note or description' },
             suggestedCategoryId: { type: Type.STRING, description: 'Existing category ID' },
             suggestedNewCategoryName: { type: Type.STRING, description: 'Optional new category name' },
+            paymentMethodType: { type: Type.STRING, description: 'account, card, cash, or other' },
+            suggestedAccountId: { type: Type.STRING, description: 'Existing bank account ID when matched' },
+            suggestedCardId: { type: Type.STRING, description: 'Existing payment card ID when matched' },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
             confidence: { type: Type.NUMBER, description: 'Confidence score from 0.0 to 1.0' },
             reason: { type: Type.STRING, description: 'Brief Korean explanation' },
             needsConfirmation: { type: Type.BOOLEAN },
@@ -1319,6 +1374,18 @@ Rules:
     result.date = /^\d{4}-\d{2}-\d{2}$/.test(String(result.date || '')) ? result.date : todayStr;
     result.merchant = String(result.merchant || '').slice(0, 120);
     result.memo = String(result.memo || '').slice(0, 500);
+    result.paymentMethodType = ['account', 'card', 'cash', 'other'].includes(result.paymentMethodType)
+      ? result.paymentMethodType
+      : undefined;
+    result.suggestedAccountId = safeBankAccounts.some((account: any) => account.id === result.suggestedAccountId)
+      ? result.suggestedAccountId
+      : null;
+    result.suggestedCardId = safePaymentCards.some((card: any) => card.id === result.suggestedCardId)
+      ? result.suggestedCardId
+      : null;
+    result.tags = Array.isArray(result.tags)
+      ? result.tags.map((tag: unknown) => String(tag || '').replace(/^#/, '').trim()).filter(Boolean).slice(0, 5)
+      : [];
 
     let forcedReview = false;
     const selectedCategory = safeCategories.find((category: any) => category.id === result.suggestedCategoryId);

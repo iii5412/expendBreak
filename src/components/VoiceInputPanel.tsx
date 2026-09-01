@@ -161,7 +161,9 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
         // AudioContext optional for meter
       }
 
-      const recorder = new MediaRecorder(stream, selectedMimeType ? { mimeType: selectedMimeType } : undefined);
+      const recorder = new MediaRecorder(stream, selectedMimeType
+        ? { mimeType: selectedMimeType, audioBitsPerSecond: 32_000 }
+        : { audioBitsPerSecond: 32_000 });
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
@@ -184,6 +186,9 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
           const url = URL.createObjectURL(blob);
           setAudioUrl(url);
           setRecordingDurationMs(finalDuration);
+          // The Gemini mode is already an explicit AI action. Starting as soon
+          // as recording stops removes an unnecessary review/click round-trip.
+          void analyzeAudio(blob, finalDuration, blob.type || selectedMimeType || 'audio/webm');
         }
         cleanupStream();
         setIsRecording(false);
@@ -234,8 +239,8 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
     setErrorMessage(null);
   };
 
-  const handleAnalyze = async () => {
-    if (!audioBlob) {
+  const analyzeAudio = async (blob: Blob | null, durationMs: number, audioMimeType: string) => {
+    if (!blob) {
       setErrorMessage('녹음된 음성이 없거나 너무 짧습니다.');
       return;
     }
@@ -253,7 +258,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
         };
         reader.onerror = () => reject(new Error('파일 변환 오류'));
       });
-      reader.readAsDataURL(audioBlob);
+      reader.readAsDataURL(blob);
 
       const audioBase64 = await base64Promise;
 
@@ -264,12 +269,14 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
         },
         body: JSON.stringify({
           audioBase64,
-          mimeType: audioBlob.type || mimeType,
-          durationMs: recordingDurationMs,
+          mimeType: blob.type || audioMimeType,
+          durationMs,
           categories,
           merchantRules,
-          bankAccounts,
-          paymentCards,
+          // Account/card numbers are not needed for matching and never leave
+          // the device through this endpoint.
+          bankAccounts: bankAccounts.map(({ id, bankName, accountName }) => ({ id, bankName, accountName })),
+          paymentCards: paymentCards.map(({ id, cardName, cardCompany }) => ({ id, cardName, cardCompany })),
           defaultDate: getLocalDateString(),
           timezone: 'Asia/Seoul',
         }),
@@ -290,7 +297,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
       }
 
       const result: VoiceAnalysisResult = await response.json();
-      onAnalysisComplete(result, recordingDurationMs, audioBlob.type || mimeType);
+      onAnalysisComplete(result, durationMs, blob.type || audioMimeType);
     } catch (err: any) {
       console.error('Voice analyze failure:', err);
       setErrorMessage(err.message || '네트워크 연결 상태를 확인해주세요.');
@@ -298,6 +305,8 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
       setIsAnalyzing(false);
     }
   };
+
+  const handleAnalyze = () => analyzeAudio(audioBlob, recordingDurationMs, audioBlob?.type || mimeType);
 
   const examplePrompts = [
     '오늘 이마트에서 장보기 5만 2천 원 신한카드로 결제했어',
@@ -396,7 +405,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
                 <span>{formatSeconds(recordingDurationMs)}</span>
               </div>
-              <p className="text-xs text-slate-400">음성을 분석 중입니다. 말씀이 끝나면 중지를 눌러주세요.</p>
+              <p className="text-xs text-slate-400">녹음 중입니다. 말씀이 끝나면 중지를 눌러주세요.</p>
             </div>
 
             {/* Live Real-time Volume Bar */}
@@ -422,7 +431,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
           <div className="space-y-4 py-2">
             <div className="flex items-center justify-center gap-2 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 py-2 px-3 rounded-xl max-w-xs mx-auto">
               <Volume2 className="w-4 h-4" />
-              <span>음성 녹음 완료 ({(recordingDurationMs / 1000).toFixed(1)}초)</span>
+              <span>{isAnalyzing ? '녹음 완료 · 바로 분석 중' : `음성 녹음 완료 (${(recordingDurationMs / 1000).toFixed(1)}초)`}</span>
             </div>
 
             {audioUrl && (
@@ -442,7 +451,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
               </button>
 
               <button
-                onClick={handleAnalyze}
+                onClick={() => void handleAnalyze()}
                 disabled={isAnalyzing}
                 className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-lg shadow-rose-950/40"
               >
@@ -454,7 +463,7 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 text-amber-300" />
-                    <span>음성 분석하기</span>
+                    <span>다시 분석하기</span>
                   </>
                 )}
               </button>

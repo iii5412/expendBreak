@@ -59,12 +59,12 @@ describe('Voice Input Utilities', () => {
       expect(shouldTriggerVoiceFallback({ transcript: '장보기', amount: 0, type: 'expense', suggestedCategoryId: 'food', date: '2026-08-10', confidence: 0.9 })).toBe(true);
     });
 
-    it('should trigger fallback if confidence is low (< 0.75)', () => {
-      expect(shouldTriggerVoiceFallback({ transcript: '무언가 구매', amount: 5000, type: 'expense', suggestedCategoryId: 'food', date: '2026-08-10', confidence: 0.60 })).toBe(true);
+    it('keeps low-confidence output on the fast confirmation path', () => {
+      expect(shouldTriggerVoiceFallback({ transcript: '무언가 구매', amount: 5000, type: 'expense', suggestedCategoryId: 'food', date: '2026-08-10', confidence: 0.60 })).toBe(false);
     });
 
-    it('should trigger fallback if multiple transactions detected', () => {
-      expect(shouldTriggerVoiceFallback({ transcript: '이마트에서 5만원 결제하고 택시비 1만원 냄', amount: 50000, type: 'expense', suggestedCategoryId: 'food', date: '2026-08-10', confidence: 0.9, multipleTransactionsDetected: true })).toBe(true);
+    it('keeps multiple-transaction warnings on the confirmation path instead of retrying', () => {
+      expect(shouldTriggerVoiceFallback({ transcript: '이마트에서 5만원 결제하고 택시비 1만원 냄', amount: 50000, type: 'expense', suggestedCategoryId: 'food', date: '2026-08-10', confidence: 0.9, multipleTransactionsDetected: true })).toBe(false);
     });
   });
 

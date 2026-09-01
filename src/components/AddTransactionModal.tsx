@@ -49,6 +49,11 @@ import { LiveVoicePanel } from './LiveVoicePanel';
 import { FinanceChatPanel } from './FinanceChatPanel';
 import { normalizeInstallmentPlan } from '../utils/installments';
 import { RecurringMatchCandidate, findRecurringMatches } from '../utils/recurringMatch';
+import {
+  extractDetailTags,
+  findMentionedPaymentSource,
+  sanitizeSuggestedTags,
+} from '../utils/transactionEnrichment';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -248,6 +253,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             .filter(category => category.active)
             .map(({ id, name, type }) => ({ id, name, type })),
           merchantRules: merchantRules.map(({ pattern, categoryId }) => ({ pattern, categoryId })),
+          bankAccounts: bankAccounts.map(({ id, bankName, accountName }) => ({ id, bankName, accountName })),
+          paymentCards: paymentCards.map(({ id, cardName, cardCompany }) => ({ id, cardName, cardCompany })),
           defaultDate: getLocalDateString(),
         }),
       });
@@ -270,20 +277,39 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setConfirmType(safeType);
       setConfirmDate(data.date || getLocalDateString());
       setConfirmMemo(data.memo || aiPromptText);
-      const compactPrompt = aiPromptText.toLocaleLowerCase('ko-KR').replace(/\s+/g, '');
-      const matchedCard = paymentCards.find(card => [card.cardName, card.cardCompany]
-        .some(value => compactPrompt.includes(value.toLocaleLowerCase('ko-KR').replace(/\s+/g, ''))));
-      const matchedAccount = bankAccounts.find(account => [account.bankName, account.accountName]
-        .some(value => compactPrompt.includes(value.toLocaleLowerCase('ko-KR').replace(/\s+/g, ''))));
-      if (matchedCard) {
-        setConfirmPaymentMethodType('card');
-        setConfirmCardId(matchedCard.id);
-      } else if (matchedAccount) {
+      const selectedCategoryName = categories.find(category => category.id === safeCategoryId)?.name || '';
+      const excludedTagTerms = [
+        data.merchant,
+        selectedCategoryName,
+        ...bankAccounts.flatMap(account => [account.bankName, account.accountName]),
+        ...paymentCards.flatMap(card => [card.cardName, card.cardCompany]),
+      ];
+      const suggestedTags = sanitizeSuggestedTags(data.tags, excludedTagTerms);
+      setTagsText((suggestedTags.length > 0
+        ? suggestedTags
+        : extractDetailTags(data.memo || aiPromptText, excludedTagTerms)).join(', '));
+
+      const mentionedSource = findMentionedPaymentSource(aiPromptText, bankAccounts, paymentCards);
+      const suggestedAccount = bankAccounts.find(account => account.id === data.suggestedAccountId);
+      const suggestedCard = paymentCards.find(card => card.id === data.suggestedCardId);
+      if (mentionedSource?.type === 'account') {
         setConfirmPaymentMethodType('account');
-        setConfirmAccountId(matchedAccount.id);
-      } else if (compactPrompt.includes('현금')) {
+        setConfirmAccountId(mentionedSource.id);
+      } else if (mentionedSource?.type === 'card') {
+        setConfirmPaymentMethodType('card');
+        setConfirmCardId(mentionedSource.id);
+      } else if (data.paymentMethodType === 'account' && suggestedAccount) {
+        setConfirmPaymentMethodType('account');
+        setConfirmAccountId(suggestedAccount.id);
+      } else if (data.paymentMethodType === 'card' && suggestedCard) {
+        setConfirmPaymentMethodType('card');
+        setConfirmCardId(suggestedCard.id);
+      } else if (aiPromptText.includes('현금')) {
         setConfirmPaymentMethodType('cash');
+      } else if (data.paymentMethodType === 'cash' || data.paymentMethodType === 'other') {
+        setConfirmPaymentMethodType(data.paymentMethodType);
       }
+      const compactPrompt = aiPromptText.replace(/\s+/g, '');
       const installmentMatch = compactPrompt.match(/(\d+)개월할부/);
       const roundMatch = compactPrompt.match(/(\d+)회차/);
       if (installmentMatch) {
@@ -363,17 +389,35 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setConfirmMemo(result.memo || result.transcript);
     setConfirmTranscript(result.transcript);
 
-    if (result.tags && result.tags.length > 0) {
-      setTagsText(result.tags.join(', '));
-    }
-    if (result.paymentMethodType) {
+    const categoryName = categories.find(category => category.id === result.suggestedCategoryId)?.name || '';
+    const excludedTagTerms = [
+      result.merchant,
+      categoryName,
+      ...bankAccounts.flatMap(account => [account.bankName, account.accountName]),
+      ...paymentCards.flatMap(card => [card.cardName, card.cardCompany]),
+    ];
+    const suggestedTags = sanitizeSuggestedTags(result.tags, excludedTagTerms);
+    setTagsText((suggestedTags.length > 0
+      ? suggestedTags
+      : extractDetailTags(result.memo || result.transcript, excludedTagTerms)).join(', '));
+
+    const mentionedSource = findMentionedPaymentSource(result.transcript, bankAccounts, paymentCards);
+    const suggestedAccount = bankAccounts.find(account => account.id === result.suggestedAccountId);
+    const suggestedCard = paymentCards.find(card => card.id === result.suggestedCardId);
+    if (mentionedSource?.type === 'account') {
+      setConfirmPaymentMethodType('account');
+      setConfirmAccountId(mentionedSource.id);
+    } else if (mentionedSource?.type === 'card') {
+      setConfirmPaymentMethodType('card');
+      setConfirmCardId(mentionedSource.id);
+    } else if (result.paymentMethodType === 'account' && suggestedAccount) {
+      setConfirmPaymentMethodType('account');
+      setConfirmAccountId(suggestedAccount.id);
+    } else if (result.paymentMethodType === 'card' && suggestedCard) {
+      setConfirmPaymentMethodType('card');
+      setConfirmCardId(suggestedCard.id);
+    } else if (result.paymentMethodType) {
       setConfirmPaymentMethodType(result.paymentMethodType);
-    }
-    if (result.suggestedAccountId) {
-      setConfirmAccountId(result.suggestedAccountId);
-    }
-    if (result.suggestedCardId) {
-      setConfirmCardId(result.suggestedCardId);
     }
     setConfirmInstallmentMonths(result.installmentMonths || 1);
     setConfirmInstallmentCurrentRound(result.installmentCurrentRound || 1);
