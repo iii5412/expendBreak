@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 
 interface FileExportResult {
   saved: boolean;
+  bytesWritten?: number;
 }
 
 interface FileExportPlugin {
