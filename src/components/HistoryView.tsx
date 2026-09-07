@@ -14,6 +14,7 @@ import {
   Mic,
   ChevronLeft,
   ChevronRight,
+  MessageSquareText,
 } from 'lucide-react';
 import { Transaction, Category, BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { AccountingPeriod, formatKRW, formatPeriodRange, getLocalDateString } from '../utils/calculations';
@@ -526,6 +527,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                         <span className="text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
                           <Mic className="w-2.5 h-2.5" />
                           <span>음성</span>
+                        </span>
+                      )}
+                      {t.source === 'sms' && (
+                        <span className="flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/20 px-1.5 py-0.5 text-xs text-sky-300">
+                          <MessageSquareText className="h-2.5 w-2.5" />
+                          <span>SMS 자동</span>
                         </span>
                       )}
                       {t.receipt && (

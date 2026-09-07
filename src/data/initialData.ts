@@ -45,6 +45,8 @@ export const INITIAL_USER_PROFILE: UserProfile = {
   defaultAllowanceLimit: 0,
   aiClassificationEnabled: false,
   aiInsightsEnabled: false,
+  smsAutoImportEnabled: false,
+  smsConsentAt: null,
   securityPinEnabled: true,
   widgetPrivacyMode: 'unlock_required',
   theme: 'dark',

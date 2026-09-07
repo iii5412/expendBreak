@@ -89,6 +89,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [cardName, setCardName] = useState('');
   const [cardCompany, setCardCompany] = useState('신한카드');
   const [cardType, setCardType] = useState<'credit' | 'debit'>('credit');
+  const [cardLast4, setCardLast4] = useState('');
   const [cardLinkedAccountId, setCardLinkedAccountId] = useState<string>('');
   const [cardBillingDay, setCardBillingDay] = useState<number>(25);
   const [cardStatementClosingDay, setCardStatementClosingDay] = useState<number | null>(null);
@@ -184,6 +185,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setCardName(card.cardName || '');
       setCardCompany(card.cardCompany || '신한카드');
       setCardType(card.cardType || 'credit');
+      setCardLast4(card.cardLast4 || '');
       setCardLinkedAccountId(card.linkedAccountId || '');
       setCardBillingDay(card.billingDay || 25);
       setCardStatementClosingDay(card.statementClosingDay ?? null);
@@ -193,6 +195,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setCardName('');
       setCardCompany('신한카드');
       setCardType('credit');
+      setCardLast4('');
       setCardLinkedAccountId(bankAccounts[0]?.id || '');
       setCardBillingDay(25);
       setCardStatementClosingDay(findCardIssuerPreset('신한카드', 25)?.statementClosingDay ?? null);
@@ -208,6 +211,11 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       document.getElementById('card-name-input')?.focus();
       return;
     }
+    if (cardLast4 && !/^\d{4}$/.test(cardLast4)) {
+      setCardError('SMS 연결용 카드번호는 마지막 숫자 4자리만 입력해 주세요.');
+      document.getElementById('card-last4-input')?.focus();
+      return;
+    }
     setCardError(null);
 
     if (editingCardId) {
@@ -215,6 +223,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         cardName,
         cardCompany,
         cardType,
+        cardLast4: cardLast4 || null,
         linkedAccountId: cardLinkedAccountId || null,
         billingDay: Number(cardBillingDay) || null,
         statementClosingDay: cardStatementClosingDay,
@@ -225,6 +234,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         cardName,
         cardCompany,
         cardType,
+        cardLast4: cardLast4 || null,
         linkedAccountId: cardLinkedAccountId || null,
         billingDay: Number(cardBillingDay) || null,
         statementClosingDay: cardStatementClosingDay,
@@ -599,6 +609,9 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                           <p className="text-xs text-slate-400 mt-0.5">
                             {card.cardCompany} {card.billingDay ? `· 매월 ${card.billingDay}일 결제` : ''}
                           </p>
+                          {card.cardLast4 && (
+                            <p className="mt-0.5 text-xs text-slate-500">SMS 연결 ·••• {card.cardLast4}</p>
+                          )}
                         </div>
                       </div>
 
@@ -941,6 +954,29 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     <option value="debit">체크카드</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label htmlFor="card-last4-input" className="block font-medium text-slate-300 mb-1">
+                  카드번호 끝 4자리 <span className="font-normal text-slate-500">(SMS 자동 연결용)</span>
+                </label>
+                <input
+                  id="card-last4-input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={4}
+                  placeholder="예: 1234"
+                  value={cardLast4}
+                  onChange={event => {
+                    setCardError(null);
+                    setCardLast4(event.target.value.replace(/\D/g, '').slice(0, 4));
+                  }}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                />
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  전체 카드번호는 저장하지 않습니다. 같은 카드사의 카드가 여러 장일 때 자동으로 구분합니다.
+                </p>
               </div>
 
               <div>

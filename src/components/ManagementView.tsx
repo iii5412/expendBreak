@@ -61,6 +61,7 @@ import { InstallAppCard } from './InstallAppCard';
 import { AndroidAppCard } from './AndroidAppCard';
 import { normalizeAppTheme } from '../utils/theme';
 import { ScreenHeader } from './ui/ScreenHeader';
+import { SmsImportSettingsCard } from './SmsImportSettingsCard';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -1370,6 +1371,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
           <InstallAppCard />
           <AndroidAppCard userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
+          <SmsImportSettingsCard userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
 
           {/* AI Settings Toggles */}
           <div className="eb-panel space-y-3 rounded-xl p-4">

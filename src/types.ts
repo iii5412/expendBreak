@@ -57,6 +57,8 @@ export interface PaymentCard {
   cardName: string; // 카드명 (e.g. 신한 딥드림 카드)
   cardCompany: string; // 카드사 (e.g. 신한카드, 삼성카드)
   cardType: 'credit' | 'debit'; // 신용카드 / 체크카드
+  /** SMS 승인 문자와 연결할 때만 쓰는 카드번호 끝 4자리. */
+  cardLast4?: string | null;
   linkedAccountId?: string | null; // 출금 계좌 ID (BankAccount ID)
   billingDay?: number | null; // 결제일 (1~31)
   /** 이용기간 마감일 (1~31). 예: 25일 결제 · 마감 11일 → 전월 12일~당월 11일 사용분 청구.
@@ -107,7 +109,11 @@ export interface Transaction {
   categoryId: string;
   merchant: string;
   memo: string;
-  source: 'manual' | 'ai' | 'receipt' | 'voice';
+  source: 'manual' | 'ai' | 'receipt' | 'voice' | 'sms';
+  /** Stable, non-reversible key used to suppress duplicate SMS imports. */
+  sourceFingerprint?: string | null;
+  /** Card approval number when the issuer includes one; never the SMS body. */
+  sourceReference?: string | null;
   /** Defaults to 'normal' when absent. */
   role?: TransactionRole;
   /** Payment cycle (YYYY-MM) a card settlement transaction pays off. */
@@ -270,6 +276,10 @@ export interface UserProfile {
   aiClassificationEnabled: boolean;
   aiInsightsEnabled: boolean;
   aiConsentAt: string | null;
+  /** Import newly arriving financial SMS messages on this Android device. */
+  smsAutoImportEnabled?: boolean;
+  /** Records the account-scoped disclosure acceptance for SMS processing. */
+  smsConsentAt?: string | null;
   /** Set once the setup sheet is finished or skipped, so it stops prompting. */
   onboardingCompletedAt?: string | null;
   /** Idle minutes before the app locks. 0 disables the idle lock. */

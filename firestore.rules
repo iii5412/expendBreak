@@ -78,7 +78,13 @@ service cloud.firestore {
           && validTransactionType()
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
-          && request.resource.data.source in ['manual', 'ai', 'receipt', 'voice']
+          && request.resource.data.source in ['manual', 'ai', 'receipt', 'voice', 'sms']
+          && (!('sourceFingerprint' in request.resource.data)
+              || request.resource.data.sourceFingerprint == null
+              || (request.resource.data.sourceFingerprint is string && request.resource.data.sourceFingerprint.size() <= 100))
+          && (!('sourceReference' in request.resource.data)
+              || request.resource.data.sourceReference == null
+              || (request.resource.data.sourceReference is string && request.resource.data.sourceReference.size() <= 40))
           && (!('tags' in request.resource.data) || request.resource.data.tags is list && request.resource.data.tags.size() <= 10)
           && categoryMatches(userId)
           && validReceipt(userId)

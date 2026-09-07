@@ -1520,7 +1520,7 @@ export function exportTransactionsCSV(yearMonth?: string, monthStartDay: number 
     csvCell(t.merchant || ''),
     csvCell(t.memo || ''),
     csvCell((t.tags || []).join('|')),
-    csvCell(t.source === 'receipt' ? '영수증OCR' : t.source === 'ai' ? 'AI자동' : '직접입력'),
+    csvCell(t.source === 'receipt' ? '영수증OCR' : t.source === 'ai' ? 'AI자동' : t.source === 'voice' ? '음성' : t.source === 'sms' ? 'SMS자동' : '직접입력'),
     csvCell(t.receipt?.receiptNumber || ''),
     csvCell((t.receipt?.lineItems || []).map(item => item.name).join('|')),
   ]);

@@ -116,6 +116,18 @@ import {
   setWidgetLocked,
   subscribeToNativeDestinations,
 } from './utils/widget';
+import {
+  acknowledgePendingSms,
+  clearPendingSms,
+  configureSmsImport,
+  findCancellationTarget,
+  isDuplicateSmsTransaction,
+  matchPaymentCard,
+  parseFinancialSms,
+  readPendingSms,
+  resolveSmsCategory,
+  subscribeToPendingSms,
+} from './utils/smsImport';
 
 type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
@@ -156,6 +168,8 @@ export default function App() {
   /** Variable-amount chip tapped on the home-screen widget, awaiting its amount. */
   const [pendingWidgetQuickEntryId, setPendingWidgetQuickEntryId] = useState<string | null>(null);
   const [nativeDestination, setNativeDestination] = useState<NativeDestination | null>(null);
+  const smsImportBusy = useRef(false);
+  const smsImportRerunRequested = useRef(false);
 
   // Reload state from storage
   const refreshAppData = () => {
@@ -213,6 +227,127 @@ export default function App() {
     return subscribeToStorage(refreshAppData);
   }, [bootState, currentYM]);
 
+  useEffect(() => {
+    if (bootState !== 'ready' || !userProfile.uid) return;
+    let cancelled = false;
+    let unsubscribe = () => undefined;
+
+    const importPending = async () => {
+      if (cancelled || !userProfile.smsAutoImportEnabled) return;
+      if (smsImportBusy.current) {
+        smsImportRerunRequested.current = true;
+        return;
+      }
+      smsImportBusy.current = true;
+      try {
+        const messages = await readPendingSms(userProfile.uid);
+        const acknowledgedIds: string[] = [];
+        let imported = 0;
+        let cancelledTransactions = 0;
+        let unresolvedCancellations = 0;
+
+        for (const message of messages) {
+          const parsed = parseFinancialSms(message);
+          if (!parsed) {
+            acknowledgedIds.push(message.id);
+            continue;
+          }
+          const currentTransactions = getTransactions();
+          const card = matchPaymentCard(parsed, getPaymentCards());
+
+          if (parsed.kind === 'cancellation') {
+            const target = findCancellationTarget(parsed, currentTransactions, card?.id || null);
+            if (!target) {
+              unresolvedCancellations += 1;
+              acknowledgedIds.push(message.id);
+              continue;
+            }
+            const snapshot = deleteTransaction(target.id);
+            if (snapshot) {
+              finalizeTransactionDeletion(snapshot);
+              cancelledTransactions += 1;
+            }
+            acknowledgedIds.push(message.id);
+            continue;
+          }
+
+          if (isDuplicateSmsTransaction(parsed, currentTransactions)) {
+            acknowledgedIds.push(message.id);
+            continue;
+          }
+          const categoryId = resolveSmsCategory(parsed.merchant, getCategories(), getMerchantRules());
+          if (!categoryId) continue;
+          saveTransaction({
+            type: 'expense',
+            amount: parsed.amount,
+            occurredAt: parsed.occurredAt,
+            localDate: parsed.localDate,
+            categoryId,
+            merchant: parsed.merchant,
+            memo: `[SMS 자동 기록] ${parsed.issuer || '카드'}${parsed.cardLast4 ? ` 끝 ${parsed.cardLast4}` : ''}`,
+            source: 'sms',
+            sourceFingerprint: parsed.fingerprint,
+            sourceReference: parsed.approvalCode,
+            paymentMethodType: 'card',
+            accountId: null,
+            cardId: card?.id || null,
+            installment: parsed.installmentMonths && parsed.installmentMonths > 1 ? {
+              totalMonths: parsed.installmentMonths,
+              currentRound: 1,
+              baseYearMonth: parsed.localDate.slice(0, 7),
+            } : null,
+          });
+          imported += 1;
+          acknowledgedIds.push(message.id);
+        }
+
+        await acknowledgePendingSms(userProfile.uid, acknowledgedIds);
+
+        if (imported || cancelledTransactions) {
+          refreshAppData();
+          showToast({
+            message: imported ? `SMS 지출 ${imported}건을 자동 기록했습니다.` : 'SMS 승인취소를 반영했습니다.',
+            description: cancelledTransactions ? `승인취소 ${cancelledTransactions}건 반영` : undefined,
+            tone: 'success',
+          });
+        }
+        if (unresolvedCancellations) {
+          showToast({
+            message: `승인취소 문자 ${unresolvedCancellations}건을 자동 연결하지 못했습니다.`,
+            description: '금액과 사용처가 같은 승인 내역이 여러 건이거나 기존 승인 내역이 없습니다. 내역에서 직접 확인해 주세요.',
+            tone: 'warning',
+            durationMs: 12000,
+          });
+        }
+      } catch (error) {
+        console.error('SMS import failed:', error);
+        showToast({ message: 'SMS 지출을 불러오지 못했습니다.', tone: 'error' });
+      } finally {
+        smsImportBusy.current = false;
+        if (smsImportRerunRequested.current && !cancelled) {
+          smsImportRerunRequested.current = false;
+          void importPending();
+        }
+      }
+    };
+
+    void configureSmsImport(userProfile.uid, Boolean(userProfile.smsAutoImportEnabled))
+      .then(importPending)
+      .catch(error => console.error('SMS import configuration failed:', error));
+    void subscribeToPendingSms(() => void importPending())
+      .then(remove => {
+        if (cancelled) remove();
+        else unsubscribe = remove;
+      })
+      .catch(error => console.error('SMS listener subscription failed:', error));
+
+    return () => {
+      cancelled = true;
+      smsImportRerunRequested.current = false;
+      unsubscribe();
+    };
+  }, [bootState, userProfile.uid, userProfile.smsAutoImportEnabled]);
+
   // Boot only loads the recent accounting periods, so moving the selector far
   // enough back has to fetch the rest before this month's figures mean anything.
   useEffect(() => {
@@ -229,6 +364,14 @@ export default function App() {
 
   const handleLock = async () => {
     setIsAddModalOpen(false);
+    if (userProfile.wipeCacheOnLock && userProfile.uid) {
+      await configureSmsImport(userProfile.uid, false).catch(error => {
+        console.error('Unable to pause SMS import while wiping device data:', error);
+      });
+      await clearPendingSms(userProfile.uid).catch(error => {
+        console.error('Unable to clear pending SMS while wiping device data:', error);
+      });
+    }
     shutdownStorage();
     await logoutOwner();
     setTransactions([]);
