@@ -109,6 +109,7 @@ import { buildCycleClosingReport } from './utils/cycleClosing';
 import { buildCashflowTimeline } from './utils/cashflowTimeline';
 import { applyAppTheme } from './utils/theme';
 import { serializeDiagnosticExport } from './utils/diagnosticExport';
+import { saveJsonWithNativePicker } from './utils/fileExport';
 import {
   buildWidgetSnapshot,
   NativeDestination,
@@ -1141,7 +1142,7 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleExportDiagnostic = () => {
+  const handleExportDiagnostic = async () => {
     const json = serializeDiagnosticExport({
       selectedYearMonth: currentYM,
       userProfile,
@@ -1162,20 +1163,37 @@ export default function App() {
       planningOccurrenceIds: planningAllRecurringOccurrences.map(occurrence => occurrence.id),
       planningTransactionIds: planningTransactions.map(transaction => transaction.id),
     });
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `지출브레이크_진단데이터_${currentYM}.json`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showToast({
-      message: '진단 데이터 파일을 저장했습니다.',
-      description: '다운로드한 JSON 파일을 대화에 첨부해 주세요.',
-      tone: 'success',
-    });
+    const fileName = `지출브레이크_진단데이터_${currentYM}.json`;
+
+    try {
+      const nativeResult = await saveJsonWithNativePicker(fileName, json);
+      if (nativeResult && !nativeResult.saved) return;
+
+      if (!nativeResult) {
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+
+      showToast({
+        message: '진단 데이터 파일을 저장했습니다.',
+        description: '저장한 JSON 파일을 대화에 첨부해 주세요.',
+        tone: 'success',
+      });
+    } catch (error) {
+      console.error('Diagnostic export failed', error);
+      showToast({
+        message: '진단 데이터 파일을 저장하지 못했습니다.',
+        description: '저장 위치를 다시 선택한 뒤 재시도해 주세요.',
+        tone: 'error',
+      });
+    }
   };
 
   if (bootState === 'checking' || bootState === 'loading') {
