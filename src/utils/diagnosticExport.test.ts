@@ -53,6 +53,9 @@ describe('diagnostic export', () => {
     const snapshot = JSON.parse(json);
 
     expect(snapshot.schema).toBe('expendbreak-diagnostic-v1');
+    expect(snapshot.context.accountingPeriod).toMatchObject({ startDate: '2026-08-10', endDate: '2026-09-09' });
+    expect(snapshot.classification.policies.loadedPlans).toBe('retained_until_explicit_reload');
+    expect(snapshot.records.paymentCards[0]).not.toHaveProperty('memo');
     expect(snapshot.records.bankAccounts[0]).toMatchObject({ id: 'account-1', balance: 1_000_000 });
     expect(snapshot.records.transactions[0]).toMatchObject({ cardId: 'card-1', amount: 100_000 });
     expect(json).not.toContain('private-uid');

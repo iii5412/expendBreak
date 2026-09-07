@@ -51,7 +51,7 @@ describe('accounting period', () => {
   it('reports a period that has not started and one that has ended', () => {
     expect(getAccountingPeriod('2026-09', 1, now).daysPassed).toBe(0);
     expect(getAccountingPeriod('2026-07', 1, now).daysPassed).toBe(31);
-    expect(getAccountingPeriod('2026-07', 1, now).daysRemaining).toBe(1);
+    expect(getAccountingPeriod('2026-07', 1, now).daysRemaining).toBe(0);
   });
 
   it('handles February and a shorter following month', () => {

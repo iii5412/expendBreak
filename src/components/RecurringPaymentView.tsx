@@ -413,7 +413,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                     </div>
                     <div className="mt-1 text-[11px] text-indigo-300">
                       {card.source === 'confirmed'
-                        ? '직접 저장한 월 결제액'
+                        ? '확정 청구액'
+                        : card.estimatedAmount === 0 ? '사용 기록 없음 · 0원 청구가 확정된 것은 아닙니다'
                         : card.hasStatementWindow
                           ? `${card.usageStartDate} ~ ${card.usageEndDate} 사용액 자동 계산`
                           : `${card.usageYearMonth} 사용액 자동 계산 (이용기간 미설정)`}
@@ -723,6 +724,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-base text-white">{tmpl?.name || '삭제된 정기 항목'}</span>
+                      {tmpl?.archivedAt && <span className="text-xs text-amber-300">원본 삭제됨 · 이 월의 계획은 유지 중 (필요 없으면 제외)</span>}
                       {isIncome ? (
                         <span className="text-xs font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30 flex items-center gap-1">
                           <TrendingUp className="w-3 h-3" /> 고정 수입

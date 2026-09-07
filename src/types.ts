@@ -45,6 +45,7 @@ export interface BankAccount {
   accountNumber: string; // 계좌번호
   accountHolder: string; // 예금주
   balance: number; // 사용자가 직접 입력하는 잔액 스냅샷
+  balanceConfirmed?: boolean; // Explicitly confirmed zero is different from an unset balance.
   balanceAsOf?: string; // YYYY-MM-DD, 잔액 기준일
   balanceUpdatedAt?: string; // ISO String, 잔액 마지막 수정 시각
   memo?: string; // 비고

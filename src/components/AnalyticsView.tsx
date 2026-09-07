@@ -1,3 +1,4 @@
+import { spendingConclusion, spendingUsageLabel } from '../utils/spendingStatus';
 import React, { useState, useEffect } from 'react';
 import {
   BarChart,
@@ -68,6 +69,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     { variableOnly: true, monthStartDay: 1 },
   ).map(item => ({ name: item.categoryName, value: item.amount, color: item.color }));
   const feedbackCacheKey = [
+    summary.calculatedAt?.slice(0, 10),
+    summary.spendPeriodStatus,
+    summary.allowanceLimit,
     summary.yearMonth,
     summary.planningIncome,
     summary.accountFixedOutflow,
@@ -158,11 +162,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     feedbackCacheKey,
   ]);
 
-  const ruleBasedConclusion = summary.projectedDepletionDate
-    ? `현재 속도면 ${summary.projectedDepletionDate}에 생활비가 끝날 가능성이 있습니다.`
-    : summary.budgetUsagePercent > summary.periodProgressPercent + 10
-      ? `기간 경과보다 생활비 사용이 ${summary.budgetUsagePercent - summary.periodProgressPercent}%p 빠릅니다.`
-      : '현재 지출 속도면 이번 주기 생활비를 유지할 수 있습니다.';
+  const ruleBasedConclusion = spendingConclusion(summary);
 
   return (
     <div className="space-y-6 pb-24">
@@ -171,7 +171,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         title="지출 분석"
         description="차트를 해석하는 대신, 이번 주기의 결론과 원인 그리고 지금 바꿀 행동을 먼저 보여드립니다."
         icon={<TrendingUp className="h-4 w-4" />}
-        meta={<span>{summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 생활비 {summary.budgetUsagePercent}% 사용</span>}
+        meta={<span>{summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 가용 재원 기준 {spendingUsageLabel(summary)}</span>}
       />
 
       {/* Top AI Report Header */}

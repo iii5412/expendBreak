@@ -1,5 +1,5 @@
 import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
-import { getAccountingPeriod, getScheduledDatesInPeriod, shiftYearMonth } from './calculations';
+import { getAccountingPeriod, getScheduledDatesInPeriod, isDateInPeriod, isSpendingTransaction, shiftYearMonth } from './calculations';
 import { calculateMonthlyCardSettlementSummary } from './cardPayments';
 import { getInstallmentCharge } from './installments';
 
@@ -45,17 +45,36 @@ export function calculateFutureCommitments(
     const yearMonth = shiftYearMonth(startYearMonth, offset);
     const period = getAccountingPeriod(yearMonth, monthStartDay);
 
-    // Account transfers, from the template schedule: future cycles have no
-    // occurrences generated yet, so the template is the only source.
-    const accountFixed = recurringTemplates
-      .filter(template => {
-        if (!template.active || template.archivedAt || template.type !== 'expense') return false;
-        if (template.paymentMethodType === 'card' || template.cardSettlementCardId) return false;
-        return getScheduledDatesInPeriod(template, period).length > 0;
-      })
-      .reduce((sum, template) => (
-        sum + Math.round(template.defaultAmount) * getScheduledDatesInPeriod(template, period).length
-      ), 0);
+    const templateMap = new Map(recurringTemplates.map(template => [template.id, template]));
+    const periodOccurrences = recurringOccurrences.filter(row => isDateInPeriod(row.scheduledDate, period));
+    const periodTransactions = transactions.filter(row => row.recurringTemplateId && isDateInPeriod(row.localDate, period));
+    // Actual postings and saved month-specific plans take priority over defaults.
+    // Skipped rows also block fallback; weekly rows only block their own date.
+    let accountFixed = periodTransactions.reduce((sum, row) => {
+      const template = templateMap.get(row.recurringTemplateId!);
+      if (row.type !== 'expense' || !isSpendingTransaction(row) || template?.cardSettlementCardId
+        || (row.paymentMethodType ?? template?.paymentMethodType) === 'card') return sum;
+      return sum + Math.round(row.amount);
+    }, 0);
+    for (const row of periodOccurrences) {
+      const template = templateMap.get(row.templateId);
+      if (!template?.active || template.cardSettlementCardId || row.status === 'posted' || row.status === 'skipped'
+        || (row.typeSnapshot ?? template.type) !== 'expense'
+        || (row.paymentMethodType ?? template.paymentMethodType) === 'card'
+        || periodTransactions.some(tx => tx.recurringOccurrenceKey === row.occurrenceKey)) continue;
+      accountFixed += Math.round(row.actualAmount ?? row.expectedAmount);
+    }
+    for (const template of recurringTemplates) {
+      if (!template.active || template.archivedAt || template.type !== 'expense'
+        || template.paymentMethodType === 'card' || template.cardSettlementCardId) continue;
+      const rows = periodOccurrences.filter(row => row.templateId === template.id);
+      const posted = periodTransactions.filter(row => row.recurringTemplateId === template.id);
+      if (template.frequency === 'monthly' && (rows.length > 0 || posted.length > 0)) continue;
+      for (const date of getScheduledDatesInPeriod(template, period)) {
+        if (rows.some(row => row.scheduledDate === date) || posted.some(row => row.localDate === date)) continue;
+        accountFixed += Math.round(template.defaultAmount);
+      }
+    }
 
     const settlement = calculateMonthlyCardSettlementSummary(
       yearMonth,

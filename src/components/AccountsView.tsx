@@ -1,3 +1,6 @@
+import { hasConfirmedBalance, balanceStatus } from '../utils/accountBalances';
+import { findDuplicateAccountGroups } from '../utils/dataReview';
+import { getLocalDateString } from '../utils/calculations';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   CreditCard,
@@ -78,8 +81,10 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [accName, setAccName] = useState('');
   const [accNumber, setAccNumber] = useState('');
   const [accHolder, setAccHolder] = useState('');
+  const [accBalanceConfirmed, setAccBalanceConfirmed] = useState(false);
+  const duplicateAccountGroups = useMemo(() => findDuplicateAccountGroups(bankAccounts), [bankAccounts]);
   const [accBalance, setAccBalance] = useState<number>(0);
-  const [accBalanceAsOf, setAccBalanceAsOf] = useState(new Date().toISOString().slice(0, 10));
+  const [accBalanceAsOf, setAccBalanceAsOf] = useState(getLocalDateString());
   const [accMemo, setAccMemo] = useState('');
   const [accountError, setAccountError] = useState<string | null>(null);
 
@@ -107,7 +112,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setAccNumber(acc.accountNumber || '');
       setAccHolder(acc.accountHolder || '');
       setAccBalance(acc.balance || 0);
-      setAccBalanceAsOf(acc.balanceAsOf || new Date().toISOString().slice(0, 10));
+      setAccBalanceConfirmed(hasConfirmedBalance(acc));
+      setAccBalanceAsOf(acc.balanceAsOf || getLocalDateString());
       setAccMemo(acc.memo || '');
     } else {
       setEditingAccountId(null);
@@ -116,7 +122,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       setAccNumber('');
       setAccHolder('');
       setAccBalance(0);
-      setAccBalanceAsOf(new Date().toISOString().slice(0, 10));
+      setAccBalanceConfirmed(false);
+      setAccBalanceAsOf(getLocalDateString());
       setAccMemo('');
     }
     setIsAccountModalOpen(true);
@@ -145,6 +152,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         accountHolder: accHolder,
         balance: accBalance,
         balanceAsOf: accBalanceAsOf,
+        balanceConfirmed: accBalanceConfirmed,
         memo: accMemo,
       });
       if (previous && previous.balance !== accBalance) {
@@ -157,6 +165,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
             onAction: () => onUpdateBankAccount(previous.id, {
               balance: previous.balance,
               balanceAsOf: previous.balanceAsOf,
+              balanceConfirmed: previous.balanceConfirmed,
             }),
           },
         });
@@ -171,6 +180,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         accountHolder: accHolder,
         balance: accBalance,
         balanceAsOf: accBalanceAsOf,
+        balanceConfirmed: accBalanceConfirmed,
         memo: accMemo,
       });
       showToast({ message: `'${accName}' 계좌를 추가했습니다.`, tone: 'success' });
@@ -249,7 +259,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   };
 
   // Total balance sum
-  const totalAccountBalance = bankAccounts.reduce((sum, a) => sum + (a.balance || 0), 0);
+  const totalAccountBalance = bankAccounts.filter(hasConfirmedBalance).reduce((sum, a) => sum + (a.balance || 0), 0);
   const selectedMonthSettlement = useMemo(
     () => cardPaymentMonth === currentYM
       ? cardSettlementSummary
@@ -385,13 +395,18 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
         </div>
       </section>
 
+      {duplicateAccountGroups.length > 0 && <details className="eb-panel rounded-xl p-3 text-xs text-amber-200">
+        <summary className="cursor-pointer font-bold">계좌 중복 후보 {duplicateAccountGroups.length}묶음 확인</summary>
+        <p className="mt-2">은행과 계좌번호(번호가 없으면 별칭)가 같습니다. 실제 같은 계좌인지 확인한 뒤 연결을 점검하세요. 이름이 같은 다른 계좌일 수 있습니다.</p>
+        {duplicateAccountGroups.map(group => <div key={group[0].id} className="mt-2 flex flex-wrap gap-2">{group.map(account => <button key={account.id} onClick={() => handleOpenAccountModal(account)} className="min-h-10 rounded border border-amber-500/30 px-3">{account.bankName} {account.accountName} · 등록 {account.createdAt.slice(0,10)} · 확인/수정</button>)}</div>)}
+      </details>}
       {/* ACCOUNTS TAB */}
       {activeTab === 'accounts' && (
         <div className="space-y-4">
           {/* Top Summary Box */}
           <div className="eb-panel flex flex-col items-center justify-between gap-3 rounded-xl p-4 xs:flex-row">
             <div>
-              <span className="text-xs text-slate-400 font-medium">직접 입력 잔액 합계</span>
+              <span className="text-xs text-slate-400 font-medium">확인된 잔액 합계</span>
               <p className="eb-tabular mt-1 text-3xl font-extrabold text-white">{formatKRW(totalAccountBalance)}</p>
             </div>
             <button
@@ -518,7 +533,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       </div>
                       <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
                         <span>출금 후 예상잔액</span>
-                        <span>{formatKRW((acc.balance || 0) - (settlementAmountByAccount.get(acc.id) || 0))}</span>
+                        <span>{hasConfirmedBalance(acc) ? formatKRW((acc.balance || 0) - (settlementAmountByAccount.get(acc.id) || 0)) : '잔액 확인 필요'}</span>
                       </div>
                     </div>
                   )}
@@ -526,14 +541,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
                     <span className="text-slate-400">
                       직접 입력 잔액
-                      <span className="block text-xs mt-0.5">기준 {acc.balanceAsOf || '미지정'}</span>
+                      <span className="block text-xs mt-0.5">기준 {acc.balanceAsOf || '미지정'} · {balanceStatus(acc)}</span>
                     </span>
                     <button
                       onClick={() => handleOpenAccountModal(acc)}
                       className="font-bold text-emerald-400 text-sm hover:text-emerald-300"
                       title="잔액 수정"
                     >
-                      {formatKRW(acc.balance || 0)}
+                      {hasConfirmedBalance(acc) ? formatKRW(acc.balance || 0) : '잔액 입력/확인'}
                     </button>
                   </div>
                 </div>
@@ -676,7 +691,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                               ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
                               : 'border-amber-500/30 bg-amber-500/15 text-amber-300'
                           }`}>
-                            {monthlySettlement.source === 'confirmed' ? '확정 금액' : '자동 추정'}
+                            {monthlySettlement.source === 'confirmed' ? '확정 청구액' : monthlySettlement.estimatedAmount === 0 ? '사용 기록 없음 · 청구액 미확인' : '기록 기반 추정'}
                           </span>
                         </div>
                         <div className="flex flex-col gap-2 sm:flex-row">
@@ -816,9 +831,10 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-slate-300 mb-1">직접 입력 잔액 (KRW)</label>
+<label className="mb-2 flex items-center gap-2 text-slate-300"><input type="checkbox" checked={accBalanceConfirmed} onChange={event => setAccBalanceConfirmed(event.target.checked)} />이 잔액을 확인했습니다 (0원 포함)</label>
                   <AmountInput
                     value={accBalance || 0}
-                    onChange={setAccBalance}
+                    onChange={value => { setAccBalance(value); setAccBalanceConfirmed(true); }}
                     placeholder="0"
                     className="text-emerald-300"
                   />
@@ -832,7 +848,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       <button
                         key={adjustment.label}
                         type="button"
-                        onClick={() => setAccBalance(current => current + adjustment.value)}
+                        onClick={() => { setAccBalance(current => current + adjustment.value); setAccBalanceConfirmed(true); }}
                         className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md py-1 text-xs font-bold text-slate-300"
                       >
                         {adjustment.label}

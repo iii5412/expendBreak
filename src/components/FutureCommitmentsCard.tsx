@@ -28,10 +28,10 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100">
             <CalendarClock className="h-4 w-4 text-blue-300" />
-            앞으로 6주기에 이미 정해진 지출
+            앞으로 6주기 계획·예상 지출
           </h3>
           <p className="mt-0.5 text-xs text-slate-400">
-            계좌 고정지출과 카드대금 이체를 분리했습니다. 이번 달 1일~말일 카드 사용분은 다음 달 카드대금에 한 번만 반영합니다.
+            저장된 월별 금액·완료 기록·건너뜀을 우선 반영하며, 미생성 일정은 원본 금액으로 예상합니다. 이번 달 1일~말일 카드 사용분은 다음 달 카드대금에 한 번만 반영합니다.
           </p>
         </div>
       </div>
@@ -56,7 +56,7 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
             <div
               className="flex h-3 w-full overflow-hidden border border-slate-800 bg-slate-950"
               role="img"
-              aria-label={`${month.yearMonth} 확정 지출 ${formatKRW(month.total)}: 계좌 고정지출 ${formatKRW(month.accountFixed)}, 할부 ${formatKRW(month.installments)}, 카드대금 ${formatKRW(month.cardSettlement)}`}
+              aria-label={`${month.yearMonth} 계획·예상 지출 ${formatKRW(month.total)}: 계좌 고정지출 ${formatKRW(month.accountFixed)}, 할부 ${formatKRW(month.installments)}, 카드대금 ${formatKRW(month.cardSettlement)}`}
             >
               {SEGMENTS.map(segment => {
                 const value = month[segment.key];

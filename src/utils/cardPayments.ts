@@ -305,7 +305,9 @@ export function calculateCardPaymentSummary(
       && occurrence.status !== 'skipped')
     .forEach(occurrence => {
       const template = templateMap.get(occurrence.templateId);
-      if (template?.archivedAt) return;
+      // Loaded monthly plans survive master archival until explicitly reloaded.
+      // A missing/inactive master cannot create a new future reservation.
+      if (!template || !template.active) return;
       if ((occurrence.typeSnapshot ?? template?.type) !== 'expense') return;
       const paymentMethodType = occurrence.paymentMethodType ?? template?.paymentMethodType;
       if (paymentMethodType !== 'card') return;

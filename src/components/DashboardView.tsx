@@ -1,3 +1,4 @@
+import { spendingConclusion, spendingUsageLabel } from '../utils/spendingStatus';
 import React from 'react';
 import {
   ShieldAlert,
@@ -32,7 +33,7 @@ interface DashboardViewProps {
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
   onOpenAddModal: () => void;
-  onNavigateTab: (tab: 'history' | 'analytics' | 'management' | 'accounts', subTab?: string) => void;
+  onNavigateTab: (tab: 'history' | 'analytics' | 'management' | 'accounts' | 'recurring_payment', subTab?: string) => void;
   onConfirmOccurrence: (occId: string) => void;
   /** Only shown until the user finishes or skips setup. */
   showSetupPrompt: boolean;
@@ -189,7 +190,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Any card without a confirmed amount makes the total a projection, and a
   // projection should not look like a settled figure.
   const cardBillIsEstimated = cardSettlementSummary.cards
-    .some(card => card.amount > 0 && card.source === 'estimated');
+    .some(card => card.source === 'estimated');
 
   const describeRecurringPaymentMethod = (occurrence: RecurringOccurrence, template?: RecurringTemplate) => {
     const paymentMethodType = occurrence.paymentMethodType || template?.paymentMethodType;
@@ -298,7 +299,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
             <span className="font-bold uppercase tracking-[0.16em] text-rose-400">Brake status</span>
             <span>{shortDate(summary.spendPeriodStartDate)}–{shortDate(summary.spendPeriodEndDate)}</span>
-            <span>남은 {summary.spendDaysRemaining}일</span>
+            <span>{summary.spendPeriodStatus === 'closed' ? '마감' : summary.spendPeriodStatus === 'upcoming' ? '시작 전' : `남은 ${summary.spendDaysRemaining}일`}</span>
           </div>
           <div className={`flex min-h-8 items-center gap-1.5 border px-3 text-xs font-extrabold ${badgeProps.bg}`}>
             <AlertIcon className="h-3.5 w-3.5" />
@@ -309,13 +310,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div className="min-w-0">
             <h2 id="safe-money-title" className="eb-display text-sm font-bold tracking-tight text-slate-300 sm:text-base">
-              오늘 안전하게 쓸 수 있는 돈
+              {summary.spendPeriodStatus === 'closed' ? '마감한 달의 생활비 사용' : '오늘 안전하게 쓸 수 있는 돈'}
             </h2>
             <p className="eb-display eb-tabular mt-2 break-keep text-[clamp(2.55rem,11vw,4.25rem)] font-extrabold leading-none tracking-[-0.065em] text-white">
-              {formatKRW(summary.dailySafeAllowance)}
+              {formatKRW(summary.spendPeriodStatus === 'closed' ? summary.confirmedVariableExpenses : summary.dailySafeAllowance)}
             </p>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-400">
-              급여에서 계좌 고정 이체와 카드대금을 먼저 확보하고, 남은 생활비를 {summary.spendDaysRemaining}일로 나눈 안전선입니다.
+              {summary.spendPeriodStatus === 'closed' ? '소비 월이 끝났습니다. 실제 사용액과 한도 대비 결과를 확인하세요.' : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.`}
             </p>
           </div>
 
@@ -331,29 +332,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="mt-7 border-t border-slate-800/90 pt-4">
           <div className="flex flex-wrap items-end justify-between gap-2 text-xs">
             <div>
-              <span className="text-slate-400">이번 주기 생활비 사용</span>
+              <button type="button" onClick={() => onNavigateTab('history', 'spending')} className="text-blue-300 underline underline-offset-4">생활비 사용 내역 보기</button>
               <p className="eb-tabular mt-1 text-sm font-bold text-slate-100">
                 {formatKRW(summary.confirmedVariableExpenses)}
                 <span className="font-medium text-slate-400"> / {formatKRW(summary.spendableLimit)}</span>
               </p>
             </div>
             <div className="text-right">
-              <strong className="eb-tabular text-lg text-white">{summary.budgetUsagePercent}%</strong>
+              <strong className="eb-tabular text-lg text-white">{spendingUsageLabel(summary)}</strong>
               <p className="text-slate-400">기간 {summary.periodProgressPercent}% 경과</p>
             </div>
           </div>
 
           <div
             role="progressbar"
-            aria-valuenow={summary.budgetUsagePercent}
+            aria-valuenow={summary.budgetUsagePercent === null ? undefined : Math.min(100, summary.budgetUsagePercent)}
+            aria-valuetext={spendingUsageLabel(summary)}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={`이번 주기 생활비 사용률 ${summary.budgetUsagePercent}%`}
+            aria-label="가용 재원 기준 생활비 사용률"
             className="relative mt-3 h-2 overflow-hidden bg-slate-950"
           >
             <div
               className={`h-full transition-[width] duration-500 motion-reduce:transition-none ${badgeProps.barBg}`}
-              style={{ width: `${Math.min(100, summary.budgetUsagePercent)}%` }}
+              style={{ width: `${Math.min(100, summary.budgetUsagePercent ?? (summary.confirmedVariableExpenses > 0 ? 100 : 0))}%` }}
             />
           </div>
 
@@ -362,25 +364,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>{badgeProps.desc}</span>
           </div>
 
-          {summary.spendDaysPassed >= 3 && (
-            <div className="mt-3 border-l-2 border-slate-700 bg-slate-950/45 px-3 py-2.5 text-xs leading-relaxed text-slate-300">
-              {summary.projectedDepletionDate ? (
-                <>
-                  <strong className="text-rose-300">
-                    지금 속도면 {summary.projectedDepletionDate}에 생활비가 끝납니다
-                    {summary.projectedShortfallDays > 0 && ` · ${summary.projectedShortfallDays}일 부족`}
-                  </strong>
-                  {summary.requiredDailyPace > 0 && (
-                    <span> 하루 {formatKRW(summary.requiredDailyPace)}로 조정하면 주기 끝까지 유지할 수 있습니다.</span>
-                  )}
-                </>
-              ) : (
-                <span>현재 속도면 이번 주기 끝까지 생활비가 남습니다.</span>
-              )}
-            </div>
-          )}
+          <p className="mt-3 border-l-2 border-slate-700 bg-slate-950/45 px-3 py-2.5 text-xs leading-relaxed text-slate-300">{spendingConclusion(summary)}</p>
+          {summary.configuredLimitUsagePercent !== null && <p className="mt-2 text-xs text-slate-400">설정 한도 {formatKRW(summary.allowanceLimit)} · 사용률 {summary.configuredLimitUsagePercent}% · 실제 적용 한도 {formatKRW(summary.spendableLimit)}</p>}
         </div>
 
+        <details className="eb-panel rounded-xl p-3 text-xs text-slate-300">
+          <summary className="cursor-pointer font-bold">계산 기준과 연결 내역</summary>
+          <p className="mt-2">소비: {summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 현금 계획: 급여 회계 기간</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={() => onNavigateTab('history', 'income')} className="min-h-10 rounded border border-slate-700 px-3">수입 {formatKRW(summary.planningIncome)}{summary.isProjected ? ' (예정 포함)' : ''}</button>
+            <button onClick={() => onNavigateTab('recurring_payment')} className="min-h-10 rounded border border-slate-700 px-3">계좌 고정 지출 {formatKRW(summary.accountFixedOutflow)}</button>
+            <button onClick={() => onNavigateTab('accounts')} className="min-h-10 rounded border border-slate-700 px-3">카드대금 {formatKRW(summary.cardSettlementOutflow)}</button>
+            <button onClick={() => onNavigateTab('management', 'settings')} className="min-h-10 rounded border border-slate-700 px-3">생활비 한도 {formatKRW(summary.allowanceLimit)}</button>
+          </div>
+          <p className="mt-2">수입 − 계좌 고정 지출 − 카드대금 − 저축 확보액 = 생활비 재원 {formatKRW(summary.livingBudget)}{summary.isBaselineLocked ? ' (확정 계획)' : ''}. 사용액은 소비 월 기준입니다.</p>
+        </details>
         {/* Cash track: how the salary splits before any spending happens. */}
         <div className="mt-5 border-t border-slate-800 pt-4">
           <div className="mb-2 flex items-center justify-between gap-2 text-xs">

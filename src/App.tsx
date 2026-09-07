@@ -108,6 +108,7 @@ import { findHiddenRecurringItems } from './utils/hiddenRecurring';
 import { buildCycleClosingReport } from './utils/cycleClosing';
 import { buildCashflowTimeline } from './utils/cashflowTimeline';
 import { applyAppTheme } from './utils/theme';
+import { getDiagnosticRuntime } from './utils/diagnosticRuntime';
 import { serializeDiagnosticExport } from './utils/diagnosticExport';
 import { saveJsonWithNativePicker } from './utils/fileExport';
 import {
@@ -158,6 +159,13 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [paymentCards, setPaymentCards] = useState<PaymentCard[]>([]);
+  const [dateKey, setDateKey] = useState(getLocalDateString);
+  useEffect(() => {
+    const updateDate = () => setDateKey(getLocalDateString());
+    const timer = window.setInterval(updateDate, 30_000);
+    window.addEventListener('focus', updateDate);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', updateDate); };
+  }, []);
   const [cycleBaseline, setCycleBaseline] = useState<CycleBaseline | null>(null);
   const [isPaydaySheetOpen, setIsPaydaySheetOpen] = useState<boolean>(false);
   /** Reset whenever the drift changes, so "그대로 두기" hides one notice, not all of them. */
@@ -457,9 +465,9 @@ export default function App() {
   );
   const period = useMemo(
     () => getAccountingPeriod(currentYM, monthStartDay),
-    [currentYM, monthStartDay],
+    [currentYM, monthStartDay, dateKey],
   );
-  const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay]);
+  const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay, dateKey]);
   // Detection needs the generated bill amounts, which in turn need the card list
   // only — no dependency on planning, so this stays above the planning memos.
   const rawCardSettlementSummary = useMemo(
@@ -486,9 +494,10 @@ export default function App() {
     [cardSettlementCandidates],
   );
   const planningRecurringTemplates = useMemo(
-    () => recurringTemplates.filter(template => !duplicateCardSettlementTemplateIds.has(template.id)
-      && (!template.archivedAt || recurringOccurrences.some(occurrence => occurrence.templateId === template.id))),
-    [recurringTemplates, recurringOccurrences, duplicateCardSettlementTemplateIds],
+    // Keep metadata for every loaded plan, including archived masters. Selecting
+    // another month must never turn a retained occurrence into an orphan.
+    () => recurringTemplates.filter(template => !duplicateCardSettlementTemplateIds.has(template.id)),
+    [recurringTemplates, duplicateCardSettlementTemplateIds],
   );
   const planningRecurringOccurrences = useMemo(
     () => recurringOccurrences.filter(occurrence => !duplicateCardSettlementTemplateIds.has(occurrence.templateId)),
@@ -554,7 +563,7 @@ export default function App() {
         reserveUnmaterializedTemplates: false,
       },
     );
-  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay, cardSettlementSummary, cycleBaseline]);
+  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay, cardSettlementSummary, cycleBaseline, dateKey]);
 
   const categoryMap = useMemo(() => {
     return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
@@ -581,13 +590,13 @@ export default function App() {
   const futureCommitments = useMemo(
     () => calculateFutureCommitments(
       currentYM,
-      transactions,
+      planningTransactions,
       planningRecurringTemplates,
       planningAllRecurringOccurrences,
       paymentCards,
       monthStartDay,
     ),
-    [currentYM, transactions, planningRecurringTemplates, planningAllRecurringOccurrences, paymentCards, monthStartDay],
+    [currentYM, planningTransactions, planningRecurringTemplates, planningAllRecurringOccurrences, paymentCards, monthStartDay],
   );
 
   // The report only makes sense once the cycle it covers is over and the user
@@ -654,7 +663,9 @@ export default function App() {
   }, [recurringTemplates]);
 
   // Handlers
+  const [historyView, setHistoryView] = useState<string | undefined>();
   const handleNavigateTab = (tab: NavTab, subTab?: string) => {
+    if (tab === 'history') setHistoryView(subTab);
     setActiveTab(tab);
     if (subTab) {
       setManagementSubTab(subTab);
@@ -708,8 +719,8 @@ export default function App() {
     if (bootState !== 'ready') return;
     const snapshot = buildWidgetSnapshot(
       currentYM,
-      period.endDate,
-      summary,
+      summary.spendPeriodEndDate,
+      { ...summary, daysRemaining: summary.spendDaysRemaining },
       userProfile,
       new Date(),
       // Most-used first: the widget shows only a handful, so they should be the
@@ -727,7 +738,8 @@ export default function App() {
     summary.confirmedVariableExpenses,
     summary.spendableLimit,
     summary.dailySafeAllowance,
-    summary.daysRemaining,
+    summary.spendDaysRemaining,
+    summary.spendPeriodEndDate,
     summary.alertLevel,
     userProfile.idleLockMinutes,
     userProfile.widgetPrivacyMode,
@@ -883,12 +895,19 @@ export default function App() {
   };
 
   const handleReloadRecurringPlan = async () => {
+    const pending = recurringOccurrences.filter(row => row.status !== 'posted' && row.status !== 'skipped');
+    const overrides = pending.filter(row => row.actualAmount != null);
+    const retired = pending.filter(row => recurringTemplates.some(template => template.id === row.templateId && template.archivedAt));
     const accepted = await confirm({
       title: `${currentYM} 정기 항목을 새로 불러올까요?`,
       description: '납부일 변경으로 남은 중복 건을 정리하고, 미처리 일정만 현재 정기/고정 설정에서 다시 만듭니다. 이미 확정된 거래와 납부 완료 기록은 유지됩니다.',
       details: [
         { label: '대상 기간', value: `${period.startDate} ~ ${period.endDate}` },
-        { label: '카드 결제계좌', value: '전월 현재까지 등록된 신용카드 사용액으로 다시 계산' },
+        { label: '다시 만드는 미처리 일정', value: pending.length + '건' },
+        { label: '삭제 원본에서 제외될 일정', value: retired.length + '건' },
+        { label: '월별 직접 수정액 초기화', value: overrides.length + '건 · 이전 월 기록 또는 원본 금액으로 재산정' },
+        ...overrides.map(row => ({ label: (recurringTemplates.find(template => template.id === row.templateId)?.name || '정기 항목') + ' ' + row.scheduledDate, value: formatKRW(row.actualAmount!) + ' → 이전 월 기록/원본 기준' })),
+        { label: '납부 완료·건너뜀', value: '변경하지 않음' },
       ],
       confirmLabel: '새로 불러오기',
     });
@@ -1143,29 +1162,31 @@ export default function App() {
   };
 
   const handleExportDiagnostic = async () => {
-    const json = serializeDiagnosticExport({
-      selectedYearMonth: currentYM,
-      userProfile,
-      bankAccounts,
-      paymentCards,
-      recurringTemplates,
-      recurringOccurrences: allRecurringOccurrences,
-      transactions,
-      categories,
-      budget,
-      cycleBaseline,
-      monthSummary: summary,
-      cardSettlementSummary,
-      futureCommitments,
-      cardSettlementCandidates,
-      excludedCardSettlementTemplateIds: [...duplicateCardSettlementTemplateIds],
-      planningTemplateIds: planningRecurringTemplates.map(template => template.id),
-      planningOccurrenceIds: planningAllRecurringOccurrences.map(occurrence => occurrence.id),
-      planningTransactionIds: planningTransactions.map(transaction => transaction.id),
-    });
-    const fileName = `지출브레이크_진단데이터_${currentYM}.json`;
-
     try {
+      const runtime = await getDiagnosticRuntime();
+      const json = serializeDiagnosticExport({
+        runtime,
+        selectedYearMonth: currentYM,
+        userProfile,
+        bankAccounts,
+        paymentCards,
+        recurringTemplates,
+        recurringOccurrences: allRecurringOccurrences,
+        transactions,
+        categories,
+        budget,
+        cycleBaseline,
+        monthSummary: summary,
+        cardSettlementSummary,
+        futureCommitments,
+        cardSettlementCandidates,
+        excludedCardSettlementTemplateIds: [...duplicateCardSettlementTemplateIds],
+        planningTemplateIds: planningRecurringTemplates.map(template => template.id),
+        planningOccurrenceIds: planningAllRecurringOccurrences.map(occurrence => occurrence.id),
+        planningTransactionIds: planningTransactions.map(transaction => transaction.id),
+      });
+      const fileName = `지출브레이크_진단데이터_${currentYM}.json`;
+
       const nativeResult = await saveJsonWithNativePicker(fileName, json);
       if (nativeResult && !nativeResult.saved) return;
 
@@ -1178,7 +1199,7 @@ export default function App() {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
       }
 
       showToast({
@@ -1239,6 +1260,16 @@ export default function App() {
           />
         </div>
 
+        {cardSettlementSummary.cards.some(card => card.source === 'estimated') && <details className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">
+          <summary className="cursor-pointer font-bold">카드 청구액 {cardSettlementSummary.cards.filter(card => card.source === 'estimated').length}건 확인 필요</summary>
+          <p className="mt-2">기록 기반 추정액입니다. 사용 기록이 없다는 이유로 실제 청구액이 0원이 되는 것은 아닙니다.</p>
+          {cardSettlementSummary.cards.filter(card => card.source === 'estimated').map(card => {
+            const replaced = cardSettlementCandidates.filter(candidate => candidate.cardId === card.cardId && candidate.status === 'replaced');
+            const previous = replaced.reduce((sum, candidate) => sum + (recurringTemplates.find(template => template.id === candidate.templateId)?.defaultAmount || 0), 0);
+            return <p key={card.cardId} className="mt-1">{card.cardName}: {card.estimatedAmount === 0 ? '사용 기록 없음 · 청구액 미확인' : formatKRW(card.estimatedAmount) + ' 추정'}{previous > 0 && ' · 대체된 정기 원본 ' + formatKRW(previous)}{!card.hasStatementWindow && ' · 이용기간 미설정'}</p>;
+          })}
+          <button className="mt-2 min-h-10 rounded border border-amber-500/40 px-3" onClick={() => handleNavigateTab('accounts')}>청구액·이용기간 확인</button>
+        </details>}
         <Suspense fallback={<ViewLoading />}>
         {activeTab === 'home' && (
           <DashboardView
@@ -1384,6 +1415,9 @@ export default function App() {
 
         {activeTab === 'history' && (
           <HistoryView
+            key={`${currentYM}:${historyView || 'spending'}`}
+            initialView={historyView}
+            replacedTemplateIds={[...duplicateCardSettlementTemplateIds]}
             transactions={transactions}
             categories={categories}
             bankAccounts={bankAccounts}
@@ -1407,6 +1441,7 @@ export default function App() {
 
         {activeTab === 'management' && (
           <ManagementView
+            allRecurringOccurrences={allRecurringOccurrences}
             initialSubTab={managementSubTab}
             recurringTemplates={recurringTemplates}
             recurringOccurrences={planningRecurringOccurrences}

@@ -1506,7 +1506,9 @@ it. Never add the two together and never treat the card bill as new spending.
 - User-set Spending Cap (0 means none): ${monthSummary.allowanceLimit} KRW
 - Planned Savings: ${monthSummary.plannedSavings} KRW
 - Daily Safe Spend: ${monthSummary.dailySafeAllowance} KRW
-- Usage: ${monthSummary.budgetUsagePercent}%
+- Available-budget usage: ${monthSummary.budgetUsagePercent == null ? "unavailable: no spending capacity" : `${monthSummary.budgetUsagePercent}%`}
+- Configured-limit usage: ${monthSummary.configuredLimitUsagePercent ?? "not set"}
+- Spending period status: ${monthSummary.spendPeriodStatus ?? "unknown"} (do not forecast a closed month)
 - Alert Level: ${monthSummary.alertLevel}
 - Top Spending Category Breakdown: ${JSON.stringify(categoryBreakdown?.slice(0, 5) || [])}
 

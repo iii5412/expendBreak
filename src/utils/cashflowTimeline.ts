@@ -1,3 +1,4 @@
+import { hasConfirmedBalance } from './accountBalances';
 import { BankAccount, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { AccountingPeriod, getLocalDateString, isDateInPeriod } from './calculations';
 import { MonthlyCardSettlementSummary } from './cardPayments';
@@ -41,7 +42,8 @@ export function buildCashflowTimeline(
   dailySpendRate: number,
   now = new Date(),
 ): CashflowTimeline {
-  const startingBalance = bankAccounts.reduce((sum, account) => sum + Math.round(account.balance || 0), 0);
+  const allBalancesConfirmed = bankAccounts.length > 0 && bankAccounts.every(hasConfirmedBalance);
+  const startingBalance = bankAccounts.filter(hasConfirmedBalance).reduce((sum, account) => sum + Math.round(account.balance || 0), 0);
   const templateMap = new Map(templates.map(template => [template.id, template]));
   const today = getLocalDateString(now);
   const recordedBalanceDates = bankAccounts
@@ -142,7 +144,7 @@ export function buildCashflowTimeline(
     shortfallDate,
     lowestBalance,
     hasStartingBalance: !snapshotFallsAfterPeriod
-      && bankAccounts.some(account => Math.round(account.balance || 0) !== 0),
+      && allBalancesConfirmed,
     balanceAsOfDate,
   };
 }

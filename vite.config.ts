@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import packageInfo from './package.json';
 import {defineConfig, Plugin} from 'vite';
 
 /**
@@ -118,6 +119,7 @@ self.addEventListener('fetch', event => {
 
 export default defineConfig(() => {
   return {
+    define: { __APP_BUILD__: JSON.stringify({ version: packageInfo.version, builtAt: new Date().toISOString() }) },
     plugins: [react(), tailwindcss(), serviceWorkerPlugin()],
     resolve: {
       alias: {

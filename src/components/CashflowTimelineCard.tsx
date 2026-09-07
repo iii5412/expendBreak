@@ -18,7 +18,8 @@ const HEIGHT = 110;
 const PADDING = 6;
 
 export const CashflowTimelineCard: React.FC<CashflowTimelineCardProps> = ({ timeline }) => {
-  if (!timeline.hasStartingBalance || timeline.points.length < 2) return null;
+  if (!timeline.hasStartingBalance) return <section className="eb-panel rounded-xl p-4 text-xs text-slate-400"><h3 className="font-bold text-slate-200">잔고 흐름 계산 준비</h3><p className="mt-2">계좌·카드에서 각 계좌의 잔액과 기준일을 확인해 주세요. 0원도 확인할 수 있습니다. 잔액 기준일보다 이전 기간의 잔고는 계산하지 않습니다.</p></section>;
+  if (timeline.points.length < 2) return null;
 
   const balances = timeline.points.map(point => point.balance);
   const maxBalance = Math.max(...balances, 0);

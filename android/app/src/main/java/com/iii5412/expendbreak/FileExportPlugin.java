@@ -18,6 +18,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import org.json.JSONObject;
+import org.json.JSONException;
 
 @CapacitorPlugin(name = "FileExport")
 public class FileExportPlugin extends Plugin {
@@ -31,6 +36,13 @@ public class FileExportPlugin extends Plugin {
 
         if (fileName == null || fileName.trim().isEmpty() || content == null || content.isEmpty()) {
             call.reject("File name and content are required");
+            return;
+        }
+
+        try {
+            new JSONObject(content);
+        } catch (JSONException error) {
+            call.reject("Invalid JSON content", error);
             return;
         }
 
@@ -110,6 +122,13 @@ public class FileExportPlugin extends Plugin {
                 );
             }
 
+            try (InputStream expected = new FileInputStream(pendingFile);
+                 InputStream saved = getContext().getContentResolver().openInputStream(target)) {
+                if (saved == null || !Arrays.equals(digest(expected), digest(saved))) {
+                    throw new IOException("Saved JSON content does not match the export");
+                }
+            }
+
             response.put("saved", true);
             response.put("bytesWritten", writtenBytes);
             call.resolve(response);
@@ -131,6 +150,18 @@ public class FileExportPlugin extends Plugin {
             return pendingFile;
         } catch (IOException error) {
             return null;
+        }
+    }
+
+    private static byte[] digest(InputStream input) throws IOException {
+        try {
+            MessageDigest hash = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[COPY_BUFFER_SIZE];
+            int count;
+            while ((count = input.read(buffer)) != -1) hash.update(buffer, 0, count);
+            return hash.digest();
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("Unable to verify JSON content", error);
         }
     }
 

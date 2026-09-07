@@ -1,3 +1,4 @@
+import { retainedPlanSummary } from '../utils/dataReview';
 import React, { useEffect, useState } from 'react';
 import { QuickEntryDraft, QuickEntryManager } from './QuickEntryManager';
 import {
@@ -84,6 +85,7 @@ interface ManagementViewProps {
   initialSubTab?: string;
   recurringTemplates: RecurringTemplate[];
   recurringOccurrences: RecurringOccurrence[];
+  allRecurringOccurrences?: RecurringOccurrence[];
   ignoredCardSettlementTemplateIds?: string[];
   budget: Budget;
   summary: MonthSummary;
@@ -125,6 +127,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   initialSubTab = 'recurring',
   recurringTemplates,
   recurringOccurrences,
+  allRecurringOccurrences = recurringOccurrences,
   ignoredCardSettlementTemplateIds = [],
   budget,
   summary,
@@ -284,7 +287,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     setIsAddRecurringOpen(true);
   };
 
-  const handleSaveRecurringSubmit = (e: React.FormEvent) => {
+  const handleSaveRecurringSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amountNum = parseInt(recAmount, 10);
     const dayNum = parseInt(recDay, 10);
@@ -338,6 +341,19 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       active: true,
     };
 
+    if (editingTemplateId && existingTemplate && onUpdateRecurringTemplate) {
+      const retained = retainedPlanSummary(allRecurringOccurrences, activeMonthStartDay, editingTemplateId);
+      if (retained.count > 0 && !await confirm({
+        title: '정기 원본 변경 영향 확인',
+        description: '이미 불러온 월별 계획은 유지됩니다. 해당 월에서 새로 불러오면 현재 원본과 이전 월 기록을 기준으로 다시 계산합니다.',
+        details: [
+          { label: '원본 금액 변경', value: formatKRW(existingTemplate.defaultAmount) + ' → ' + formatKRW(amountNum) },
+          { label: '납부일 변경', value: existingTemplate.dayOfMonth + '일 → ' + dayNum + '일' },
+          { label: '유지되는 미처리 계획', value: retained.count + '건 · ' + retained.months.join(', ') },
+          { label: '보존 기록', value: '완료 거래와 건너뜀은 유지' },
+        ], confirmLabel: '원본 수정',
+      })) return;
+    }
     if (editingTemplateId && onUpdateRecurringTemplate) {
       onUpdateRecurringTemplate(editingTemplateId, payload);
       triggerToast(`'${recName}' 원본 항목을 수정했습니다. 정기납부에서 새로 불러오면 월 계획에 반영됩니다.`);
@@ -352,11 +368,14 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   const handleDeleteTemplate = async (id: string, name: string) => {
     const template = recurringTemplates.find(item => item.id === id);
+    const retained = retainedPlanSummary(allRecurringOccurrences, activeMonthStartDay, id);
     const accepted = await confirm({
       title: '이 고정 항목 원본을 삭제할까요?',
       description: '선택한 월의 계획과 납부 기록은 유지됩니다. 정기납부에서 새로 불러오면 해당 월의 미처리 목록에서 빠집니다.',
       details: [
         { label: '항목', value: name },
+        { label: '유지되는 미처리 일정', value: retained.count + '건 · ' + (retained.months.join(', ') || '없음') },
+        { label: '유지되는 계획 금액', value: formatKRW(retained.amount) },
         ...(template
           ? [
               { label: '금액', value: formatKRW(template.defaultAmount) },

@@ -23,6 +23,10 @@ import { getScheduledDatesForMonth } from './recurringNormalization';
  * bill, which lands in the cycle containing its payment date.
  */
 export interface MonthSummary {
+  calculatedAt: string;
+  spendPeriodStatus: 'upcoming' | 'active' | 'closed';
+  configuredLimitUsagePercent: number | null;
+  fundingShortfall: number;
   yearMonth: string; // YYYY-MM
   daysInMonth: number;
   daysPassed: number;
@@ -99,7 +103,7 @@ export interface MonthSummary {
   dailySafeAllowance: number; // max(0, Math.floor(Remaining Allowance / Days Remaining))
 
   // Progress & Status
-  budgetUsagePercent: number;
+  budgetUsagePercent: number | null;
   alertLevel: BudgetAlertLevel;
 
   // Month-end Forecast
@@ -227,7 +231,7 @@ export function getAccountingPeriod(
     daysInMonth,
     daysPassed,
     // Days remaining includes today
-    daysRemaining: Math.max(1, daysInMonth - daysPassed + 1),
+    daysRemaining: today > endDate ? 0 : Math.min(daysInMonth, daysInMonth - daysPassed + 1),
   };
 }
 
@@ -324,6 +328,9 @@ export function calculateMonthSummary(
   // spent on the 1st through the 9th is part of this month's usage, so it has to
   // count against this month's living budget rather than the previous cycle's.
   const spendPeriod = getAccountingPeriod(yearMonth, 1, now);
+  const today = getLocalDateString(now);
+  const spendPeriodStatus = today < spendPeriod.startDate ? 'upcoming'
+    : today > spendPeriod.endDate ? 'closed' : 'active';
   const templateMap = new Map(templates.map(t => [t.id, t]));
   const cardSettlementOutflow = Math.max(0, Math.round(options.cardSettlementOutflow ?? 0));
   // A locked plan carries the reserve the user committed to; an explicit option
@@ -507,24 +514,28 @@ export function calculateMonthSummary(
   
   // Daily Safe Spending Allowance. Divided over the days left in the spending
   // window, since that is the window `remainingAllowance` is measured against.
-  const dailySafeAllowance = Math.max(
+  const dailySafeAllowance = spendPeriodStatus === 'closed' ? 0 : Math.max(
     0,
     Math.floor(remainingAllowance / Math.max(1, spendPeriod.daysRemaining)),
   );
   
   // Allowance Usage %
   const budgetUsagePercent = spendableLimit > 0
-    ? Math.min(999, Math.round((confirmedVariableExpenses / spendableLimit) * 100))
-    : confirmedVariableExpenses > 0 ? 999 : 0;
+    ? Math.round((confirmedVariableExpenses / spendableLimit) * 100)
+    : null;
+  const configuredLimitUsagePercent = allowanceLimit > 0
+    ? Math.round(confirmedVariableExpenses / allowanceLimit * 1000) / 10 : null;
+  const fundingShortfall = Math.max(0, -disposableAfterFixed + savingsReserve);
     
   // Alert Level
   let alertLevel: BudgetAlertLevel = 'safe';
   const [cautionThreshold = 0.7, warningThreshold = 0.85, dangerThreshold = 1] = budget.thresholds || [];
-  if (budgetUsagePercent >= dangerThreshold * 100) {
+  if (fundingShortfall > 0 || (spendableLimit === 0 && confirmedVariableExpenses > 0)
+    || (budgetUsagePercent ?? 0) >= dangerThreshold * 100) {
     alertLevel = 'danger';
-  } else if (budgetUsagePercent >= warningThreshold * 100) {
+  } else if ((budgetUsagePercent ?? 0) >= warningThreshold * 100) {
     alertLevel = 'warning';
-  } else if (budgetUsagePercent >= cautionThreshold * 100) {
+  } else if ((budgetUsagePercent ?? 0) >= cautionThreshold * 100) {
     alertLevel = 'caution';
   }
   
@@ -556,7 +567,7 @@ export function calculateMonthSummary(
     forecastAverageDailyVariable = Math.round(recentVariableSpend / observedDays);
 
     forecastVariableSpend = confirmedVariableExpenses
-      + Math.round(forecastAverageDailyVariable * (spendPeriod.daysRemaining - 1));
+      + Math.round(forecastAverageDailyVariable * Math.max(0, spendPeriod.daysRemaining - 1));
     forecastMonthEndSpend = totalExpectedFixedExpenses + forecastVariableSpend;
   }
   
@@ -566,14 +577,14 @@ export function calculateMonthSummary(
     100,
     Math.round((spendPeriod.daysPassed / spendPeriod.daysInMonth) * 100),
   );
-  const requiredDailyPace = Math.max(
+  const requiredDailyPace = spendPeriodStatus === 'closed' ? 0 : Math.max(
     0,
     Math.floor(remainingAllowance / Math.max(1, spendPeriod.daysRemaining)),
   );
 
   let projectedDepletionDate: string | null = null;
   let projectedShortfallDays = 0;
-  if (spendPeriod.daysPassed >= 3 && forecastAverageDailyVariable > 0 && remainingAllowance > 0) {
+  if (spendPeriodStatus === 'active' && spendPeriod.daysPassed >= 3 && forecastAverageDailyVariable > 0 && remainingAllowance > 0) {
     const daysUntilEmpty = Math.floor(remainingAllowance / forecastAverageDailyVariable);
     if (daysUntilEmpty < spendPeriod.daysRemaining - 1) {
       const [year, month, day] = spendPeriod.startDate.split('-').map(Number);
@@ -582,7 +593,7 @@ export function calculateMonthSummary(
       );
       projectedShortfallDays = spendPeriod.daysRemaining - 1 - daysUntilEmpty;
     }
-  } else if (spendPeriod.daysPassed >= 3 && remainingAllowance <= 0) {
+  } else if (spendPeriodStatus === 'active' && spendPeriod.daysPassed >= 3 && remainingAllowance <= 0) {
     projectedDepletionDate = getLocalDateString(now);
     projectedShortfallDays = Math.max(0, spendPeriod.daysRemaining - 1);
   }
@@ -591,6 +602,10 @@ export function calculateMonthSummary(
   const expectedEndMonthCashFlow = forecastSavings ?? (planningIncome - totalExpectedFixedExpenses - confirmedVariableExpenses);
 
   return {
+    calculatedAt: now.toISOString(),
+    spendPeriodStatus,
+    configuredLimitUsagePercent,
+    fundingShortfall,
     yearMonth,
     daysInMonth,
     daysPassed,

@@ -21,6 +21,8 @@ import { AccountingPeriod, formatKRW, formatPeriodRange, getLocalDateString } fr
 import { normalizeTags } from '../utils/receipt';
 import { ReceiptDetailsModal } from './ReceiptDetailsModal';
 import {
+  historyAmount,
+  summarizeHistory,
   HistoryKind,
   HistoryPeriod,
   isTransactionInPeriod,
@@ -32,6 +34,7 @@ import { AmountInput } from './ui/AmountInput';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { normalizeInstallmentPlan } from '../utils/installments';
 import { ScreenHeader } from './ui/ScreenHeader';
+import { findDuplicateTransactionGroups } from '../utils/dataReview';
 
 const HISTORY_PAGE_SIZES = [10, 20, 50];
 
@@ -59,6 +62,8 @@ interface HistoryViewProps {
   paymentCards: PaymentCard[];
   /** App-wide accounting period; the default filter follows it. */
   period: AccountingPeriod;
+  initialView?: string;
+  replacedTemplateIds?: string[];
   /** Owns the confirmation dialog and the undo window (see App). */
   onDeleteTransaction: (transaction: Transaction) => void;
   onUpdateTransaction: (id: string, updates: Partial<Transaction>) => void;
@@ -70,17 +75,24 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   bankAccounts,
   paymentCards,
   period,
+  initialView,
+  replacedTemplateIds = [],
   onDeleteTransaction,
   onUpdateTransaction,
 }) => {
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [searchTerm, setSearchTerm] = useState('');
-  const [historyKind, setHistoryKind] = useState<HistoryKind>('regular_expense');
+  const [historyKind, setHistoryKind] = useState<HistoryKind>(initialView === 'income' ? 'income' : 'regular_expense');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [aiOnlyFilter, setAiOnlyFilter] = useState(false);
   const [receiptOnlyFilter, setReceiptOnlyFilter] = useState(false);
-  const [periodFilter, setPeriodFilter] = useState<HistoryPeriod>('period');
+  const [periodFilter, setPeriodFilter] = useState<HistoryPeriod>(initialView === 'income' ? 'period' : 'spending');
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const replacedIds = useMemo(() => new Set(replacedTemplateIds), [replacedTemplateIds]);
+  const duplicateGroups = useMemo(() => findDuplicateTransactionGroups(transactions), [transactions]);
+  const duplicateIds = useMemo(() => new Set(duplicateGroups.flat().map(row => row.id)), [duplicateGroups]);
+  const spendingMonth = periodFilter === 'spending' ? period.yearMonth : undefined;
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(HISTORY_PAGE_SIZES[0]);
 
@@ -98,6 +110,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     const filtered = transactions.filter(t => {
       if (!isTransactionInPeriod(t, periodFilter, new Date(), period)) return false;
       if (!matchesHistoryKind(t, historyKind)) return false;
+      if (duplicatesOnly && !duplicateIds.has(t.id)) return false;
       if (selectedCategory !== 'all' && t.categoryId !== selectedCategory) return false;
       if (aiOnlyFilter && t.source === 'manual') return false;
       if (receiptOnlyFilter && !t.receipt) return false;
@@ -116,7 +129,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       return true;
     });
     return sortTransactionsNewestFirst(filtered);
-  }, [transactions, periodFilter, period, historyKind, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap]);
+  }, [transactions, periodFilter, period, historyKind, selectedCategory, aiOnlyFilter, receiptOnlyFilter, searchTerm, categoryMap, duplicatesOnly, duplicateIds]);
 
   const periodRange = formatPeriodRange(period);
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
@@ -124,25 +137,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const paginatedTransactions = filteredTransactions.slice(pageStart, pageStart + pageSize);
   const todayText = getLocalDateString();
 
-  const filteredTotals = useMemo(() => {
-    let income = 0;
-    let expense = 0;
-    for (const transaction of filteredTransactions) {
-      if (transaction.type === 'income') income += Math.round(transaction.amount);
-      else expense += Math.round(transaction.amount);
-    }
-    return { income, expense, net: income - expense };
-  }, [filteredTransactions]);
-
+  const filteredTotals = useMemo(() => summarizeHistory(filteredTransactions, replacedIds, spendingMonth), [filteredTransactions, replacedIds, spendingMonth]);
   const dailyExpenseTotals = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const transaction of filteredTransactions) {
-      if (transaction.type !== 'income') {
-        totals.set(transaction.localDate, (totals.get(transaction.localDate) || 0) + Math.round(transaction.amount));
-      }
-    }
-    return totals;
-  }, [filteredTransactions]);
+    const grouped = new Map<string, Transaction[]>();
+    for (const row of filteredTransactions) grouped.set(row.localDate, [...(grouped.get(row.localDate) ?? []), row]);
+    return new Map([...grouped].map(([date, rows]) => [date, summarizeHistory(rows, replacedIds, spendingMonth).expense]));
+  }, [filteredTransactions, replacedIds, spendingMonth]);
 
   const isPageFullySelected = paginatedTransactions.length > 0
     && paginatedTransactions.every(transaction => selectedIds.has(transaction.id));
@@ -330,7 +330,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="mr-1 text-slate-400">조회 기간</span>
           {([
-            ['period', periodRange ? `이번 기간 (${periodRange})` : '이번 달'],
+            ['spending', `소비 월 (${period.yearMonth}-01~말일)`],
+            ['period', periodRange ? `급여 회계 기간 (${periodRange})` : '급여 회계 기간'],
             ['today', '오늘'],
             ['7days', '최근 7일'],
             ['30days', '최근 30일'],
@@ -401,17 +402,22 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           <dd className="eb-tabular mt-1 text-sm font-extrabold text-emerald-400">{formatKRW(filteredTotals.income)}</dd>
         </div>
         <div className="px-3">
-          <dt className="text-slate-400">지출</dt>
+          <dt className="text-slate-400">소비 지출</dt>
           <dd className="eb-tabular mt-1 text-sm font-extrabold text-rose-300">{formatKRW(filteredTotals.expense)}</dd>
         </div>
         <div className="px-3">
-          <dt className="text-slate-400">순액</dt>
+          <dt className="text-slate-400">수입 − 소비 지출</dt>
           <dd className={`eb-tabular mt-1 text-sm font-extrabold ${filteredTotals.net >= 0 ? 'text-emerald-400' : 'text-rose-300'}`}>
             {filteredTotals.net >= 0 ? '+' : '-'}{formatKRW(Math.abs(filteredTotals.net))}
           </dd>
         </div>
       </dl>
 
+      <p className="text-xs leading-relaxed text-slate-400">소비 합계에서 분리: 카드 납부 {formatKRW(filteredTotals.settlement)} · 이체 {formatKRW(filteredTotals.transfer)} · 대체된 기록 {formatKRW(filteredTotals.replaced)}. {spendingMonth ? '할부는 이 소비 월에 해당하는 회차 금액으로 집계합니다.' : '급여 회계 기간은 홈의 소비 월과 다를 수 있습니다.'}</p>
+      {duplicateGroups.length > 0 && <div className="eb-panel rounded-xl p-3 text-xs text-amber-200">
+        같은 날짜·사용처·금액·결제수단의 중복 후보 {duplicateGroups.length}묶음. 실제로 여러 번 결제했을 수도 있습니다.
+        <button className="ml-2 min-h-10 rounded border border-amber-500/40 px-3" onClick={() => { setDuplicatesOnly(!duplicatesOnly); setPeriodFilter('all'); setHistoryKind('all'); setCurrentPage(1); }}> {duplicatesOnly ? '후보 필터 해제' : '중복 후보 확인'} </button>
+      </div>}
       {/* Bulk actions */}
       {selectedIds.size > 0 && (
         <div className="sticky top-16 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-rose-500/40 bg-slate-900/95 p-3 text-xs backdrop-blur-md">
@@ -517,6 +523,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       <span className="text-xs bg-slate-800 text-slate-300 border border-slate-700 px-1.5 py-0.5 rounded">
                         {cat?.name || '기타'}
                       </span>
+                      {t.recurringTemplateId && replacedIds.has(t.recurringTemplateId) && <span className="text-xs text-amber-300">카드대금으로 대체 · 소비 합계 제외</span>}
+                      {t.role === 'card_settlement' && <span className="text-xs text-blue-300">카드 납부 · 소비 합계 제외</span>}
+                      {t.role === 'transfer' && <span className="text-xs text-blue-300">이체 · 소비 합계 제외</span>}
+                      {duplicateIds.has(t.id) && <span className="text-xs text-amber-300">중복 후보 · 승인 내역 확인</span>}
                       {t.source === 'ai' && (
                         <span className="text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
                           <Sparkles className="w-2.5 h-2.5" />
@@ -557,6 +567,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </div>
                     <div className="text-slate-400 mt-1 flex items-center gap-2 text-xs">
                       <span>{t.localDate}</span>
+                      {duplicateIds.has(t.id) && <span>입력 {new Date(t.createdAt).toLocaleString('ko-KR')}</span>}
+                      {spendingMonth && t.installment && <span>{spendingMonth} 회차 합산 · 수정은 원금 기준</span>}
                       {t.memo && <span>• {highlight(t.memo, searchTerm)}</span>}
                     </div>
                     {(t.tags || []).length > 0 && <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-400"><Tags className="h-3 w-3" />{t.tags!.map(tag => <span key={tag}>#{tag}</span>)}</div>}
@@ -569,7 +581,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       t.type === 'income' ? 'text-emerald-400' : 'text-slate-100'
                     }`}
                   >
-                    {t.type === 'income' ? '+' : '-'}{formatKRW(t.amount)}
+                    {t.type === 'income' ? '+' : '-'}{formatKRW(historyAmount(t, spendingMonth))}
                   </div>
 
                   <div className="flex items-center justify-end gap-1.5 mt-1">
