@@ -85,6 +85,7 @@ import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndic
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { QuickEntryBar } from './components/QuickEntryBar';
+import { SmsReviewCard } from './components/SmsReviewCard';
 import { QuickEntrySuggestion, suggestQuickEntryCandidates } from './utils/quickEntrySuggestions';
 import type { OnboardingResult } from './components/OnboardingSheet';
 
@@ -124,10 +125,9 @@ import {
   configureSmsImport,
   findCancellationTarget,
   isDuplicateSmsTransaction,
-  matchPaymentCard,
-  parseFinancialSms,
+  prepareSmsReviewQueue,
   readPendingSms,
-  resolveSmsCategory,
+  SmsReviewCandidate,
   subscribeToPendingSms,
 } from './utils/smsImport';
 
@@ -177,8 +177,10 @@ export default function App() {
   /** Variable-amount chip tapped on the home-screen widget, awaiting its amount. */
   const [pendingWidgetQuickEntryId, setPendingWidgetQuickEntryId] = useState<string | null>(null);
   const [nativeDestination, setNativeDestination] = useState<NativeDestination | null>(null);
+  const [smsCandidates, setSmsCandidates] = useState<SmsReviewCandidate[]>([]);
   const smsImportBusy = useRef(false);
   const smsImportRerunRequested = useRef(false);
+  const announcedSmsCandidateIds = useRef(new Set<string>());
 
   // Reload state from storage
   const refreshAppData = () => {
@@ -238,11 +240,16 @@ export default function App() {
 
   useEffect(() => {
     if (bootState !== 'ready' || !userProfile.uid) return;
+    if (!userProfile.smsAutoImportEnabled) {
+      setSmsCandidates([]);
+      announcedSmsCandidateIds.current.clear();
+      return;
+    }
     let cancelled = false;
     let unsubscribe = () => undefined;
 
     const importPending = async () => {
-      if (cancelled || !userProfile.smsAutoImportEnabled) return;
+      if (cancelled) return;
       if (smsImportBusy.current) {
         smsImportRerunRequested.current = true;
         return;
@@ -250,81 +257,24 @@ export default function App() {
       smsImportBusy.current = true;
       try {
         const messages = await readPendingSms(userProfile.uid);
-        const acknowledgedIds: string[] = [];
-        let imported = 0;
-        let cancelledTransactions = 0;
-        let unresolvedCancellations = 0;
+        const prepared = prepareSmsReviewQueue(
+          messages,
+          getTransactions(),
+          getPaymentCards(),
+          getCategories(),
+          getMerchantRules(),
+        );
+        await acknowledgePendingSms(userProfile.uid, prepared.ignoredMessageIds);
+        if (cancelled) return;
+        setSmsCandidates(prepared.candidates);
 
-        for (const message of messages) {
-          const parsed = parseFinancialSms(message);
-          if (!parsed) {
-            acknowledgedIds.push(message.id);
-            continue;
-          }
-          const currentTransactions = getTransactions();
-          const card = matchPaymentCard(parsed, getPaymentCards());
-
-          if (parsed.kind === 'cancellation') {
-            const target = findCancellationTarget(parsed, currentTransactions, card?.id || null);
-            if (!target) {
-              unresolvedCancellations += 1;
-              acknowledgedIds.push(message.id);
-              continue;
-            }
-            const snapshot = deleteTransaction(target.id);
-            if (snapshot) {
-              finalizeTransactionDeletion(snapshot);
-              cancelledTransactions += 1;
-            }
-            acknowledgedIds.push(message.id);
-            continue;
-          }
-
-          if (isDuplicateSmsTransaction(parsed, currentTransactions)) {
-            acknowledgedIds.push(message.id);
-            continue;
-          }
-          const categoryId = resolveSmsCategory(parsed.merchant, getCategories(), getMerchantRules());
-          if (!categoryId) continue;
-          saveTransaction({
-            type: 'expense',
-            amount: parsed.amount,
-            occurredAt: parsed.occurredAt,
-            localDate: parsed.localDate,
-            categoryId,
-            merchant: parsed.merchant,
-            memo: `[SMS 자동 기록] ${parsed.issuer || '카드'}${parsed.cardLast4 ? ` 끝 ${parsed.cardLast4}` : ''}`,
-            source: 'sms',
-            sourceFingerprint: parsed.fingerprint,
-            sourceReference: parsed.approvalCode,
-            paymentMethodType: 'card',
-            accountId: null,
-            cardId: card?.id || null,
-            installment: parsed.installmentMonths && parsed.installmentMonths > 1 ? {
-              totalMonths: parsed.installmentMonths,
-              currentRound: 1,
-              baseYearMonth: parsed.localDate.slice(0, 7),
-            } : null,
-          });
-          imported += 1;
-          acknowledgedIds.push(message.id);
-        }
-
-        await acknowledgePendingSms(userProfile.uid, acknowledgedIds);
-
-        if (imported || cancelledTransactions) {
-          refreshAppData();
+        const newCandidates = prepared.candidates.filter(candidate => !announcedSmsCandidateIds.current.has(candidate.fingerprint));
+        prepared.candidates.forEach(candidate => announcedSmsCandidateIds.current.add(candidate.fingerprint));
+        if (newCandidates.length) {
           showToast({
-            message: imported ? `SMS 지출 ${imported}건을 자동 기록했습니다.` : 'SMS 승인취소를 반영했습니다.',
-            description: cancelledTransactions ? `승인취소 ${cancelledTransactions}건 반영` : undefined,
-            tone: 'success',
-          });
-        }
-        if (unresolvedCancellations) {
-          showToast({
-            message: `승인취소 문자 ${unresolvedCancellations}건을 자동 연결하지 못했습니다.`,
-            description: '금액과 사용처가 같은 승인 내역이 여러 건이거나 기존 승인 내역이 없습니다. 내역에서 직접 확인해 주세요.',
-            tone: 'warning',
+            message: `SMS 확인 대기 ${prepared.candidates.length}건`,
+            description: '승인하기 전에는 지출에 반영되지 않습니다.',
+            tone: 'info',
             durationMs: 12000,
           });
         }
@@ -356,6 +306,80 @@ export default function App() {
       unsubscribe();
     };
   }, [bootState, userProfile.uid, userProfile.smsAutoImportEnabled]);
+
+  const removeSmsCandidate = (candidate: SmsReviewCandidate) => {
+    setSmsCandidates(current => current.filter(item => item.fingerprint !== candidate.fingerprint));
+    announcedSmsCandidateIds.current.delete(candidate.fingerprint);
+  };
+
+  const handleApproveSmsCandidate = async (candidate: SmsReviewCandidate) => {
+    if (candidate.kind === 'cancellation') {
+      const target = findCancellationTarget(candidate, getTransactions(), candidate.matchedCardId);
+      if (!target) {
+        showToast({
+          message: '연결할 승인 내역을 하나로 특정할 수 없습니다.',
+          description: '같은 금액과 사용처의 SMS 승인 내역을 거래 내역에서 직접 확인해 주세요.',
+          tone: 'warning',
+          durationMs: 12000,
+        });
+        return;
+      }
+      const snapshot = deleteTransaction(target.id);
+      if (!snapshot) return;
+      finalizeTransactionDeletion(snapshot);
+      await acknowledgePendingSms(userProfile.uid, candidate.messageIds);
+      removeSmsCandidate(candidate);
+      refreshAppData();
+      showToast({ message: 'SMS 승인취소를 반영했습니다.', tone: 'success' });
+      return;
+    }
+
+    if (isDuplicateSmsTransaction(candidate, getTransactions())) {
+      await acknowledgePendingSms(userProfile.uid, candidate.messageIds);
+      removeSmsCandidate(candidate);
+      showToast({ message: '이미 등록된 SMS 지출이라 후보에서 제외했습니다.', tone: 'info' });
+      return;
+    }
+    if (!candidate.suggestedCategoryId) {
+      showToast({ message: '사용 가능한 지출 카테고리가 없습니다.', tone: 'warning' });
+      return;
+    }
+
+    saveTransaction({
+      type: 'expense',
+      amount: candidate.amount,
+      occurredAt: candidate.occurredAt,
+      localDate: candidate.localDate,
+      categoryId: candidate.suggestedCategoryId,
+      merchant: candidate.merchant,
+      memo: `[SMS 승인 등록] ${candidate.issuer || '카드'}${candidate.cardLast4 ? ` 끝 ${candidate.cardLast4}` : ''}`,
+      source: 'sms',
+      sourceFingerprint: candidate.fingerprint,
+      sourceReference: candidate.approvalCode,
+      paymentMethodType: 'card',
+      accountId: null,
+      cardId: candidate.matchedCardId,
+      installment: candidate.installmentMonths && candidate.installmentMonths > 1 ? {
+        totalMonths: candidate.installmentMonths,
+        currentRound: 1,
+        baseYearMonth: candidate.localDate.slice(0, 7),
+      } : null,
+    });
+    await acknowledgePendingSms(userProfile.uid, candidate.messageIds);
+    removeSmsCandidate(candidate);
+    refreshAppData();
+    showToast({
+      message: 'SMS 지출을 등록했습니다.',
+      description: `${candidate.merchant} · ${formatKRW(candidate.amount)}`,
+      tone: 'success',
+    });
+  };
+
+  const handleDismissSmsCandidate = async (candidate: SmsReviewCandidate) => {
+    await acknowledgePendingSms(userProfile.uid, candidate.messageIds);
+    removeSmsCandidate(candidate);
+    showToast({ message: 'SMS 후보에서 제외했습니다.', tone: 'info' });
+  };
 
   // Boot only loads the recent accounting periods, so moving the selector far
   // enough back has to fetch the rest before this month's figures mean anything.
@@ -1259,6 +1283,14 @@ export default function App() {
             onChange={setCurrentYM}
           />
         </div>
+
+        <SmsReviewCard
+          candidates={smsCandidates}
+          categories={categories}
+          paymentCards={paymentCards}
+          onApprove={handleApproveSmsCandidate}
+          onDismiss={handleDismissSmsCandidate}
+        />
 
         {cardSettlementSummary.cards.some(card => card.source === 'estimated') && <details className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">
           <summary className="cursor-pointer font-bold">카드 청구액 {cardSettlementSummary.cards.filter(card => card.source === 'estimated').length}건 확인 필요</summary>

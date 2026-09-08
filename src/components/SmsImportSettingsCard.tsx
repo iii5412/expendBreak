@@ -39,16 +39,16 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
     await clearPendingSms(userProfile.uid);
     onUpdateUserProfile({ smsAutoImportEnabled: false });
     setPermission(await getSmsPermissionState());
-    showToast({ message: 'SMS 자동 기록을 껐습니다.', tone: 'info' });
+    showToast({ message: 'SMS 후보 받기를 껐습니다.', tone: 'info' });
   };
 
   const enable = async () => {
     const accepted = await confirm({
-      title: '카드 승인 문자를 자동 기록할까요?',
+      title: '카드 승인 문자를 지출 후보로 받을까요?',
       description: '새로 도착하는 SMS 중 금액과 승인·취소 표현이 있는 금융 문자만 기기에서 분석합니다. 카드사 앱 알림과 일반 문자, 기존 문자함은 읽지 않으며 문자 원문은 서버나 AI로 보내지 않습니다.',
       details: [
         { label: '읽는 범위', value: '기능을 켠 뒤 새로 도착한 SMS' },
-        { label: '자동 처리', value: '승인 등록 · 중복 차단 · 확인 가능한 승인취소 반영' },
+        { label: '처리 방식', value: '후보 생성 · 확인 후 승인 · 중복 차단' },
         { label: '원문 보관', value: '처리 전 앱 내부 임시 큐(최대 7일)' },
       ],
       confirmLabel: '권한 허용하고 켜기',
@@ -73,7 +73,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
       smsAutoImportEnabled: true,
       smsConsentAt: userProfile.smsConsentAt || new Date().toISOString(),
     });
-    showToast({ message: 'SMS 카드 지출 자동 기록을 켰습니다.', tone: 'success' });
+    showToast({ message: 'SMS 카드 지출 후보 받기를 켰습니다.', tone: 'success' });
   };
 
   const toggle = async (enabled: boolean) => {
@@ -84,7 +84,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
       else await disable();
     } catch (error) {
       console.error('Unable to update SMS import setting:', error);
-      showToast({ message: 'SMS 자동 기록 설정을 변경하지 못했습니다.', tone: 'error' });
+      showToast({ message: 'SMS 후보 받기 설정을 변경하지 못했습니다.', tone: 'error' });
     } finally {
       setWorking(false);
     }
@@ -99,10 +99,10 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
         <div>
           <h3 className="flex items-center gap-2 text-sm font-bold text-white">
             <MessageSquareText className="h-4 w-4 text-sky-300" />
-            <span>SMS 카드 지출 자동 기록</span>
+            <span>SMS 카드 지출 후보 받기</span>
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            카드사 앱 알림은 보지 않고, 새 카드 승인·취소 SMS만 기기에서 분석합니다.
+            새 카드 승인·취소 SMS를 후보로 만들며, 승인하기 전에는 지출에 반영하지 않습니다.
           </p>
         </div>
         <input
@@ -111,7 +111,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
           disabled={working}
           onChange={event => void toggle(event.target.checked)}
           className="h-11 w-11 shrink-0 accent-sky-500"
-          aria-label="SMS 카드 지출 자동 기록"
+          aria-label="SMS 카드 지출 후보 받기"
         />
       </div>
 

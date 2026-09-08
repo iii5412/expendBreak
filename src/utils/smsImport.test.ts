@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCancellationTarget, matchPaymentCard, parseFinancialSms, resolveSmsCategory } from './smsImport';
+import { findCancellationTarget, matchPaymentCard, parseFinancialSms, prepareSmsReviewQueue, resolveSmsCategory } from './smsImport';
 import { PaymentCard, Transaction } from '../types';
 
 const message = (body: string, receivedAt = new Date(2026, 8, 6, 13, 10).getTime()) => ({
@@ -71,5 +71,35 @@ describe('SMS transaction enrichment', () => {
     };
     expect(findCancellationTarget(parsed, [approval], 'card-1')?.id).toBe('tx-1');
     expect(findCancellationTarget(parsed, [approval, { ...approval, id: 'tx-2' }], 'card-1')).toBeNull();
+  });
+
+  it('prepares approvals for review without creating a transaction', () => {
+    const categories = [
+      { id: 'dining_out', name: '외식', type: 'expense' as const, icon: '', color: '', active: true },
+      { id: 'etc_expense', name: '기타', type: 'expense' as const, icon: '', color: '', active: true },
+    ];
+    const pending = message('신한카드 *1234 승인\n15,900원\n09/06 13:08 스타벅스 강남점');
+    const result = prepareSmsReviewQueue([pending], [], cards, categories, []);
+
+    expect(result.ignoredMessageIds).toEqual([]);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: 'approval', amount: 15900, matchedCardId: 'card-1', suggestedCategoryId: 'dining_out',
+      messageIds: ['native-1'],
+    });
+  });
+
+  it('does not offer an already-recorded SMS approval again', () => {
+    const pending = message('신한카드 *1234 승인\n15,900원\n09/06 13:08 스타벅스 강남점');
+    const parsed = parseFinancialSms(pending)!;
+    const existing: Transaction = {
+      id: 'tx-existing', type: 'expense', amount: parsed.amount, occurredAt: parsed.occurredAt,
+      localDate: parsed.localDate, categoryId: 'dining_out', merchant: parsed.merchant, memo: '', source: 'sms',
+      sourceFingerprint: parsed.fingerprint, createdAt: '', updatedAt: '',
+    };
+    const result = prepareSmsReviewQueue([pending], [existing], cards, [], []);
+
+    expect(result.candidates).toEqual([]);
+    expect(result.ignoredMessageIds).toEqual(['native-1']);
   });
 });

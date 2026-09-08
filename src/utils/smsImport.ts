@@ -99,6 +99,19 @@ export interface ParsedSmsTransaction {
   fingerprint: string;
 }
 
+/** A structured, local-only item waiting for the user to review it. */
+export interface SmsReviewCandidate extends ParsedSmsTransaction {
+  messageIds: string[];
+  suggestedCategoryId: string;
+  matchedCardId: string | null;
+}
+
+export interface PreparedSmsReviewQueue {
+  candidates: SmsReviewCandidate[];
+  /** Invalid messages and approvals that were already recorded. */
+  ignoredMessageIds: string[];
+}
+
 const ISSUERS: Array<{ name: string; pattern: RegExp }> = [
   { name: 'KB국민카드', pattern: /KB\s*국민|국민카드/i },
   { name: '신한카드', pattern: /신한카드|신한\s*체크/i },
@@ -335,4 +348,49 @@ export function findCancellationTarget(
     return merchant === candidateMerchant || merchant.includes(candidateMerchant) || candidateMerchant.includes(merchant);
   });
   return matches.length === 1 ? matches[0] : null;
+}
+
+/**
+ * Converts the private native queue to review candidates without recording a
+ * transaction. Duplicate messages are grouped behind one review action.
+ */
+export function prepareSmsReviewQueue(
+  messages: NativeSmsMessage[],
+  transactions: Transaction[],
+  cards: PaymentCard[],
+  categories: Category[],
+  rules: MerchantRule[],
+): PreparedSmsReviewQueue {
+  const candidatesByFingerprint = new Map<string, SmsReviewCandidate>();
+  const ignoredMessageIds: string[] = [];
+
+  messages.forEach(message => {
+    const parsed = parseFinancialSms(message);
+    if (!parsed || (parsed.kind === 'approval' && isDuplicateSmsTransaction(parsed, transactions))) {
+      ignoredMessageIds.push(message.id);
+      return;
+    }
+
+    const existing = candidatesByFingerprint.get(parsed.fingerprint);
+    if (existing) {
+      existing.messageIds.push(message.id);
+      return;
+    }
+
+    const card = matchPaymentCard(parsed, cards);
+    candidatesByFingerprint.set(parsed.fingerprint, {
+      ...parsed,
+      messageIds: [message.id],
+      suggestedCategoryId: parsed.kind === 'approval'
+        ? resolveSmsCategory(parsed.merchant, categories, rules)
+        : '',
+      matchedCardId: card?.id || null,
+    });
+  });
+
+  return {
+    candidates: [...candidatesByFingerprint.values()]
+      .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)),
+    ignoredMessageIds,
+  };
 }
