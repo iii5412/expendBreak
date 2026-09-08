@@ -66,11 +66,13 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     summary.yearMonth,
     transactions,
     categoryInfo,
-    { variableOnly: true, monthStartDay: 1 },
+    { variableOnly: true, monthStartDay: Number(summary.spendPeriodStartDate.slice(8, 10)) },
   ).map(item => ({ name: item.categoryName, value: item.amount, color: item.color }));
   const feedbackCacheKey = [
     summary.calculatedAt?.slice(0, 10),
     summary.spendPeriodStatus,
+    summary.spendPeriodStartDate,
+    summary.spendPeriodEndDate,
     summary.allowanceLimit,
     summary.yearMonth,
     summary.planningIncome,
@@ -82,7 +84,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   ].join('|');
 
   // 3. Cumulative daily allowance spend vs allowance limit, walked across the
-  // calendar spending month, matching MonthSummary.confirmedVariableExpenses.
+  // payday cycle, matching MonthSummary.confirmedVariableExpenses.
   const cumulativeData: { day: string; spend: number; limit: number }[] = [];
   let runningTotal = 0;
   const [periodStartYear, periodStartMonth, periodStartDay] = summary.spendPeriodStartDate.split('-').map(Number);

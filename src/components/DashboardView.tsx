@@ -316,7 +316,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {formatKRW(summary.spendPeriodStatus === 'closed' ? summary.confirmedVariableExpenses : summary.dailySafeAllowance)}
             </p>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-400">
-              {summary.spendPeriodStatus === 'closed' ? '소비 월이 끝났습니다. 실제 사용액과 한도 대비 결과를 확인하세요.' : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.`}
+              {summary.spendPeriodStatus === 'closed' ? '생활비 주기가 끝났습니다. 실제 사용액과 한도 대비 결과를 확인하세요.' : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.`}
             </p>
           </div>
 
@@ -370,14 +370,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <details className="eb-panel rounded-xl p-3 text-xs text-slate-300">
           <summary className="cursor-pointer font-bold">계산 기준과 연결 내역</summary>
-          <p className="mt-2">소비: {summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 현금 계획: 급여 회계 기간</p>
+          <p className="mt-2">소비: {summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 급여일 기준 생활비 주기</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button onClick={() => onNavigateTab('history', 'income')} className="min-h-10 rounded border border-slate-700 px-3">수입 {formatKRW(summary.planningIncome)}{summary.isProjected ? ' (예정 포함)' : ''}</button>
             <button onClick={() => onNavigateTab('recurring_payment')} className="min-h-10 rounded border border-slate-700 px-3">계좌 고정 지출 {formatKRW(summary.accountFixedOutflow)}</button>
             <button onClick={() => onNavigateTab('accounts')} className="min-h-10 rounded border border-slate-700 px-3">카드대금 {formatKRW(summary.cardSettlementOutflow)}</button>
             <button onClick={() => onNavigateTab('management', 'settings')} className="min-h-10 rounded border border-slate-700 px-3">생활비 한도 {formatKRW(summary.allowanceLimit)}</button>
           </div>
-          <p className="mt-2">수입 − 계좌 고정 지출 − 카드대금 − 저축 확보액 = 생활비 재원 {formatKRW(summary.livingBudget)}{summary.isBaselineLocked ? ' (확정 계획)' : ''}. 사용액은 소비 월 기준입니다.</p>
+          <p className="mt-2">수입 − 계좌 고정 지출 − 카드대금 − 저축 확보액 = 생활비 재원 {formatKRW(summary.livingBudget)}{summary.isBaselineLocked ? ' (확정 계획)' : ''}. 사용액은 급여일~다음 급여일 전날 기준입니다.</p>
         </details>
         {/* Cash track: how the salary splits before any spending happens. */}
         <div className="mt-5 border-t border-slate-800 pt-4">
@@ -473,7 +473,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </dl>
 
           <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
-            카드대금은 지난 주기에 쓴 돈의 청구서입니다. 이번 주기 생활비 사용에는 다시 더하지 않습니다.
+            카드대금은 카드 이용기간에 쓴 돈의 청구서입니다. 이번 주기 생활비 사용에는 다시 더하지 않습니다.
           </p>
         </div>
 
@@ -540,7 +540,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
               <div>
                 <h3 className="text-sm font-bold text-slate-100">카드 사용·고정비와 다음 결제</h3>
-                <p className="text-xs text-slate-400">카드로 내는 고정지출도 해당 카드대금에 자동 합산</p>
+                <p className="text-xs text-slate-400">{cardPaymentSummary.yearMonth} 1일~말일 사용분 · 카드 고정지출 포함</p>
               </div>
             </div>
             <button
@@ -562,7 +562,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-              <div className="text-xs text-slate-400">이번 주기 카드 사용</div>
+              <div className="text-xs text-slate-400">선택 월 카드 사용 (1일~말일)</div>
               <div className="mt-1 text-base font-bold text-slate-100">{formatKRW(cardPaymentSummary.totalCardUsage)}</div>
               <div className="mt-0.5 text-xs text-slate-400">
                 체크카드 {formatKRW(cardPaymentSummary.debitCardUsage)} · 미납부 고정비 {formatKRW(cardPaymentSummary.scheduledFixedCardUsage)}
@@ -573,7 +573,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="mt-1 text-base font-bold text-slate-100">
                 {formatKRW(cardPaymentSummary.estimatedNextPaymentTotal)}
               </div>
-              <div className="mt-0.5 text-xs text-slate-400">다음 주기 생활비에서 빠집니다</div>
+              <div className="mt-0.5 text-xs text-slate-400">카드별 다음 달 결제일 기준 예상액</div>
             </div>
           </div>
 

@@ -1,3 +1,5 @@
+import { AccountUsageModal } from './AccountUsageModal';
+import type { AccountUsage } from '../utils/accountUsage';
 import { hasConfirmedBalance, balanceStatus } from '../utils/accountBalances';
 import { findDuplicateAccountGroups } from '../utils/dataReview';
 import { getLocalDateString } from '../utils/calculations';
@@ -37,7 +39,9 @@ interface AccountsViewProps {
   cardSettlementSummary: MonthlyCardSettlementSummary;
   onSaveBankAccount: (acc: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onUpdateBankAccount: (id: string, updates: Partial<BankAccount>) => void;
-  onDeleteBankAccount: (id: string) => void;
+  onDeleteBankAccount: (id: string) => boolean;
+  onMergeBankAccount: (sourceId: string, targetId: string) => Promise<void>;
+  getBankAccountUsage: (id: string) => AccountUsage;
   onSavePaymentCard: (card: Omit<PaymentCard, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onUpdatePaymentCard: (id: string, updates: Partial<PaymentCard>) => void;
   onDeletePaymentCard: (id: string) => void;
@@ -66,6 +70,8 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   onSaveBankAccount,
   onUpdateBankAccount,
   onDeleteBankAccount,
+  onMergeBankAccount,
+  getBankAccountUsage,
   onSavePaymentCard,
   onUpdatePaymentCard,
   onDeletePaymentCard,
@@ -73,6 +79,9 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [activeTab, setActiveTab] = useState<'accounts' | 'cards'>('accounts');
+
+  const [usageAccountId, setUsageAccountId] = useState<string | null>(null);
+  const usageAccount = bankAccounts.find(account => account.id === usageAccountId);
 
   // Account Modal State
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
@@ -338,6 +347,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
   return (
     <div className="space-y-6 pb-20">
+      {usageAccount && <AccountUsageModal account={usageAccount} usage={getBankAccountUsage(usageAccount.id)} accounts={bankAccounts} onMerge={onMergeBankAccount} onClose={() => setUsageAccountId(null)} />}
       {/* Header */}
       <ScreenHeader
         eyebrow="Payment sources"
@@ -477,9 +487,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       </button>
                       <button
                         onClick={async () => {
+                          if (bankAccounts.some(account => account.id !== acc.id) || getBankAccountUsage(acc.id).total > 0) {
+                            setUsageAccountId(acc.id);
+                            return;
+                          }
                           const accepted = await confirm({
                             title: '이 계좌를 삭제할까요?',
-                            description: '카드, 정기 항목, 거래에서 사용 중이면 삭제되지 않습니다.',
+                            description: '연결된 내역이 없는 계좌를 삭제합니다.',
                             details: [
                               { label: '계좌', value: `${acc.bankName} ${acc.accountName}` },
                               { label: '잔액', value: formatKRW(acc.balance || 0) },
@@ -487,7 +501,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                             confirmLabel: '삭제',
                             tone: 'danger',
                           });
-                          if (accepted) onDeleteBankAccount(acc.id);
+                          if (accepted && !onDeleteBankAccount(acc.id)) setUsageAccountId(acc.id);
                         }}
                         className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
                         title="삭제"

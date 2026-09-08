@@ -60,6 +60,7 @@ import {
   getLoadedTransactionHistoryFloor,
   loadTransactionHistoryFrom,
 } from './firestoreSync';
+import { collectAccountUsage } from './accountUsage';
 import { reportWriteFailed } from './syncStatus';
 import { getTransactionWindowStart } from './transactionWindow';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
@@ -1572,11 +1573,47 @@ export function updateBankAccount(id: string, updates: Partial<BankAccount>): Ba
   return accounts[idx];
 }
 
+export function getBankAccountUsage(id: string) {
+  return collectAccountUsage(id, {
+    paymentCards: getPaymentCards(),
+    recurringTemplates: getRecurringTemplates(),
+    recurringOccurrences: getAllRecurringOccurrences(),
+    transactions: getTransactions(),
+    quickEntries: getQuickEntries(),
+  });
+}
+
+/** Merge against the complete server ledger, then align the currently cached rows. */
+export async function mergeBankAccount(sourceId: string, targetId: string): Promise<number> {
+  if (sourceId === targetId || !getBankAccounts().some(account => account.id === targetId)) {
+    throw new Error('삭제할 계좌와 다른 남길 계좌를 선택해 주세요.');
+  }
+  const uid = getSignedInAccount().uid;
+  const generation = sessionGeneration;
+  const sameSession = () => generation === sessionGeneration && uid === getSignedInAccount().uid;
+  if (!await flushFirestoreOutbox()) throw new Error('저장 대기 중인 변경사항을 먼저 동기화해야 합니다. 연결을 확인해 주세요.');
+  if (!sameSession()) throw new Error('로그인 상태가 변경되었습니다. 다시 시도해 주세요.');
+  const response = await authenticatedFetch('/api/bank-accounts/merge', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId, targetId }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok || !result?.ok) throw new Error(result?.message || '계좌 일괄 변경을 완료하지 못했습니다. 서버 업데이트 및 연결 상태를 확인해 주세요.');
+  if (!sameSession()) throw new Error('서버에서 계좌 정리가 완료되었습니다. 다시 로그인해 결과를 확인해 주세요.');
+  // Do not re-save these rows to Firestore: the server already patched them atomically.
+  const remap = <T extends { updatedAt: string }>(rows: T[], field: keyof T) => rows.map(row =>
+    row[field] === sourceId ? { ...row, [field]: targetId, updatedAt: result.updatedAt } : row);
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(remap(getTransactions(), 'accountId')));
+  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(remap(getRecurringTemplates(), 'accountId')));
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(remap(getAllRecurringOccurrences(), 'accountId')));
+  localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(remap(getPaymentCards(), 'linkedAccountId')));
+  localStorage.setItem(STORAGE_KEYS.QUICK_ENTRIES, JSON.stringify(remap(getQuickEntries(), 'accountId')));
+  localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(getBankAccounts().filter(account => account.id !== sourceId)));
+  notifyListeners();
+  return result.total;
+}
+
 export function deleteBankAccount(id: string): boolean {
-  const isReferenced = getPaymentCards().some(card => card.linkedAccountId === id)
-    || getRecurringTemplates().some(template => template.accountId === id)
-    || getTransactions().some(transaction => transaction.accountId === id);
-  if (isReferenced) return false;
+  if (getBankAccountUsage(id).total > 0) return false;
 
   let accounts = getBankAccounts();
   const initialLen = accounts.length;

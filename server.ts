@@ -1,4 +1,5 @@
 import express from 'express';
+import { AccountMergeError, mergeBankAccountRecords } from './src/server/accountMerge';
 import path from 'path';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -580,6 +581,19 @@ app.post('/api/migration/ensure', requireAccount, async (req, res) => {
       error: 'Migration failed',
       message: '기존 데이터 복사 검증에 실패했습니다. 원본 데이터는 변경되지 않았습니다.',
     });
+  }
+});
+
+app.post('/api/bank-accounts/merge', requireAccount, async (req, res) => {
+  try {
+    const { sourceId, targetId } = req.body || {};
+    const { adminDb } = getAdminServices();
+    const result = await mergeBankAccountRecords(adminDb, res.locals.userUid, sourceId, targetId);
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    if (error instanceof AccountMergeError) return res.status(error.status).json({ message: error.message });
+    console.error('Account merge failed:', error instanceof Error ? error.message : error);
+    return res.status(500).json({ message: '계좌 일괄 변경 결과를 확인하지 못했습니다. 연결을 확인하고 같은 계좌로 다시 시도해 주세요.' });
   }
 });
 

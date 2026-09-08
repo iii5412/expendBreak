@@ -22,8 +22,15 @@ const outputs=files.map(path=>{
  assert.equal(future.months[0].accountFixed,summary.accountFixedOutflow,'selected period reconciles with long-range commitments');
  const ledger=r.transactions.filter((t:any)=>isDateInPeriod(t.localDate,period));
  assert.equal(summarizeHistory(ledger,new Set(c.excludedCardSettlementTemplateIds)).expense,summary.confirmedExpenses);
- if(ym==='2026-08') {assert.equal(summary.spendDaysRemaining,0);assert.equal(summary.projectedDepletionDate,null);assert.equal(summary.confirmedVariableExpenses,2069480);}
- if(ym==='2026-09') {assert.equal(summary.budgetUsagePercent,null);assert.equal(summary.configuredLimitUsagePercent,24.9);assert.equal(summary.daysRemaining,30);assert.equal(summary.accountFixedOutflow,4267996);}
+ if(ym==='2026-08') {assert.equal(summary.spendDaysRemaining,3);assert.equal(summary.spendPeriodStatus,'active');assert.equal(summary.spendPeriodStartDate,'2026-08-10');assert.equal(summary.spendPeriodEndDate,'2026-09-09');}
+ if(ym==='2026-09') {assert.equal(summary.budgetUsagePercent,null);assert.equal(summary.configuredLimitUsagePercent,0);assert.equal(summary.spendPeriodStatus,'upcoming');assert.equal(summary.confirmedVariableExpenses,0);assert.equal(summary.daysRemaining,30);assert.equal(summary.accountFixedOutflow,4267996);}
+ const expectedSpend=transactions.filter((t:any)=>t.type==='expense'&&!t.recurringTemplateId&&(!t.role||t.role==='normal')&&t.localDate>=period.startDate&&t.localDate<=period.endDate).reduce((sum:number,t:any)=>sum+Math.round(t.amount),0);
+ assert.equal(transactions.some((t:any)=>t.installment),false,'snapshot oracle expects no installments');
+ assert.equal(summary.confirmedVariableExpenses,expectedSpend,'independent date-only snapshot total');
+ const septemberCards=transactions.filter((t:any)=>t.type==='expense'&&t.paymentMethodType==='card'&&r.paymentCards.some((card:any)=>card.id===t.cardId&&card.cardType==='credit')&&(!t.role||t.role==='normal')&&t.localDate>='2026-09-01'&&t.localDate<='2026-09-30');
+ const october=calculateMonthlyCardSettlementSummary('2026-10',septemberCards,r.paymentCards.map((card:any)=>({...card,monthlyPaymentAmounts:{}})),ctx.monthStartDay);
+ assert.equal(october.totalAmount,septemberCards.reduce((sum:number,t:any)=>sum+Math.round(t.amount),0));
+ assert.ok(october.cards.every(card=>card.paymentDate==='2026-10-10'&&card.usageStartDate==='2026-09-01'&&card.usageEndDate==='2026-09-30'));
  return {yearMonth:ym,summary,future,history:summarizeHistory(ledger,new Set(c.excludedCardSettlementTemplateIds))};
 });
 for(const month of outputs[0].future.months) {
@@ -31,5 +38,5 @@ for(const month of outputs[0].future.months) {
  if(other) assert.deepEqual(month,other,'future projection must not depend on selected month');
 }
 fs.writeFileSync('artifacts/diagnostic-fixes-verified.json',JSON.stringify(outputs,null,2));
-console.log('PASS: both input snapshots, all overlapping future periods, consumption history, settlement exclusions, monthly override, closed month, zero capacity.');
-console.log(JSON.stringify(outputs.map(x=>({yearMonth:x.yearMonth,accountFixed:x.summary.accountFixedOutflow,november:x.future.months.find(m=>m.yearMonth==='2026-11'),history:x.history})),null,2));
+console.log('PASS: both input snapshots, all overlapping future periods, consumption history, settlement exclusions, monthly override, payday cycle boundaries, calendar card billing, zero capacity.');
+console.log(JSON.stringify(outputs.map(x=>({yearMonth:x.yearMonth,accountFixed:x.summary.accountFixedOutflow,spending:x.summary.confirmedVariableExpenses,range:[x.summary.spendPeriodStartDate,x.summary.spendPeriodEndDate],status:x.summary.spendPeriodStatus,november:x.future.months.find(m=>m.yearMonth==='2026-11'),history:x.history})),null,2));

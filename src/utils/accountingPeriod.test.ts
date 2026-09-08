@@ -132,13 +132,11 @@ describe('period-aware aggregation', () => {
     tx({ id: 'afterEnd', localDate: '2026-09-25', amount: 90_000 }),
   ];
 
-  // Living-expense spending is bucketed by calendar month even when the cash
-  // cycle starts on payday, because that is the window a card statement bills.
-  it('counts spending by calendar month regardless of the payday cycle', () => {
+  it('counts living expenses inside the payday cycle', () => {
     const summary = calculateMonthSummary('2026-08', transactions, [], budget, [], new Date(2026, 8, 1), 25);
-    expect(summary.confirmedVariableExpenses).toBe(120_000); // 8/20 50,000 + 8/26 70,000
-    expect(summary.spendPeriodStartDate).toBe('2026-08-01');
-    expect(summary.spendPeriodEndDate).toBe('2026-08-31');
+    expect(summary.confirmedVariableExpenses).toBe(100_000); // 8/26 70,000 + 9/5 30,000
+    expect(summary.spendPeriodStartDate).toBe('2026-08-25');
+    expect(summary.spendPeriodEndDate).toBe('2026-09-24');
   });
 
   it('produces the same totals as before when the start day is 1', () => {

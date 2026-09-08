@@ -8,6 +8,7 @@ import {
   Transaction,
 } from '../types';
 import { createAssistantFinancialSnapshot } from './liveVoice';
+import { getAccountingPeriod, getYearMonthForDate } from './calculations';
 
 const MAX_CHAT_TRANSACTIONS = 200;
 const MAX_MONTHS = 12;
@@ -33,7 +34,8 @@ export function createFinanceChatContext(args: {
     .filter(transaction => !transaction.role || transaction.role === 'normal')
     .filter(transaction => /^\d{4}-\d{2}-\d{2}$/.test(transaction.localDate));
 
-  const monthKeys = [...new Set(normalTransactions.map(transaction => transaction.localDate.slice(0, 7)))]
+  const monthStartDay = args.monthStartDay ?? 1;
+  const monthKeys = [...new Set(normalTransactions.map(transaction => getYearMonthForDate(transaction.localDate, monthStartDay)))]
     .sort((left, right) => right.localeCompare(left))
     .slice(0, MAX_MONTHS);
   const allowedMonths = new Set(monthKeys);
@@ -44,7 +46,7 @@ export function createFinanceChatContext(args: {
   }>();
 
   normalTransactions.forEach(transaction => {
-    const month = transaction.localDate.slice(0, 7);
+    const month = getYearMonthForDate(transaction.localDate, monthStartDay);
     if (!allowedMonths.has(month)) return;
     const current = monthly.get(month) || { income: 0, expense: 0, categories: new Map<string, number>() };
     const amount = Math.max(0, Math.round(Number(transaction.amount) || 0));
@@ -61,10 +63,12 @@ export function createFinanceChatContext(args: {
   return {
     오늘: (args.now || new Date()).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' }),
     현재재무요약: createAssistantFinancialSnapshot(args),
-    최근12개월달력월요약: monthKeys.map(month => {
+    최근12개월급여주기요약: monthKeys.map(month => {
       const item = monthly.get(month) || { income: 0, expense: 0, categories: new Map<string, number>() };
       return {
         월: month,
+        시작일: getAccountingPeriod(month, monthStartDay).startDate,
+        종료일: getAccountingPeriod(month, monthStartDay).endDate,
         수입: item.income,
         지출: item.expense,
         순액: item.income - item.expense,

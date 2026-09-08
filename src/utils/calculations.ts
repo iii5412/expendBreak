@@ -48,7 +48,7 @@ export interface MonthSummary {
   confirmedFixedExpenses: number;
   confirmedVariableExpenses: number;
   remainingScheduledExpenses: number;
-  /** Inclusive window the living-expense spending is measured over (calendar month). */
+  /** Inclusive payday cycle used for living-expense spending. */
   spendPeriodStartDate: string;
   spendPeriodEndDate: string;
   spendDaysInMonth: number;
@@ -322,12 +322,9 @@ export function calculateMonthSummary(
 ): MonthSummary {
   const period = getAccountingPeriod(yearMonth, monthStartDay, now);
   const { daysInMonth, daysPassed, daysRemaining } = period;
-  // The two tracks are bucketed differently on purpose. Cash (salary in, fixed
-  // transfers and the card bill out) follows the payday cycle. Spending follows
-  // the calendar month, because that is the window a card statement bills: money
-  // spent on the 1st through the 9th is part of this month's usage, so it has to
-  // count against this month's living budget rather than the previous cycle's.
-  const spendPeriod = getAccountingPeriod(yearMonth, 1, now);
+  // Living expenses follow the same payday cycle as income and the budget.
+  // Card statement windows are calculated separately in cardPayments.ts.
+  const spendPeriod = period;
   const today = getLocalDateString(now);
   const spendPeriodStatus = today < spendPeriod.startDate ? 'upcoming'
     : today > spendPeriod.endDate ? 'closed' : 'active';
@@ -550,7 +547,7 @@ export function calculateMonthSummary(
   let forecastAverageDailyVariable = 0;
   
   if (spendPeriod.daysPassed >= 3) {
-    // Recent 14-day window, measured over the same calendar month the spending
+    // Recent 14-day window, measured over the same payday cycle the spending
     // itself is bucketed into.
     const endOffset = Math.min(spendPeriod.daysInMonth, spendPeriod.daysPassed);
     const startOffset = Math.max(1, endOffset - 13);

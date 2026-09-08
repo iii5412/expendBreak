@@ -330,8 +330,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="mr-1 text-slate-400">조회 기간</span>
           {([
-            ['spending', `소비 월 (${period.yearMonth}-01~말일)`],
-            ['period', periodRange ? `급여 회계 기간 (${periodRange})` : '급여 회계 기간'],
+            ['spending', `생활비 주기 (${period.startDate}~${period.endDate})`],
+            ['period', periodRange ? `거래일 기준 (${periodRange})` : '거래일 기준'],
             ['today', '오늘'],
             ['7days', '최근 7일'],
             ['30days', '최근 30일'],
@@ -413,7 +413,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         </div>
       </dl>
 
-      <p className="text-xs leading-relaxed text-slate-400">소비 합계에서 분리: 카드 납부 {formatKRW(filteredTotals.settlement)} · 이체 {formatKRW(filteredTotals.transfer)} · 대체된 기록 {formatKRW(filteredTotals.replaced)}. {spendingMonth ? '할부는 이 소비 월에 해당하는 회차 금액으로 집계합니다.' : '급여 회계 기간은 홈의 소비 월과 다를 수 있습니다.'}</p>
+      <p className="text-xs leading-relaxed text-slate-400">소비 합계에서 분리: 카드 납부 {formatKRW(filteredTotals.settlement)} · 이체 {formatKRW(filteredTotals.transfer)} · 대체된 기록 {formatKRW(filteredTotals.replaced)}. {spendingMonth ? '할부는 이 생활비 주기에 해당하는 회차 금액으로 집계합니다.' : '거래일 기준은 주기 안에 발생한 거래의 원금을 표시합니다.'}</p>
       {duplicateGroups.length > 0 && <div className="eb-panel rounded-xl p-3 text-xs text-amber-200">
         같은 날짜·사용처·금액·결제수단의 중복 후보 {duplicateGroups.length}묶음. 실제로 여러 번 결제했을 수도 있습니다.
         <button className="ml-2 min-h-10 rounded border border-amber-500/40 px-3" onClick={() => { setDuplicatesOnly(!duplicatesOnly); setPeriodFilter('all'); setHistoryKind('all'); setCurrentPage(1); }}> {duplicatesOnly ? '후보 필터 해제' : '중복 후보 확인'} </button>

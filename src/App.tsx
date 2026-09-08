@@ -23,6 +23,8 @@ import {
   saveBankAccount,
   updateBankAccount,
   deleteBankAccount,
+  getBankAccountUsage,
+  mergeBankAccount,
   getPaymentCards,
   getCycleBaseline,
   getQuickEntries,
@@ -593,18 +595,17 @@ export default function App() {
     return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
   }, [categories]);
 
-  // Living-expense spending is bucketed by calendar month (see calculateMonthSummary),
-  // so the category mix has to use the same window or the two disagree.
+  // Category totals follow the same payday cycle as the living budget.
   const categoryBreakdown = useMemo(() => {
-    return getCategoryBreakdown(currentYM, transactions, categoryMap, { variableOnly: true, monthStartDay: 1 });
-  }, [currentYM, transactions, categoryMap]);
+    return getCategoryBreakdown(currentYM, transactions, categoryMap, { variableOnly: true, monthStartDay });
+  }, [currentYM, transactions, categoryMap, monthStartDay]);
 
   const cardPaymentSummary = useMemo(
     () => calculateCardPaymentSummary(
       currentYM,
       transactions,
       paymentCards,
-      monthStartDay,
+      1, // Card usage is a calendar month; the living budget follows payday.
       planningAllRecurringOccurrences,
       planningRecurringTemplates,
     ),
@@ -1410,17 +1411,26 @@ export default function App() {
               updateBankAccount(id, updates);
               refreshAppData();
             }}
+            getBankAccountUsage={getBankAccountUsage}
+            onMergeBankAccount={async (sourceId, targetId) => {
+              const target = bankAccounts.find(account => account.id === targetId);
+              const count = await mergeBankAccount(sourceId, targetId);
+              refreshAppData();
+              showToast({ message: '연결 내역을 옮기고 중복 계좌를 삭제했습니다.', description: (target?.accountName || '선택 계좌') + ' · ' + count + '건 변경', tone: 'success' });
+            }}
             onDeleteBankAccount={(id) => {
-              if (deleteBankAccount(id)) {
+              const deleted = deleteBankAccount(id);
+              if (deleted) {
                 showToast({ message: '계좌를 삭제했습니다.', tone: 'success' });
               } else {
                 showToast({
                   message: '사용 중인 계좌는 삭제할 수 없습니다.',
-                  description: '카드, 정기 항목 또는 거래에서 이 계좌를 참조하고 있습니다. 연결을 먼저 변경해 주세요.',
+                  description: '계좌 사용 내역에서 연결된 항목을 확인해 주세요.',
                   tone: 'error',
                 });
               }
               refreshAppData();
+              return deleted;
             }}
             onSavePaymentCard={(card) => {
               savePaymentCard(card);

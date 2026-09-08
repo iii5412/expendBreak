@@ -198,7 +198,7 @@ export function createAssistantFinancialSnapshot(args: {
     yearMonth,
     args.transactions,
     args.paymentCards || [],
-    monthStartDay,
+    1,
     args.recurringOccurrences,
     args.recurringTemplates,
   );
@@ -225,11 +225,13 @@ export function createAssistantFinancialSnapshot(args: {
     yearMonth,
     args.transactions,
     categoryMap,
-    { variableOnly: true, monthStartDay: 1 },
+    { variableOnly: true, monthStartDay },
   );
 
   return {
     기준월: yearMonth,
+    생활비기간: { 시작일: summary.spendPeriodStartDate, 종료일: summary.spendPeriodEndDate },
+    카드사용집계기준: '선택 월 1일~말일 사용분을 다음 달 결제액으로 집계',
     확정수입: summary.confirmedIncome,
     이번달수입: summary.totalIncome,
     확정전체지출: summary.confirmedExpenses,

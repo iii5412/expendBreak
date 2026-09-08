@@ -1,5 +1,5 @@
 import { Transaction } from '../types';
-import { AccountingPeriod, getAccountingPeriod, getLocalDateString, isDateInPeriod } from './calculations';
+import { AccountingPeriod, getLocalDateString, isDateInPeriod } from './calculations';
 import { getInstallmentCharge } from './installments';
 
 /** `period` follows the app-wide accounting period; the rest are rolling windows. */
@@ -59,7 +59,7 @@ export function isTransactionInPeriod(
     if (!accountingPeriod) return false;
     if (transaction.installment && transaction.type === 'expense' && !transaction.recurringTemplateId
       && (transaction.role ?? 'normal') === 'normal') return historyAmount(transaction, accountingPeriod.yearMonth) > 0;
-    return isDateInPeriod(transaction.localDate, getAccountingPeriod(accountingPeriod.yearMonth, 1, today));
+    return isDateInPeriod(transaction.localDate, accountingPeriod);
   }
   if (period === 'period') {
     return accountingPeriod ? isDateInPeriod(transaction.localDate, accountingPeriod) : true;

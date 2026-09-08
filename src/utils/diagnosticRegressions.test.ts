@@ -64,7 +64,7 @@ describe('diagnostic audit regressions', () => {
     expect(calculateFutureCommitments('2026-09', [], [], rows, [card], 10).months.every(m => m.total === 0)).toBe(true);
   });
   it('closes a past spending month without inventing an extra day or depletion forecast', () => {
-    const summary = calculateMonthSummary('2026-08', [transaction({ localDate: '2026-08-15' })], [], budget, [], now, 10);
+    const summary = calculateMonthSummary('2026-08', [transaction({ localDate: '2026-08-15' })], [], budget, [], new Date(2026, 8, 10), 10);
     expect(summary.spendDaysRemaining).toBe(0);
     expect(summary.spendPeriodStatus).toBe('closed');
     expect(summary.projectedDepletionDate).toBeNull();
@@ -74,7 +74,7 @@ describe('diagnostic audit regressions', () => {
     expect(getAccountingPeriod('2026-09', 10, now).daysRemaining).toBe(30);
   });
   it('shows no-capacity independently of a configured-limit usage percentage', () => {
-    const summary = calculateMonthSummary('2026-09', [transaction()], [], budget, [], now, 10);
+    const summary = calculateMonthSummary('2026-09', [transaction({ localDate: '2026-09-10' })], [], budget, [], now, 10);
     expect(summary.budgetUsagePercent).toBeNull();
     expect(summary.configuredLimitUsagePercent).toBe(24.9);
     expect(summary.alertLevel).toBe('danger');
@@ -84,7 +84,7 @@ describe('diagnostic audit regressions', () => {
   it('separates a funding deficit from spending already recorded', () => {
     const salary = template({ id: 'salary', type: 'income', defaultAmount: 6325830 });
     const row = occurrence({ templateId: 'salary', expectedAmount: 6325830, typeSnapshot: 'income' });
-    const summary = calculateMonthSummary('2026-09', [transaction()], [row], budget, [salary], now, 10, { cardSettlementOutflow: 7010566, reserveUnmaterializedTemplates: false });
+    const summary = calculateMonthSummary('2026-09', [transaction({ localDate: '2026-09-10' })], [row], budget, [salary], now, 10, { cardSettlementOutflow: 7010566, reserveUnmaterializedTemplates: false });
     expect(summary.fundingShortfall).toBe(684736);
     expect(summary.confirmedVariableExpenses).toBe(447660);
   });

@@ -745,15 +745,14 @@ describe('spending pace', () => {
     );
   };
 
-  // Pace is measured over the spending window (the calendar month), not the
-  // cash cycle, so it lines up with the spending it is compared against.
+  // Pace and spending share the payday cycle.
   it('reports how far through the spending window the user is', () => {
-    expect(paceOn(10_000).periodProgressPercent).toBe(55); // 8/17 of 8/1~8/31
+    expect(paceOn(10_000).periodProgressPercent).toBe(26); // day 8 of 8/10~9/9
   });
 
   it('projects a depletion date and shortfall when spending outruns the days', () => {
-    // 3M budget, 7 days at 300k → 2.1M spent, 900k left, ~150k/day over the
-    // 14-day window, so the remainder runs out well before 8/31.
+    // 3M budget, 7 days at 300k → 2.1M spent, 900k left, ~262.5k/day over the
+    // 8-day window, so the remainder runs out well before 9/9.
     const summary = paceOn(300_000);
 
     expect(summary.projectedDepletionDate).not.toBeNull();
@@ -769,9 +768,9 @@ describe('spending pace', () => {
   });
 
   it('holds off until there is enough of the window to measure', () => {
-    const early = makeTransaction({ amount: 500_000, localDate: '2026-08-01' });
+    const early = makeTransaction({ amount: 500_000, localDate: '2026-08-10' });
     const summary = calculateMonthSummary(
-      '2026-08', [income, early], [], budgetWithLimit(0), [salary], new Date(2026, 7, 2), SALARY_DAY,
+      '2026-08', [income, early], [], budgetWithLimit(0), [salary], new Date(2026, 7, 11), SALARY_DAY,
     );
 
     expect(summary.spendDaysPassed).toBe(2);

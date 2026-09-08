@@ -39,7 +39,7 @@ describe('finance chat context', () => {
       now: new Date('2026-08-25T03:00:00.000Z'),
     });
 
-    expect(context.최근12개월달력월요약[0]).toMatchObject({ 월: '2026-08', 지출: 20_000 });
+    expect(context.최근12개월급여주기요약[0]).toMatchObject({ 월: '2026-08', 지출: 20_000 });
     expect(context.최근거래).toHaveLength(3);
     expect(context.최근거래.some(item => item.금액 === 500_000)).toBe(false);
   });
