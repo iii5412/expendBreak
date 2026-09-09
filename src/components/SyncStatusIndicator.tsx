@@ -60,9 +60,12 @@ export const SyncStatusIndicator: React.FC = () => {
 
   const handleRetry = async () => {
     setIsRetrying(true);
-    await retryPendingWrites();
-    setPendingWrites(getPendingFirestoreWrites());
-    setIsRetrying(false);
+    try {
+      await retryPendingWrites();
+      setPendingWrites(getPendingFirestoreWrites());
+    } finally {
+      setIsRetrying(false);
+    }
   };
 
   return (
@@ -131,6 +134,11 @@ export const SyncStatusIndicator: React.FC = () => {
                     {write.operation === 'delete' ? '삭제' : '저장'}
                   </span>
                   <div className="truncate text-xs text-slate-400">{write.documentId}</div>
+                  {write.lastError && (
+                    <div className="mt-1 whitespace-normal text-xs leading-relaxed text-amber-200">
+                      실패 원인: {write.lastError}
+                    </div>
+                  )}
                 </div>
                 <time className="shrink-0 text-xs text-slate-400" dateTime={write.queuedAt}>
                   {write.queuedAt.slice(5, 16).replace('T', ' ')}

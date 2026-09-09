@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DashboardView } from '../components/DashboardView';
 import { HistoryView } from '../components/HistoryView';
 import { FeedbackProvider } from '../components/ui/FeedbackProvider';
+import { Modal } from '../components/ui/Modal';
 import { calculateMonthSummary, getAccountingPeriod } from './calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 import type { Transaction } from '../types';
@@ -32,7 +33,13 @@ describe('audit UI rendering', () => {
  it('opens history on the payday cycle including the next calendar month', () => {
   const html=renderToStaticMarkup(<FeedbackProvider><HistoryView transactions={[tx]} categories={[]} bankAccounts={[]} paymentCards={[]} period={getAccountingPeriod('2026-08',10,now)} initialView="spending" onDeleteTransaction={noop} onUpdateTransaction={noop}/></FeedbackProvider>);
   expect(html).toContain('테스트상점');
-  expect(html).toContain('447,660');
-  expect(html).toContain('소비 지출');
+ expect(html).toContain('447,660');
+ expect(html).toContain('소비 지출');
+ });
+ it('uses the safe-area-aware scroll container for default modal dialogs', () => {
+  const html=renderToStaticMarkup(<Modal isOpen onClose={noop} ariaLabel="저장 미반영 사항"><div>내용</div></Modal>);
+  expect(html).toContain('app-modal-backdrop');
+  expect(html).toContain('data-eb-modal-panel');
+  expect(html).not.toContain('items-center justify-center p-4');
  });
 });

@@ -32,8 +32,8 @@ export const Modal: React.FC<ModalProps> = ({
   onClose,
   labelledById,
   ariaLabel,
-  panelClassName = 'app-viewport-sheet eb-panel w-full max-w-md overflow-y-auto rounded-2xl p-5',
-  backdropClassName = 'fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4',
+  panelClassName = 'eb-panel w-full max-w-md overflow-y-auto rounded-2xl p-5',
+  backdropClassName = 'app-modal-backdrop fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex justify-center px-4',
   dismissOnBackdrop = true,
   children,
 }) => {

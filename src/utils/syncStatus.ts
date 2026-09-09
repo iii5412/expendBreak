@@ -15,6 +15,8 @@ export interface PendingWriteSummary {
   collectionName: string;
   documentId: string;
   queuedAt: string;
+  failedAt?: string;
+  lastError?: string;
 }
 
 export interface SyncState {

@@ -34,7 +34,11 @@ import {
   reportWriteSucceeded,
   resetSyncStatus,
 } from './syncStatus';
-import { stripUndefined } from './firestorePayload';
+import {
+  describeFirestoreWriteError,
+  sanitizeUserProfileForFirestore,
+  stripUndefined,
+} from './firestorePayload';
 import { mergeFetchedHistory, mergeTransactionWindow } from './transactionWindow';
 import { getAccountStorageKey, getSignedInAccount } from './auth';
 
@@ -63,6 +67,8 @@ interface PendingFirestoreWrite {
   data?: Record<string, unknown>;
   merge?: boolean;
   queuedAt: string;
+  failedAt?: string;
+  lastError?: string;
 }
 
 let persistenceChain: Promise<void> = Promise.resolve();
@@ -107,12 +113,14 @@ export function describePendingCollection(collectionName: string): string {
 
 export function getPendingFirestoreWrites(): PendingWriteSummary[] {
   return readFirestoreOutbox()
-    .map(({ id, operation, collectionName, documentId, queuedAt }) => ({
+    .map(({ id, operation, collectionName, documentId, queuedAt, failedAt, lastError }) => ({
       id,
       operation,
       collectionName,
       documentId,
       queuedAt,
+      failedAt,
+      lastError,
     }))
     .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
 }
@@ -137,10 +145,27 @@ function removeFirestoreWrite(id: string) {
   writeFirestoreOutbox(readFirestoreOutbox().filter(entry => entry.id !== id));
 }
 
+function recordFirestoreWriteError(id: string, error: unknown): string {
+  const message = describeFirestoreWriteError(error);
+  const failedAt = new Date().toISOString();
+  writeFirestoreOutbox(readFirestoreOutbox().map(entry => (
+    entry.id === id ? { ...entry, failedAt, lastError: message } : entry
+  )));
+  return message;
+}
+
 async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
   const reference = scopedDoc(entry.collectionName, entry.documentId);
   if (entry.operation === 'delete') {
     await deleteDoc(reference);
+    return;
+  }
+  // Old global documents can still contain the prohibited legacy accessPin.
+  // A merge keeps that field in request.resource.data and Firestore rejects the
+  // update forever. Replace the complete sanitized profile so old queued writes
+  // repair the document on their very next retry.
+  if (entry.collectionName === COLLECTION_APP_SETTINGS && entry.documentId === DOC_GLOBAL_SETTINGS) {
+    await setDoc(reference, sanitizeUserProfileForFirestore(entry.data || {}));
     return;
   }
   if (entry.merge) {
@@ -166,13 +191,14 @@ function persistFirestoreWrite(
     return true;
   }).catch(error => {
     console.error(`${errorLabel}:`, error);
-    reportWriteFailed(errorLabel);
+    reportWriteFailed(recordFirestoreWriteError(queued.id, error));
     return false;
   });
 }
 
 export function flushFirestoreOutbox(): Promise<boolean> {
   reportWriteStarted();
+  let failedMessage = '';
   const operation = persistenceChain.then(async () => {
     const pending = [...new Map(
       readFirestoreOutbox()
@@ -181,7 +207,12 @@ export function flushFirestoreOutbox(): Promise<boolean> {
     ).values()];
     writeFirestoreOutbox(pending);
     for (const entry of pending) {
-      await executeFirestoreWrite(entry);
+      try {
+        await executeFirestoreWrite(entry);
+      } catch (error) {
+        failedMessage = recordFirestoreWriteError(entry.id, error);
+        throw error;
+      }
       removeFirestoreWrite(entry.id);
     }
   });
@@ -191,7 +222,7 @@ export function flushFirestoreOutbox(): Promise<boolean> {
     return true;
   }).catch(error => {
     console.error('Failed to flush Firestore persistence outbox:', error);
-    reportWriteFailed('미반영 변경사항을 DB에 저장하지 못했습니다.');
+    reportWriteFailed(failedMessage || describeFirestoreWriteError(error));
     return false;
   });
 }
@@ -467,8 +498,7 @@ export async function syncUserProfileToFirestore(profile: UserProfile) {
     operation: 'set',
     collectionName: COLLECTION_APP_SETTINGS,
     documentId: DOC_GLOBAL_SETTINGS,
-    data: profile as unknown as Record<string, unknown>,
-    merge: true,
+    data: sanitizeUserProfileForFirestore(profile),
   }, 'Failed to sync user profile to Firestore');
 }
 
