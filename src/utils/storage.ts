@@ -74,6 +74,7 @@ import {
   normalizeRecurringOccurrencesForMonth,
   reopenPostedOccurrence,
 } from './recurringNormalization';
+import { clearPaydayPaymentState } from './paydayPaymentState';
 
 const STORAGE_KEYS = {
   get TRANSACTIONS() { return getAccountStorageKey('brake_transactions'); },
@@ -123,6 +124,7 @@ function initialProfileForSignedInAccount(): UserProfile {
 
 export function clearLocalAppData() {
   Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+  clearPaydayPaymentState();
   clearTransactionHistoryFloor();
 }
 

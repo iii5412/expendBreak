@@ -26,6 +26,9 @@ export type PaydayTransferGroup = {
   accountNumber: string;
   accountHolder: string;
   items: PaydayTransferItem[];
+  /** Whole-cycle amount. It stays stable after an item is paid. */
+  totalAmount: number;
+  /** Amount that still needs to be paid for this account. */
   pendingAmount: number;
 };
 
@@ -75,6 +78,7 @@ export function buildPaydayTransferGroups({
       accountNumber,
       accountHolder,
       items: [],
+      totalAmount: 0,
       pendingAmount: 0,
     };
     groups.set(key, created);
@@ -111,6 +115,7 @@ export function buildPaydayTransferGroups({
         detail: '계좌 고정지출',
       };
       group.items.push(item);
+      group.totalAmount += amount;
       if (!completed) group.pendingAmount += amount;
     });
 
@@ -131,6 +136,7 @@ export function buildPaydayTransferGroups({
       detail: card.source === 'confirmed' ? '확정 카드대금' : '추정 카드대금',
     };
     group.items.push(item);
+    group.totalAmount += amount;
     if (!completed) group.pendingAmount += amount;
   });
 

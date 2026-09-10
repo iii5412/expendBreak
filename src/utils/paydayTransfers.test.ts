@@ -29,11 +29,20 @@ describe('buildPaydayTransferGroups', () => {
     const [group] = buildPaydayTransferGroups({
       recurringOccurrences: [occurrence({})], recurringTemplates: [template({})], bankAccounts: [account], cardSettlements: [card({})],
     });
-    expect(group).toMatchObject({ accountId: account.id, label: '결제 통장 · 신한', pendingAmount: 800_000 });
+    expect(group).toMatchObject({ accountId: account.id, label: '결제 통장 · 신한', totalAmount: 800_000, pendingAmount: 800_000 });
     expect(group.items.map(item => [item.kind, item.amount, item.selectable])).toEqual([
       ['recurring', 500_000, true],
       ['card_settlement', 300_000, true],
     ]);
+  });
+
+  it('keeps the cycle total while removing completed items from the amount still due', () => {
+    const [group] = buildPaydayTransferGroups({
+      recurringOccurrences: [occurrence({ status: 'posted', actualAmount: 510_000 })],
+      recurringTemplates: [template({})], bankAccounts: [account], cardSettlements: [card({})],
+    });
+    expect(group.totalAmount).toBe(810_000);
+    expect(group.pendingAmount).toBe(300_000);
   });
 
   it('does not list card-paid fixed costs twice', () => {

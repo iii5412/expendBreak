@@ -841,7 +841,7 @@ export default function App() {
   const handleCardSettlementStatus = (cardId: string, status: 'scheduled' | 'paid') => {
     const card = paymentCards.find(candidate => candidate.id === cardId);
     const settlement = cardSettlementSummary.cards.find(candidate => candidate.cardId === cardId);
-    if (!card || !settlement) return;
+    if (!card || !settlement) return false;
 
     const updated = setCardSettlementPaid(
       cardId,
@@ -856,7 +856,7 @@ export default function App() {
         description: '0원 카드대금은 출금 거래로 저장할 수 없습니다.',
         tone: 'warning',
       });
-      return;
+      return false;
     }
     refreshAppData();
     showToast({
@@ -868,6 +868,7 @@ export default function App() {
         : '출금 기록을 되돌렸습니다.',
       tone: 'success',
     });
+    return true;
   };
 
   /** Records the user's answer on a suspected duplicate card bill, either way. */
@@ -1383,11 +1384,18 @@ export default function App() {
             cardSettlementReviewItems={cardSettlementReviewItems}
             onResolveCardSettlementReview={handleResolveCardSettlementReview}
             onUpdateCardSettlementStatus={handleCardSettlementStatus}
+            onSaveCardSettlementAmount={handleSaveCardSettlementAmount}
             onPostOccurrence={async (occId, amt, pType, accId, cId) => {
-              await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
+              const posted = await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
               refreshAppData();
+              return Boolean(posted);
             }}
             onUndoPostedOccurrence={occurrenceId => void handleUndoPostedOccurrence(occurrenceId)}
+            onUndoOccurrenceDirect={occurrenceId => {
+              const reopened = undoPostedOccurrence(occurrenceId);
+              refreshAppData();
+              return Boolean(reopened);
+            }}
             onExcludeOccurrence={occurrenceId => void handleExcludeRecurringOccurrence(occurrenceId)}
             onUpdateOccurrencePlan={(occId, amount, pType, accId, cId) => {
               updateOccurrencePlan(occId, {

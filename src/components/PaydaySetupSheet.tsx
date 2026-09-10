@@ -22,6 +22,7 @@ import {
 import { AccountingPeriod, MonthSummary, formatKRW, formatPeriodRange } from '../utils/calculations';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { buildPaydayTransferGroups, PaydayTransferGroup } from '../utils/paydayTransfers';
+import { clearPaydayFunding, getPaydayFunding, savePaydayFunding, savePaydayPaymentBatch } from '../utils/paydayPaymentState';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 
@@ -54,9 +55,9 @@ interface PaydaySetupSheetProps {
     paymentMethodType?: PaymentMethodType,
     accountId?: string | null,
     cardId?: string | null,
-  ) => Promise<void> | void;
+  ) => Promise<void | boolean> | void | boolean;
   onSaveCardSettlementAmount: (cardId: string, amount: number) => void;
-  onUpdateCardSettlementStatus: (cardId: string, status: 'scheduled' | 'paid') => Promise<void> | void;
+  onUpdateCardSettlementStatus: (cardId: string, status: 'scheduled' | 'paid') => Promise<void | boolean> | void | boolean;
   onConfirmBaseline: (savingsReserve: number) => Promise<void> | void;
   onCopyText: (text: string, message: string) => void;
 }
@@ -84,6 +85,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   const [savingsReserve, setSavingsReserve] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [excludedTransferIds, setExcludedTransferIds] = useState<Set<string>>(() => new Set());
+  const [fundingRevision, setFundingRevision] = useState(0);
   const [completingGroupKey, setCompletingGroupKey] = useState<string | null>(null);
 
   const templateMap = useMemo(
@@ -200,13 +202,22 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
     const selectedItems = selectedItemsInGroup(group);
     if (selectedItems.length === 0) return;
     setCompletingGroupKey(group.key);
+    const completedIds: string[] = [];
     try {
       for (const item of selectedItems) {
+        let result: boolean | void;
         if (item.kind === 'card_settlement') {
-          await onUpdateCardSettlementStatus(item.referenceId, 'paid');
+          result = await onUpdateCardSettlementStatus(item.referenceId, 'paid');
         } else {
-          await onPostOccurrence(item.referenceId, item.amount, 'account', item.accountId, null);
+          result = await onPostOccurrence(item.referenceId, item.amount, 'account', item.accountId, null);
         }
+        if (result === false) break;
+        completedIds.push(item.id);
+      }
+      if (completedIds.length > 0) savePaydayPaymentBatch(period.yearMonth, group.key, completedIds);
+      if (completedIds.length === selectedItems.length) {
+        clearPaydayFunding(period.yearMonth, group.key);
+        setFundingRevision(value => value + 1);
       }
     } finally {
       setCompletingGroupKey(null);
@@ -371,9 +382,12 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
             ) : (
               <div className="space-y-2">
                 {transferGroups.map(group => {
+                  void fundingRevision;
                   const selectableItems = group.items.filter(item => item.selectable);
                   const selectedItems = selectedItemsInGroup(group);
                   const selectedAmount = selectedItems.reduce((sum, item) => sum + item.amount, 0);
+                  const fundedAmount = Math.min(group.pendingAmount, getPaydayFunding(period.yearMonth, group.key)?.amount || 0);
+                  const transferAmount = Math.max(0, selectedAmount - fundedAmount);
                   const allSelected = selectableItems.length > 0 && selectedItems.length === selectableItems.length;
                   const isCompleting = completingGroupKey === group.key;
                   return (
@@ -401,11 +415,12 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                           )}
                         </div>
                         <div className="shrink-0 text-right">
-                          <p className="text-[10px] text-slate-400">선택 합계</p>
-                          <p className="font-bold text-amber-300">{formatKRW(selectedAmount)}</p>
+                          <p className="text-[10px] text-slate-400">보낼 금액</p>
+                          <p className="font-bold text-amber-300">{formatKRW(transferAmount)}</p>
                           {selectedAmount !== group.pendingAmount && (
                             <p className="text-[10px] text-slate-500">전체 {formatKRW(group.pendingAmount)}</p>
                           )}
+                          {fundedAmount > 0 && <p className="text-[10px] text-blue-300">확보 {formatKRW(fundedAmount)}</p>}
                         </div>
                       </div>
 
@@ -467,16 +482,27 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                         })}
                       </ul>
 
-                      <button
-                        type="button"
-                        disabled={selectedItems.length === 0 || isCompleting}
-                        onClick={() => void handleCompleteTransferGroup(group)}
-                        className="mt-3 min-h-11 w-full rounded-lg bg-emerald-500 text-xs font-extrabold text-slate-950 transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {isCompleting
-                          ? '처리 중...'
-                          : `선택 ${selectedItems.length}건 · ${formatKRW(selectedAmount)} 이체 완료`}
-                      </button>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={selectedItems.length === 0 || isCompleting}
+                          onClick={() => {
+                            savePaydayFunding(period.yearMonth, group.key, selectedAmount);
+                            setFundingRevision(value => value + 1);
+                          }}
+                          className="min-h-11 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2 text-xs font-bold text-blue-200 disabled:opacity-40"
+                        >
+                          이체 준비 저장
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selectedItems.length === 0 || isCompleting}
+                          onClick={() => void handleCompleteTransferGroup(group)}
+                          className="min-h-11 rounded-lg bg-emerald-500 px-2 text-xs font-extrabold text-slate-950 transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {isCompleting ? '처리 중...' : `선택 ${selectedItems.length}건 납부 완료`}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -486,7 +512,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
             <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-xs">
               <span className="text-slate-400">계좌별 준비 대상</span>
               <span className="font-bold text-amber-300">
-                {formatKRW(transferGroups.reduce((sum, group) => sum + group.pendingAmount, 0))}
+                {formatKRW(transferGroups.reduce((sum, group) => sum + Math.max(0, group.pendingAmount - (getPaydayFunding(period.yearMonth, group.key)?.amount || 0)), 0))}
               </span>
             </div>
 
