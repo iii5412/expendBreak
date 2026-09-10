@@ -21,6 +21,7 @@ import {
 } from '../types';
 import { AccountingPeriod, MonthSummary, formatKRW, formatPeriodRange } from '../utils/calculations';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
+import { buildPaydayTransferGroups, PaydayTransferGroup } from '../utils/paydayTransfers';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
 
@@ -33,7 +34,7 @@ import { AmountInput } from './ui/AmountInput';
  * remaining balance from drifting for the rest of the cycle (INV-4).
  */
 
-const STEPS = ['급여 입금', '고정지출 이체', '카드대금', '생활비 확정'] as const;
+const STEPS = ['급여 입금', '카드대금 확인', '계좌별 이체', '생활비 확정'] as const;
 
 interface PaydaySetupSheetProps {
   isOpen: boolean;
@@ -55,6 +56,7 @@ interface PaydaySetupSheetProps {
     cardId?: string | null,
   ) => Promise<void> | void;
   onSaveCardSettlementAmount: (cardId: string, amount: number) => void;
+  onUpdateCardSettlementStatus: (cardId: string, status: 'scheduled' | 'paid') => Promise<void> | void;
   onConfirmBaseline: (savingsReserve: number) => Promise<void> | void;
   onCopyText: (text: string, message: string) => void;
 }
@@ -72,6 +74,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   replacedCardSettlementCount,
   onPostOccurrence,
   onSaveCardSettlementAmount,
+  onUpdateCardSettlementStatus,
   onConfirmBaseline,
   onCopyText,
 }) => {
@@ -80,6 +83,8 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   const [cardAmountDrafts, setCardAmountDrafts] = useState<Record<string, number>>({});
   const [savingsReserve, setSavingsReserve] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
+  const [excludedTransferIds, setExcludedTransferIds] = useState<Set<string>>(() => new Set());
+  const [completingGroupKey, setCompletingGroupKey] = useState<string | null>(null);
 
   const templateMap = useMemo(
     () => new Map(recurringTemplates.map(template => [template.id, template])),
@@ -127,51 +132,24 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
     [visibleOccurrences, templateMap],
   );
 
-  /** Transfers grouped the way the user actually does them: one bank at a time. */
-  const transferGroups = useMemo(() => {
-    const groups = new Map<string, {
-      key: string;
-      label: string;
-      accountNumber: string;
-      accountHolder: string;
-      items: RecurringOccurrence[];
-      pendingAmount: number;
-    }>();
-
-    transferOccurrences.forEach(occurrence => {
-      const template = templateMap.get(occurrence.templateId);
-      const linkedAccount = accountMap.get(occurrence.accountId || template?.accountId || '');
-      const bankName = linkedAccount?.bankName || template?.bankName || '은행 미지정';
-      const accountNumber = linkedAccount?.accountNumber || template?.accountNumber || '';
-      const accountHolder = linkedAccount?.accountHolder || template?.accountHolder || template?.counterparty || '';
-      const key = `${bankName}___${accountNumber}___${accountHolder}`;
-
-      const group = groups.get(key) || {
-        key,
-        label: bankName,
-        accountNumber,
-        accountHolder,
-        items: [],
-        pendingAmount: 0,
-      };
-      group.items.push(occurrence);
-      if (isPending(occurrence)) {
-        group.pendingAmount += Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
-      }
-      groups.set(key, group);
-    });
-
-    return [...groups.values()].sort((left, right) => right.pendingAmount - left.pendingAmount);
-  }, [transferOccurrences, templateMap, accountMap]);
+  const transferGroups = useMemo(() => buildPaydayTransferGroups({
+    recurringOccurrences: visibleOccurrences,
+    recurringTemplates,
+    bankAccounts,
+    cardSettlements: cardSettlementSummary.cards,
+  }), [visibleOccurrences, recurringTemplates, bankAccounts, cardSettlementSummary.cards]);
 
   const pendingIncome = incomeOccurrences.filter(isPending);
   const pendingTransfers = transferOccurrences.filter(isPending);
+  const pendingCardSettlements = cardSettlementSummary.cards.filter(card => card.status !== 'paid' && card.amount > 0);
 
   // Reset only when the sheet opens, so navigating back and forth keeps drafts.
   useEffect(() => {
     if (!isOpen) return;
     setStep(0);
     setSavingsReserve(summary.savingsReserve);
+    setExcludedTransferIds(new Set());
+    setCompletingGroupKey(null);
     setIncomeAmountDrafts(Object.fromEntries(
       incomeOccurrences.map(occurrence => [
         occurrence.id,
@@ -191,15 +169,48 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
     await onPostOccurrence(occurrence.id, amount, methodOf(occurrence) ?? 'account');
   };
 
-  const handleConfirmTransfer = async (occurrence: RecurringOccurrence) => {
-    const template = templateMap.get(occurrence.templateId);
-    await onPostOccurrence(
-      occurrence.id,
-      Math.round(occurrence.actualAmount ?? occurrence.expectedAmount),
-      'account',
-      occurrence.accountId || template?.accountId || null,
-      null,
-    );
+  const selectedItemsInGroup = (group: PaydayTransferGroup) => group.items.filter(
+    item => item.selectable && !excludedTransferIds.has(item.id),
+  );
+
+  const toggleTransferItem = (itemId: string) => {
+    setExcludedTransferIds(current => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
+
+  const toggleTransferGroup = (group: PaydayTransferGroup) => {
+    const selectableItems = group.items.filter(item => item.selectable);
+    const allSelected = selectableItems.length > 0
+      && selectableItems.every(item => !excludedTransferIds.has(item.id));
+    setExcludedTransferIds(current => {
+      const next = new Set(current);
+      selectableItems.forEach(item => {
+        if (allSelected) next.add(item.id);
+        else next.delete(item.id);
+      });
+      return next;
+    });
+  };
+
+  const handleCompleteTransferGroup = async (group: PaydayTransferGroup) => {
+    const selectedItems = selectedItemsInGroup(group);
+    if (selectedItems.length === 0) return;
+    setCompletingGroupKey(group.key);
+    try {
+      for (const item of selectedItems) {
+        if (item.kind === 'card_settlement') {
+          await onUpdateCardSettlementStatus(item.referenceId, 'paid');
+        } else {
+          await onPostOccurrence(item.referenceId, item.amount, 'account', item.accountId, null);
+        }
+      }
+    } finally {
+      setCompletingGroupKey(null);
+    }
   };
 
   const handleFinish = async () => {
@@ -345,96 +356,137 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
           </section>
         )}
 
-        {/* Step 2 — the transfer checklist */}
-        {step === 1 && (
+        {/* Step 3 — account funding and transfer checklist */}
+        {step === 2 && (
           <section className="space-y-3">
             <p className="text-xs leading-relaxed text-slate-400">
-              은행별로 묶었습니다. 이체한 항목을 체크하면 그 자리에서 거래로 확정됩니다.
-              카드로 결제되는 고정지출은 다음 단계 카드대금에 들어갑니다.
+              계좌에서 빠질 고정지출과 카드대금을 출금 계좌별로 합쳤습니다. 이번에 이체할 항목만 남긴 뒤
+              실제 송금을 마치고 이체 완료를 누르세요.
             </p>
 
             {transferGroups.length === 0 ? (
               <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-center text-xs text-slate-400">
-                계좌에서 이체할 고정지출이 없습니다.
+                이번 주기에 준비할 계좌 이체가 없습니다.
               </div>
             ) : (
               <div className="space-y-2">
-                {transferGroups.map(group => (
-                  <div key={group.key} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-                    <div className="flex items-start justify-between gap-3 border-b border-slate-800/70 pb-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
-                          <Building2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                          <span className="truncate">{group.label}</span>
-                        </div>
-                        {group.accountNumber && (
-                          <button
-                            type="button"
-                            onClick={() => onCopyText(group.accountNumber, '계좌번호를 복사했습니다.')}
-                            className="mt-1 flex items-center gap-1 text-xs text-slate-400 transition-colors hover:text-slate-200"
-                          >
-                            <Copy className="h-3 w-3" />
-                            <span className="truncate">
-                              {group.accountNumber}
-                              {group.accountHolder && ` · ${group.accountHolder}`}
-                            </span>
-                          </button>
-                        )}
-                      </div>
-                      <span className="shrink-0 text-xs font-bold text-amber-300">
-                        {formatKRW(group.pendingAmount)}
-                      </span>
-                    </div>
-
-                    <ul className="mt-2 space-y-1.5">
-                      {group.items.map(occurrence => {
-                        const template = templateMap.get(occurrence.templateId);
-                        const posted = occurrence.status === 'posted';
-                        const amount = Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
-                        return (
-                          <li key={occurrence.id}>
+                {transferGroups.map(group => {
+                  const selectableItems = group.items.filter(item => item.selectable);
+                  const selectedItems = selectedItemsInGroup(group);
+                  const selectedAmount = selectedItems.reduce((sum, item) => sum + item.amount, 0);
+                  const allSelected = selectableItems.length > 0 && selectedItems.length === selectableItems.length;
+                  const isCompleting = completingGroupKey === group.key;
+                  return (
+                    <div key={group.key} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                      <div className="flex items-start justify-between gap-3 border-b border-slate-800/70 pb-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+                            <Building2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                            <span className="truncate">{group.label}</span>
+                          </div>
+                          {group.accountNumber ? (
                             <button
                               type="button"
-                              disabled={posted}
-                              onClick={() => void handleConfirmTransfer(occurrence)}
-                              className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${
-                                posted
-                                  ? 'cursor-default border-emerald-500/30 bg-emerald-500/5'
-                                  : 'border-slate-800 bg-slate-900 hover:bg-slate-800'
-                              }`}
+                              onClick={() => onCopyText(group.accountNumber, '계좌번호를 복사했습니다.')}
+                              className="mt-1 flex items-center gap-1 text-xs text-slate-400 transition-colors hover:text-slate-200"
                             >
-                              <span className="flex min-w-0 items-center gap-2">
-                                <span
-                                  aria-hidden
-                                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                    posted
-                                      ? 'border-emerald-500 bg-emerald-500 text-slate-950'
-                                      : 'border-slate-600'
-                                  }`}
-                                >
-                                  {posted && <Check className="h-3 w-3" />}
-                                </span>
-                                <span className={`truncate font-semibold ${posted ? 'text-emerald-300 line-through' : 'text-slate-200'}`}>
-                                  {template?.name || '고정지출'}
-                                </span>
-                              </span>
-                              <span className={`shrink-0 font-bold ${posted ? 'text-emerald-300' : 'text-slate-100'}`}>
-                                {formatKRW(amount)}
+                              <Copy className="h-3 w-3" />
+                              <span className="truncate">
+                                {group.accountNumber}
+                                {group.accountHolder && ` · ${group.accountHolder}`}
                               </span>
                             </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                ))}
+                          ) : (
+                            <p className="mt-1 text-xs text-amber-300">계좌 연결이 필요합니다</p>
+                          )}
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-[10px] text-slate-400">선택 합계</p>
+                          <p className="font-bold text-amber-300">{formatKRW(selectedAmount)}</p>
+                          {selectedAmount !== group.pendingAmount && (
+                            <p className="text-[10px] text-slate-500">전체 {formatKRW(group.pendingAmount)}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {selectableItems.length > 0 && (
+                        <label className="mt-2 flex min-h-9 cursor-pointer items-center gap-2 rounded-lg px-2 text-xs font-semibold text-slate-300 hover:bg-slate-900">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={() => toggleTransferGroup(group)}
+                            className="h-4 w-4 accent-emerald-500"
+                          />
+                          이 계좌 항목 전체 선택
+                        </label>
+                      )}
+
+                      <ul className="mt-1.5 space-y-1.5">
+                        {group.items.map(item => {
+                          const selected = item.selectable && !excludedTransferIds.has(item.id);
+                          return (
+                            <li key={item.id}>
+                              <label className={`flex min-h-12 items-center justify-between gap-3 rounded-lg border px-2.5 py-2 text-xs ${
+                                item.completed
+                                  ? 'border-emerald-500/30 bg-emerald-500/5'
+                                  : item.selectable
+                                    ? 'cursor-pointer border-slate-800 bg-slate-900 hover:bg-slate-800'
+                                    : 'border-slate-800 bg-slate-950/70 opacity-70'
+                              }`}>
+                                <span className="flex min-w-0 items-center gap-2">
+                                  {item.completed ? (
+                                    <span aria-hidden className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-emerald-500 bg-emerald-500 text-slate-950">
+                                      <Check className="h-3 w-3" />
+                                    </span>
+                                  ) : (
+                                    <input
+                                      type="checkbox"
+                                      checked={selected}
+                                      disabled={!item.selectable || isCompleting}
+                                      onChange={() => toggleTransferItem(item.id)}
+                                      className="h-4 w-4 shrink-0 accent-emerald-500"
+                                    />
+                                  )}
+                                  <span className="min-w-0">
+                                    <span className={`block truncate font-semibold ${item.completed ? 'text-emerald-300 line-through' : 'text-slate-200'}`}>
+                                      {item.label}
+                                    </span>
+                                    <span className="block text-[10px] text-slate-500">
+                                      {item.detail}{item.dueDate ? ` · ${item.dueDate}` : ''}
+                                      {!item.completed && item.amount <= 0 ? ' · 금액 확인 필요' : ''}
+                                      {!item.completed && !item.accountId && !group.accountNumber ? ' · 계좌 미지정' : ''}
+                                    </span>
+                                  </span>
+                                </span>
+                                <span className={`shrink-0 font-bold ${item.completed ? 'text-emerald-300' : 'text-slate-100'}`}>
+                                  {formatKRW(item.amount)}
+                                </span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+
+                      <button
+                        type="button"
+                        disabled={selectedItems.length === 0 || isCompleting}
+                        onClick={() => void handleCompleteTransferGroup(group)}
+                        className="mt-3 min-h-11 w-full rounded-lg bg-emerald-500 text-xs font-extrabold text-slate-950 transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {isCompleting
+                          ? '처리 중...'
+                          : `선택 ${selectedItems.length}건 · ${formatKRW(selectedAmount)} 이체 완료`}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
             <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-xs">
-              <span className="text-slate-400">남은 이체</span>
+              <span className="text-slate-400">계좌별 준비 대상</span>
               <span className="font-bold text-amber-300">
-                {formatKRW(summary.scheduledAccountFixedOutflow)} · {pendingTransfers.length}건
+                {formatKRW(transferGroups.reduce((sum, group) => sum + group.pendingAmount, 0))}
               </span>
             </div>
 
@@ -448,7 +500,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                 <div className="space-y-2 border-t border-slate-800 px-3 py-2 text-xs">
                   {cardPaidOccurrences.length > 0 && (
                     <div>
-                      <p className="text-slate-400">카드로 결제되어 다음 단계 카드대금에 포함됩니다.</p>
+                      <p className="text-slate-400">카드로 결제되어 카드대금에 포함됩니다. 이체 목록에는 카드대금 한 건으로 합쳐 표시됩니다.</p>
                       <ul className="mt-1 space-y-0.5">
                         {cardPaidOccurrences.map(occurrence => (
                           <li key={occurrence.id} className="flex items-center justify-between gap-3 text-slate-300">
@@ -475,8 +527,8 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
           </section>
         )}
 
-        {/* Step 3 — the card bill */}
-        {step === 2 && (
+        {/* Step 2 — confirm card bills before funding their withdrawal accounts */}
+        {step === 1 && (
           <section className="space-y-3">
             <p className="text-xs leading-relaxed text-slate-400">
               결제일이 이번 주기 안에 있는 카드대금입니다. 고지서 금액이 다르면 실제 금액으로 고쳐 주세요.
@@ -602,9 +654,9 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
               />
             </div>
 
-            {(pendingIncome.length > 0 || pendingTransfers.length > 0) && (
+            {(pendingIncome.length > 0 || pendingTransfers.length > 0 || pendingCardSettlements.length > 0) && (
               <p className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs leading-relaxed text-amber-200">
-                미확정 항목 {pendingIncome.length + pendingTransfers.length}건이 남아 있습니다.
+                미확정 항목 {pendingIncome.length + pendingTransfers.length + pendingCardSettlements.length}건이 남아 있습니다.
                 예정 금액으로 계획을 세우고, 나중에 확정해도 이 생활비는 바뀌지 않습니다.
               </p>
             )}

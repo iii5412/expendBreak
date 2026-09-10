@@ -843,13 +843,21 @@ export default function App() {
     const settlement = cardSettlementSummary.cards.find(candidate => candidate.cardId === cardId);
     if (!card || !settlement) return;
 
-    setCardSettlementPaid(
+    const updated = setCardSettlementPaid(
       cardId,
       currentYM,
       settlement.amount,
       settlement.paymentDate || getLocalDateString(),
       status === 'paid',
     );
+    if (status === 'paid' && !updated) {
+      showToast({
+        message: '카드대금 금액을 먼저 확인해 주세요.',
+        description: '0원 카드대금은 출금 거래로 저장할 수 없습니다.',
+        tone: 'warning',
+      });
+      return;
+    }
     refreshAppData();
     showToast({
       message: status === 'paid'
@@ -1585,6 +1593,7 @@ export default function App() {
           refreshAppData();
         }}
         onSaveCardSettlementAmount={handleSaveCardSettlementAmount}
+        onUpdateCardSettlementStatus={handleCardSettlementStatus}
         onConfirmBaseline={handleConfirmBaseline}
         onCopyText={(text, message) => {
           void navigator.clipboard.writeText(text);

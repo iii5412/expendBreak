@@ -425,7 +425,9 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
                     <button
                       type="button"
                       onClick={() => onUpdateCardSettlementStatus(card.cardId, card.status === 'paid' ? 'scheduled' : 'paid')}
-                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${card.status === 'paid' ? 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'}`}
+                      disabled={card.status !== 'paid' && card.amount <= 0}
+                      title={card.status !== 'paid' && card.amount <= 0 ? '카드대금 금액을 먼저 확인해 주세요' : undefined}
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${card.status === 'paid' ? 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'}`}
                     >
                       {card.status === 'paid' ? '미납부로 되돌리기' : '납부 완료'}
                     </button>

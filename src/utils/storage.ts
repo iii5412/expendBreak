@@ -1218,6 +1218,11 @@ export function setCardSettlementPaid(
   const transactions = getTransactions().filter(transaction => transaction.id !== transactionId);
   const paidAmount = Math.max(0, Math.round(amount));
 
+  // A zero-value bill has no account withdrawal to record. Keeping it scheduled
+  // also prevents an invalid amount=0 transaction from becoming a permanent
+  // Firestore outbox failure.
+  if (paid && paidAmount <= 0) return null;
+
   updatePaymentCard(cardId, {
     monthlyPaymentStatuses: {
       ...(card.monthlyPaymentStatuses || {}),
