@@ -553,6 +553,10 @@ export interface TransactionSaveResult {
 export function saveTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>): TransactionSaveResult {
   assertCategoryMatchesType(tx.type, tx.categoryId);
   const txs = getTransactions();
+  if (tx.sourceFingerprint) {
+    const existing = txs.find(candidate => candidate.sourceFingerprint === tx.sourceFingerprint);
+    if (existing) return { transaction: existing, synced: Promise.resolve(true) };
+  }
   const now = new Date().toISOString();
   const newTx: Transaction = {
     ...tx,

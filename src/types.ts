@@ -281,6 +281,12 @@ export interface UserProfile {
   smsAutoImportEnabled?: boolean;
   /** Records the account-scoped disclosure acceptance for SMS processing. */
   smsConsentAt?: string | null;
+  /** Version 2 adds on-open inbox scanning to the original live-receive consent. */
+  smsInboxConsentVersion?: number;
+  /** Records when the account accepted inbox scanning on this app version. */
+  smsInboxConsentAt?: string | null;
+  /** Prevents repeatedly prompting after the user chooses to decide later. */
+  smsInboxConsentDeferredAt?: string | null;
   /** Set once the setup sheet is finished or skipped, so it stops prompting. */
   onboardingCompletedAt?: string | null;
   /** Idle minutes before the app locks. 0 disables the idle lock. */

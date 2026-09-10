@@ -6,6 +6,24 @@ import { isNativeAndroid } from './platform';
 
 export type SmsPermissionState = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied';
 
+export interface SmsPermissionStatus {
+  receiveSms: SmsPermissionState;
+  readSms: SmsPermissionState;
+}
+
+export interface SmsImportStatus {
+  enabled: boolean;
+  baselineAt: number;
+  enabledAt: number;
+  lastAttemptAt: number;
+  lastSuccessAt: number;
+  lastScannedCount: number;
+  lastCandidateCount: number;
+  lastError: string | null;
+  pendingCount: number;
+  skipped?: boolean;
+}
+
 export interface NativeSmsMessage {
   id: string;
   sender: string;
@@ -14,10 +32,12 @@ export interface NativeSmsMessage {
 }
 
 interface SmsBridgePlugin {
-  checkPermissions(): Promise<{ receiveSms?: SmsPermissionState }>;
-  requestPermissions(): Promise<{ receiveSms?: SmsPermissionState }>;
+  checkPermissions(): Promise<Partial<SmsPermissionStatus>>;
+  requestPermissions(): Promise<Partial<SmsPermissionStatus>>;
   openSettings(): Promise<void>;
-  setActiveProfile(options: { profileKey: string; enabled: boolean }): Promise<void>;
+  setActiveProfile(options: { profileKey: string; enabled: boolean; startAtInstall?: boolean }): Promise<SmsImportStatus>;
+  getStatus(options: { profileKey: string }): Promise<SmsImportStatus>;
+  scanInbox(options: { profileKey: string; force?: boolean }): Promise<SmsImportStatus>;
   readPending(options: { profileKey: string }): Promise<{ messages: NativeSmsMessage[] }>;
   acknowledge(options: { profileKey: string; ids: string[] }): Promise<void>;
   clearPending(options: { profileKey: string }): Promise<void>;
@@ -30,18 +50,33 @@ export function isSmsImportAvailable() {
   return isNativeAndroid();
 }
 
-export async function getSmsPermissionState(): Promise<SmsPermissionState> {
-  if (!isSmsImportAvailable()) return 'denied';
+export async function getSmsPermissionStatus(): Promise<SmsPermissionStatus> {
+  if (!isSmsImportAvailable()) return { receiveSms: 'denied', readSms: 'denied' };
   const result = await SmsBridge.checkPermissions();
-  return result.receiveSms || 'prompt';
+  return {
+    receiveSms: result.receiveSms || 'prompt',
+    readSms: result.readSms || 'prompt',
+  };
+}
+
+export async function requestSmsPermissions(): Promise<SmsPermissionStatus> {
+  if (!isSmsImportAvailable()) return { receiveSms: 'denied', readSms: 'denied' };
+  const current = await getSmsPermissionStatus();
+  if (current.receiveSms === 'granted' && current.readSms === 'granted') return current;
+  const result = await SmsBridge.requestPermissions();
+  return {
+    receiveSms: result.receiveSms || 'denied',
+    readSms: result.readSms || 'denied',
+  };
+}
+
+/** Backward-compatible helper for callers that only care about live delivery. */
+export async function getSmsPermissionState(): Promise<SmsPermissionState> {
+  return (await getSmsPermissionStatus()).receiveSms;
 }
 
 export async function requestSmsPermission(): Promise<SmsPermissionState> {
-  if (!isSmsImportAvailable()) return 'denied';
-  const current = await getSmsPermissionState();
-  if (current === 'granted') return current;
-  const result = await SmsBridge.requestPermissions();
-  return result.receiveSms || 'denied';
+  return (await requestSmsPermissions()).receiveSms;
 }
 
 export async function openSmsPermissionSettings() {
@@ -49,9 +84,23 @@ export async function openSmsPermissionSettings() {
   await SmsBridge.openSettings();
 }
 
-export async function configureSmsImport(profileKey: string, enabled: boolean) {
-  if (!isSmsImportAvailable()) return;
-  await SmsBridge.setActiveProfile({ profileKey, enabled });
+export async function configureSmsImport(
+  profileKey: string,
+  enabled: boolean,
+  startAtInstall = false,
+): Promise<SmsImportStatus | null> {
+  if (!isSmsImportAvailable()) return null;
+  return SmsBridge.setActiveProfile({ profileKey, enabled, startAtInstall });
+}
+
+export async function getSmsImportStatus(profileKey: string): Promise<SmsImportStatus | null> {
+  if (!isSmsImportAvailable()) return null;
+  return SmsBridge.getStatus({ profileKey });
+}
+
+export async function scanSmsInbox(profileKey: string, force = false): Promise<SmsImportStatus | null> {
+  if (!isSmsImportAvailable()) return null;
+  return SmsBridge.scanInbox({ profileKey, force });
 }
 
 export async function clearPendingSms(profileKey: string) {
@@ -225,11 +274,13 @@ function extractMerchant(body: string, issuer: string | null) {
 
 function stableHash(value: string) {
   let hash = 2166136261;
+  let secondHash = 5381;
   for (let index = 0; index < value.length; index += 1) {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
+    secondHash = Math.imul(secondHash, 33) ^ value.charCodeAt(index);
   }
-  return `sms_${(hash >>> 0).toString(36)}`;
+  return `sms2_${(hash >>> 0).toString(36)}_${(secondHash >>> 0).toString(36)}`;
 }
 
 export function parseFinancialSms(message: NativeSmsMessage): ParsedSmsTransaction | null {
@@ -253,7 +304,7 @@ export function parseFinancialSms(message: NativeSmsMessage): ParsedSmsTransacti
   const minute = `${localDate}T${pad(occurred.getHours())}:${pad(occurred.getMinutes())}`;
   const identity = approvalCode
     ? `${issuer || ''}|${cardLast4 || ''}|${approvalCode}|${kind}`
-    : `${issuer || ''}|${cardLast4 || ''}|${amount}|${merchant.toLowerCase()}|${minute}|${kind}`;
+    : `${issuer || ''}|${cardLast4 || ''}|${amount}|${merchant.toLowerCase()}|${minute}|${kind}|${message.id}`;
 
   return {
     kind,

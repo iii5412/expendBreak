@@ -38,6 +38,13 @@ describe('parseFinancialSms', () => {
     expect(parsed?.amount).toBe(4500);
     expect(parsed?.merchant).toBe('메가커피');
   });
+
+  it('keeps two real same-minute purchases separate when their message ids differ', () => {
+    const body = '현대카드 승인\n4,500원\n09/06 09:12 메가커피';
+    const first = parseFinancialSms({ ...message(body), id: 'provider-1' });
+    const second = parseFinancialSms({ ...message(body), id: 'provider-2' });
+    expect(first?.fingerprint).not.toBe(second?.fingerprint);
+  });
 });
 
 describe('SMS transaction enrichment', () => {

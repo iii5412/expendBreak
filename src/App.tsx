@@ -126,9 +126,14 @@ import {
   clearPendingSms,
   configureSmsImport,
   findCancellationTarget,
+  getSmsImportStatus,
+  getSmsPermissionStatus,
   isDuplicateSmsTransaction,
+  openSmsPermissionSettings,
   prepareSmsReviewQueue,
   readPendingSms,
+  requestSmsPermissions,
+  scanSmsInbox,
   SmsReviewCandidate,
   subscribeToPendingSms,
 } from './utils/smsImport';
@@ -137,6 +142,7 @@ type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
 const UNDO_WINDOW_MS = 10000;
 const LOCK_WARNING_MS = 60000;
+const SMS_INBOX_CONSENT_VERSION = 2;
 
 export default function App() {
   const { showToast, dismissToast } = useToast();
@@ -183,6 +189,7 @@ export default function App() {
   const smsImportBusy = useRef(false);
   const smsImportRerunRequested = useRef(false);
   const announcedSmsCandidateIds = useRef(new Set<string>());
+  const smsDisclosurePromptedFor = useRef<string | null>(null);
 
   // Reload state from storage
   const refreshAppData = () => {
@@ -245,6 +252,9 @@ export default function App() {
     if (!userProfile.smsAutoImportEnabled) {
       setSmsCandidates([]);
       announcedSmsCandidateIds.current.clear();
+      void configureSmsImport(userProfile.uid, false).catch(error => {
+        console.error('Unable to disable SMS import for this account:', error);
+      });
       return;
     }
     let cancelled = false;
@@ -258,6 +268,14 @@ export default function App() {
       }
       smsImportBusy.current = true;
       try {
+        if ((userProfile.smsInboxConsentVersion || 0) >= SMS_INBOX_CONSENT_VERSION) {
+          const permissions = await getSmsPermissionStatus();
+          if (permissions.readSms === 'granted') {
+            await scanSmsInbox(userProfile.uid).catch(error => {
+              console.error('SMS inbox scan failed:', error);
+            });
+          }
+        }
         const messages = await readPendingSms(userProfile.uid);
         const prepared = prepareSmsReviewQueue(
           messages,
@@ -292,7 +310,11 @@ export default function App() {
       }
     };
 
-    void configureSmsImport(userProfile.uid, Boolean(userProfile.smsAutoImportEnabled))
+    void configureSmsImport(
+      userProfile.uid,
+      Boolean(userProfile.smsAutoImportEnabled),
+      (userProfile.smsInboxConsentVersion || 0) < SMS_INBOX_CONSENT_VERSION,
+    )
       .then(importPending)
       .catch(error => console.error('SMS import configuration failed:', error));
     void subscribeToPendingSms(() => void importPending())
@@ -307,11 +329,78 @@ export default function App() {
       smsImportRerunRequested.current = false;
       unsubscribe();
     };
-  }, [bootState, userProfile.uid, userProfile.smsAutoImportEnabled]);
+  }, [bootState, userProfile.uid, userProfile.smsAutoImportEnabled, userProfile.smsInboxConsentVersion]);
+
+  useEffect(() => {
+    if (bootState !== 'ready' || !userProfile.uid || !userProfile.smsAutoImportEnabled) return;
+    if ((userProfile.smsInboxConsentVersion || 0) >= SMS_INBOX_CONSENT_VERSION) return;
+    if (userProfile.smsInboxConsentDeferredAt || smsDisclosurePromptedFor.current === userProfile.uid) return;
+    smsDisclosurePromptedFor.current = userProfile.uid;
+
+    let cancelled = false;
+    const requestInboxConsent = async () => {
+      const status = await configureSmsImport(userProfile.uid, true, true)
+        .then(() => getSmsImportStatus(userProfile.uid));
+      if (cancelled) return;
+      const baselineAt = status?.baselineAt || Date.now();
+      const baselineText = new Intl.DateTimeFormat('ko-KR', {
+        year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      }).format(new Date(baselineAt));
+      const accepted = await confirm({
+        title: '앱이 꺼져 있을 때 온 결제 문자도 확인할까요?',
+        description: `앱을 열면 ${baselineText} 이후 받은 SMS를 기기에서 확인합니다. 결제 내역을 찾으면 등록할지 먼저 물어보며, 문자 원문은 서버나 AI로 보내지 않습니다.`,
+        details: [
+          { label: '확인 시작', value: baselineText },
+          { label: '등록 방식', value: '내역 확인 후 직접 승인' },
+        ],
+        confirmLabel: '문자 확인 사용하기',
+        cancelLabel: '나중에',
+      });
+      if (cancelled) return;
+      if (!accepted) {
+        updateUserProfile({ smsInboxConsentDeferredAt: new Date().toISOString() });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      updateUserProfile({
+        smsInboxConsentVersion: SMS_INBOX_CONSENT_VERSION,
+        smsInboxConsentAt: now,
+        smsInboxConsentDeferredAt: null,
+        smsConsentAt: userProfile.smsConsentAt || now,
+      });
+      const permissions = await requestSmsPermissions();
+      if (cancelled) return;
+      if (permissions.readSms !== 'granted') {
+        showToast({
+          message: '문자 읽기 권한이 필요합니다.',
+          description: '설정에서 권한을 허용하면 앱 실행 시 놓친 결제 문자를 확인합니다.',
+          tone: 'warning',
+          durationMs: 12000,
+          action: { label: '앱 설정', onAction: () => void openSmsPermissionSettings() },
+        });
+        return;
+      }
+      await scanSmsInbox(userProfile.uid, true);
+      showToast({ message: '앱을 열 때 새 결제 문자를 확인합니다.', tone: 'success' });
+    };
+
+    void requestInboxConsent().catch(error => {
+      console.error('SMS inbox disclosure failed:', error);
+      smsDisclosurePromptedFor.current = null;
+    });
+    return () => { cancelled = true; };
+  }, [bootState, userProfile.uid, userProfile.smsAutoImportEnabled, userProfile.smsInboxConsentVersion, userProfile.smsInboxConsentDeferredAt]);
 
   const removeSmsCandidate = (candidate: SmsReviewCandidate) => {
     setSmsCandidates(current => current.filter(item => item.fingerprint !== candidate.fingerprint));
     announcedSmsCandidateIds.current.delete(candidate.fingerprint);
+  };
+
+  const handleUpdateSmsCandidate = (candidate: SmsReviewCandidate) => {
+    setSmsCandidates(current => current.map(item => (
+      item.fingerprint === candidate.fingerprint ? candidate : item
+    )));
   };
 
   const handleApproveSmsCandidate = async (candidate: SmsReviewCandidate) => {
@@ -1300,6 +1389,7 @@ export default function App() {
           paymentCards={paymentCards}
           onApprove={handleApproveSmsCandidate}
           onDismiss={handleDismissSmsCandidate}
+          onUpdate={handleUpdateSmsCandidate}
         />
 
         {cardSettlementSummary.cards.some(card => card.source === 'estimated') && <details className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">

@@ -1,6 +1,7 @@
 package com.iii5412.expendbreak
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -13,19 +14,105 @@ object SmsQueueStore {
     private const val KEY_ENABLED = "enabled"
     private const val KEY_QUEUE = "pending_messages"
     private const val KEY_SEEN_IDS = "seen_message_ids"
-    private const val MAX_QUEUE_SIZE = 100
-    private const val MAX_AGE_MS = 7L * 24L * 60L * 60L * 1000L
+    private const val KEY_HANDLED_IDS = "handled_message_ids"
+    private const val MAX_SEEN_IDS = 5_000
+    private const val MAX_HANDLED_IDS = 20_000
     private val lock = Any()
 
-    fun configure(context: Context, profileKey: String, enabled: Boolean) {
+    data class ScanState(
+        val enabled: Boolean,
+        val baselineAt: Long,
+        val enabledAt: Long,
+        val lastAttemptAt: Long,
+        val lastSuccessAt: Long,
+        val lastScannedCount: Int,
+        val lastCandidateCount: Int,
+        val lastError: String?,
+    )
+
+    fun configure(context: Context, profileKey: String, enabled: Boolean, startAtInstall: Boolean = false) {
         val normalizedProfile = profileKey.trim().take(160)
+        val prefs = preferences(context)
         synchronized(lock) {
-            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
+            val wasEnabled = prefs.getBoolean(KEY_ENABLED, false)
+            val previousProfile = prefs.getString(KEY_ACTIVE_PROFILE, "").orEmpty()
+            val editor = prefs.edit()
                 .putString(KEY_ACTIVE_PROFILE, normalizedProfile)
                 .putBoolean(KEY_ENABLED, enabled && normalizedProfile.isNotEmpty())
-                .apply()
+
+            if (normalizedProfile.isNotEmpty()) {
+                val suffix = profileSuffix(normalizedProfile)
+                if (!prefs.contains("baseline_at_$suffix")) {
+                    editor.putLong("baseline_at_$suffix", packageUpdateTime(context))
+                }
+                if (enabled && (
+                    !wasEnabled
+                        || previousProfile != normalizedProfile
+                        || (startAtInstall && !prefs.contains("enabled_at_$suffix"))
+                )) {
+                    val startAt = if (startAtInstall) {
+                        prefs.getLong("baseline_at_$suffix", packageUpdateTime(context))
+                    } else {
+                        System.currentTimeMillis()
+                    }
+                    editor.putLong("enabled_at_$suffix", startAt)
+                }
+                if (!enabled && wasEnabled) editor.putLong("disabled_at_$suffix", System.currentTimeMillis())
+            }
+            editor.apply()
         }
+    }
+
+    fun activeProfile(context: Context): String {
+        val prefs = preferences(context)
+        if (!prefs.getBoolean(KEY_ENABLED, false)) return ""
+        return prefs.getString(KEY_ACTIVE_PROFILE, "").orEmpty()
+    }
+
+    fun scanState(context: Context, profileKey: String): ScanState {
+        val prefs = preferences(context)
+        val suffix = profileSuffix(profileKey)
+        return ScanState(
+            enabled = prefs.getBoolean(KEY_ENABLED, false)
+                && prefs.getString(KEY_ACTIVE_PROFILE, "") == profileKey,
+            baselineAt = prefs.getLong("baseline_at_$suffix", packageUpdateTime(context)),
+            enabledAt = prefs.getLong("enabled_at_$suffix", 0L),
+            lastAttemptAt = prefs.getLong("last_attempt_at_$suffix", 0L),
+            lastSuccessAt = prefs.getLong("last_success_at_$suffix", 0L),
+            lastScannedCount = prefs.getInt("last_scanned_count_$suffix", 0),
+            lastCandidateCount = prefs.getInt("last_candidate_count_$suffix", 0),
+            lastError = prefs.getString("last_error_$suffix", null),
+        )
+    }
+
+    fun markScanStarted(context: Context, profileKey: String, attemptedAt: Long) {
+        val suffix = profileSuffix(profileKey)
+        preferences(context).edit()
+            .putLong("last_attempt_at_$suffix", attemptedAt)
+            .remove("last_error_$suffix")
+            .apply()
+    }
+
+    fun markScanSucceeded(
+        context: Context,
+        profileKey: String,
+        completedThrough: Long,
+        scannedCount: Int,
+        candidateCount: Int,
+    ) {
+        val suffix = profileSuffix(profileKey)
+        preferences(context).edit()
+            .putLong("last_success_at_$suffix", completedThrough)
+            .putInt("last_scanned_count_$suffix", scannedCount)
+            .putInt("last_candidate_count_$suffix", candidateCount)
+            .remove("last_error_$suffix")
+            .apply()
+    }
+
+    fun markScanFailed(context: Context, profileKey: String, errorCode: String) {
+        preferences(context).edit()
+            .putString("last_error_${profileSuffix(profileKey)}", errorCode.take(100))
+            .apply()
     }
 
     fun enqueueIfFinancialCandidate(
@@ -34,15 +121,23 @@ object SmsQueueStore {
         body: String,
         receivedAt: Long,
     ): Boolean {
-        val appContext = context.applicationContext
-        val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val profileKey = prefs.getString(KEY_ACTIVE_PROFILE, "").orEmpty()
-        if (!prefs.getBoolean(KEY_ENABLED, false) || profileKey.isBlank()) return false
+        val profileKey = activeProfile(context)
+        if (profileKey.isBlank()) return false
+        return enqueueIfFinancialCandidate(context, profileKey, sender, body, receivedAt)
+    }
 
+    fun enqueueIfFinancialCandidate(
+        context: Context,
+        profileKey: String,
+        sender: String,
+        body: String,
+        receivedAt: Long,
+    ): Boolean {
+        if (profileKey.isBlank()) return false
         val normalizedBody = body.replace("\u0000", "").trim().take(4_000)
         if (!isFinancialCandidate(normalizedBody)) return false
         val normalizedSender = sender.trim().take(80)
-        val id = sha256("$normalizedSender|$normalizedBody|${receivedAt / 60_000L}")
+        val id = messageId(normalizedSender, normalizedBody, receivedAt)
         val item = JSONObject()
             .put("id", id)
             .put("profileKey", profileKey)
@@ -50,18 +145,17 @@ object SmsQueueStore {
             .put("body", normalizedBody)
             .put("receivedAt", receivedAt)
 
+        val prefs = preferences(context)
         synchronized(lock) {
             val queue = readQueue(prefs.getString(KEY_QUEUE, null))
             val seenIds = readStringList(prefs.getString(KEY_SEEN_IDS, null))
-            if (id in seenIds) return false
-            val now = System.currentTimeMillis()
-            val retained = queue.filter { candidate ->
-                candidate.optLong("receivedAt", 0L) >= now - MAX_AGE_MS && candidate.optString("id") != id
-            }.takeLast(MAX_QUEUE_SIZE - 1)
+            val handledIds = readStringList(prefs.getString(KEY_HANDLED_IDS, null))
+            if (id in seenIds || id in handledIds || queue.any { it.optString("id") == id }) return false
+
             val updated = JSONArray()
-            retained.forEach(updated::put)
+            queue.forEach(updated::put)
             updated.put(item)
-            val nextSeenIds = (seenIds + id).takeLast(500)
+            val nextSeenIds = (seenIds + id).takeLast(MAX_SEEN_IDS)
             prefs.edit()
                 .putString(KEY_QUEUE, updated.toString())
                 .putString(KEY_SEEN_IDS, JSONArray(nextSeenIds).toString())
@@ -72,46 +166,65 @@ object SmsQueueStore {
 
     fun readPending(context: Context, profileKey: String): List<JSONObject> {
         if (profileKey.isBlank()) return emptyList()
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = preferences(context)
         synchronized(lock) {
-            val now = System.currentTimeMillis()
-            val pending = mutableListOf<JSONObject>()
-            val retained = JSONArray()
-            readQueue(prefs.getString(KEY_QUEUE, null)).forEach { item ->
-                val fresh = item.optLong("receivedAt", 0L) >= now - MAX_AGE_MS
-                if (fresh) {
-                    retained.put(item)
-                    if (item.optString("profileKey") == profileKey) pending.add(item)
-                }
-            }
-            prefs.edit().putString(KEY_QUEUE, retained.toString()).apply()
-            return pending
+            return readQueue(prefs.getString(KEY_QUEUE, null))
+                .filter { it.optString("profileKey") == profileKey }
         }
     }
 
     fun acknowledge(context: Context, profileKey: String, ids: Set<String>) {
         if (profileKey.isBlank() || ids.isEmpty()) return
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = preferences(context)
         synchronized(lock) {
             val retained = JSONArray()
             readQueue(prefs.getString(KEY_QUEUE, null))
                 .filterNot { it.optString("profileKey") == profileKey && it.optString("id") in ids }
                 .forEach(retained::put)
-            prefs.edit().putString(KEY_QUEUE, retained.toString()).apply()
+            val handled = (readStringList(prefs.getString(KEY_HANDLED_IDS, null)) + ids)
+                .distinct()
+                .takeLast(MAX_HANDLED_IDS)
+            prefs.edit()
+                .putString(KEY_QUEUE, retained.toString())
+                .putString(KEY_HANDLED_IDS, JSONArray(handled).toString())
+                .apply()
         }
     }
 
     fun clear(context: Context, profileKey: String) {
         if (profileKey.isBlank()) return
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = preferences(context)
         synchronized(lock) {
+            val removedIds = mutableListOf<String>()
             val retained = JSONArray()
-            readQueue(prefs.getString(KEY_QUEUE, null))
-                .filter { it.optString("profileKey") != profileKey }
-                .forEach(retained::put)
-            prefs.edit().putString(KEY_QUEUE, retained.toString()).apply()
+            readQueue(prefs.getString(KEY_QUEUE, null)).forEach { item ->
+                if (item.optString("profileKey") == profileKey) removedIds.add(item.optString("id"))
+                else retained.put(item)
+            }
+            val handled = (readStringList(prefs.getString(KEY_HANDLED_IDS, null)) + removedIds)
+                .filter(String::isNotBlank)
+                .distinct()
+                .takeLast(MAX_HANDLED_IDS)
+            prefs.edit()
+                .putString(KEY_QUEUE, retained.toString())
+                .putString(KEY_HANDLED_IDS, JSONArray(handled).toString())
+                .apply()
         }
     }
+
+    private fun preferences(context: Context): SharedPreferences =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun packageUpdateTime(context: Context): Long = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+    } catch (_: Exception) {
+        System.currentTimeMillis()
+    }
+
+    private fun profileSuffix(profileKey: String): String = sha256(profileKey).take(24)
+
+    private fun messageId(sender: String, body: String, receivedAt: Long): String =
+        sha256("$sender|$body|$receivedAt")
 
     private fun isFinancialCandidate(body: String): Boolean {
         if (!Regex("(?:\\d{1,3}(?:,\\d{3})+|\\d+)\\s*원").containsMatchIn(body)) return false
@@ -122,9 +235,7 @@ object SmsQueueStore {
     private fun readQueue(raw: String?): List<JSONObject> = try {
         val array = JSONArray(raw ?: "[]")
         buildList {
-            for (index in 0 until array.length()) {
-                array.optJSONObject(index)?.let(::add)
-            }
+            for (index in 0 until array.length()) array.optJSONObject(index)?.let(::add)
         }
     } catch (_: Exception) {
         emptyList()

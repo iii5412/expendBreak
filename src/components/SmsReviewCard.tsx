@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, MessageSquareText, RotateCcw, X } from 'lucide-react';
+import { Check, MessageSquareText, Pencil, RotateCcw, Save, X } from 'lucide-react';
 import { Category, PaymentCard } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { SmsReviewCandidate } from '../utils/smsImport';
@@ -10,6 +10,7 @@ interface SmsReviewCardProps {
   paymentCards: PaymentCard[];
   onApprove: (candidate: SmsReviewCandidate) => Promise<void>;
   onDismiss: (candidate: SmsReviewCandidate) => Promise<void>;
+  onUpdate: (candidate: SmsReviewCandidate) => void;
 }
 
 export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
@@ -18,8 +19,10 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
   paymentCards,
   onApprove,
   onDismiss,
+  onUpdate,
 }) => {
   const [workingId, setWorkingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<SmsReviewCandidate | null>(null);
   if (candidates.length === 0) return null;
 
   const run = async (candidate: SmsReviewCandidate, action: 'approve' | 'dismiss') => {
@@ -67,6 +70,99 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                   {isCancellation ? '취소 ' : ''}{formatKRW(candidate.amount)}
                 </strong>
               </div>
+
+              {editing?.fingerprint === candidate.fingerprint ? (
+                <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-950/80 p-3 sm:grid-cols-2">
+                  <label className="space-y-1 text-xs text-slate-400 sm:col-span-2">
+                    <span>사용처</span>
+                    <input
+                      value={editing.merchant}
+                      onChange={event => setEditing({ ...editing, merchant: event.target.value })}
+                      className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs text-slate-400">
+                    <span>금액</span>
+                    <input
+                      type="number"
+                      min="1"
+                      inputMode="numeric"
+                      value={editing.amount}
+                      onChange={event => setEditing({ ...editing, amount: Math.max(0, Number(event.target.value)) })}
+                      className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs text-slate-400">
+                    <span>사용일</span>
+                    <input
+                      type="date"
+                      value={editing.localDate}
+                      onChange={event => {
+                        const localDate = event.target.value;
+                        const occurredAt = localDate
+                          ? new Date(`${localDate}T12:00:00`).toISOString()
+                          : editing.occurredAt;
+                        setEditing({ ...editing, localDate, occurredAt });
+                      }}
+                      className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs text-slate-400">
+                    <span>카드</span>
+                    <select
+                      value={editing.matchedCardId || ''}
+                      onChange={event => setEditing({ ...editing, matchedCardId: event.target.value || null })}
+                      className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                    >
+                      <option value="">카드 미연결</option>
+                      {paymentCards.map(item => <option key={item.id} value={item.id}>{item.cardName}</option>)}
+                    </select>
+                  </label>
+                  {!isCancellation && (
+                    <label className="space-y-1 text-xs text-slate-400">
+                      <span>카테고리</span>
+                      <select
+                        value={editing.suggestedCategoryId}
+                        onChange={event => setEditing({ ...editing, suggestedCategoryId: event.target.value })}
+                        className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                      >
+                        {categories.filter(item => item.type === 'expense' && item.active).map(item => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <div className="flex gap-2 sm:col-span-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditing(null)}
+                      className="min-h-10 flex-1 border border-slate-700 px-3 text-xs font-bold text-slate-300"
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!editing.merchant.trim() || editing.amount <= 0 || !editing.localDate}
+                      onClick={() => {
+                        onUpdate({ ...editing, merchant: editing.merchant.trim() });
+                        setEditing(null);
+                      }}
+                      className="flex min-h-10 flex-1 items-center justify-center gap-2 bg-sky-500 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"
+                    >
+                      <Save className="h-4 w-4" /> 수정 저장
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={Boolean(workingId)}
+                  onClick={() => setEditing({ ...candidate })}
+                  className="flex min-h-10 w-full items-center justify-center gap-2 border border-slate-700 bg-slate-950 px-3 text-xs font-bold text-slate-300 disabled:opacity-50"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> 금액·사용처·카드·카테고리 수정
+                </button>
+              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <button
