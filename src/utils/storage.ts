@@ -41,8 +41,10 @@ import {
   syncRecurringTemplateToFirestore,
   syncRecurringOccurrencesToFirestore,
   deleteRecurringOccurrencesFromFirestore,
-  commitRecurringPosting,
-  commitRecurringAmountCorrection,
+  commitConditionalOperation,
+  type ConditionalDocumentWrite,
+  TRANSACTIONS_COLLECTION,
+  RECURRING_OCCURRENCES_COLLECTION,
   syncMerchantRuleToFirestore,
   syncBankAccountToFirestore,
   deleteBankAccountFromFirestore,
@@ -70,6 +72,16 @@ import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 import { getRecurringAmountSuggestion } from './recurringPlans';
 import { resolveRecurringAmount } from './recurringAmounts';
+import {
+  AmountOperation,
+  buildPlanAmountOperation,
+  buildPostOperation,
+  buildReverseOperation,
+  buildUndoPostOperation,
+  newOperationId,
+  revisionOf,
+} from './amountOperations';
+import type { AmountChangeRecord } from '../types';
 import { resolveInheritedAllowanceLimit } from './budgetPlans';
 import {
   getScheduledDatesForMonth,
@@ -91,7 +103,111 @@ const STORAGE_KEYS = {
   get CYCLE_BASELINES() { return getAccountStorageKey('brake_cycle_baselines'); },
   get QUICK_ENTRIES() { return getAccountStorageKey('brake_quick_entries'); },
   get AI_INSIGHTS() { return getAccountStorageKey('brake_ai_insights'); },
+  get AMOUNT_CHANGES() { return getAccountStorageKey('brake_amount_changes'); },
 };
+
+/** Local copy of the change history; the cloud copy lives in `amountChanges`. */
+const AMOUNT_CHANGE_HISTORY_LIMIT = 300;
+
+export function getAmountChanges(): AmountChangeRecord[] {
+  return readJson<AmountChangeRecord[]>(STORAGE_KEYS.AMOUNT_CHANGES, []);
+}
+
+function appendAmountChange(record: AmountChangeRecord) {
+  const history = getAmountChanges().filter(item => item.id !== record.id);
+  history.unshift(record);
+  localStorage.setItem(STORAGE_KEYS.AMOUNT_CHANGES, JSON.stringify(history.slice(0, AMOUNT_CHANGE_HISTORY_LIMIT)));
+}
+
+/**
+ * Status/link changes on a revisioned occurrence (skip, restore after a
+ * transaction delete/undelete) also move the revision, so a stale copy from
+ * another device cannot overwrite them. No amount changes here, hence no
+ * change record.
+ */
+function commitOccurrenceRevisions(occurrences: RecurringOccurrence[], mutate: (occurrence: RecurringOccurrence) => void) {
+  const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const ids = new Set(occurrences.map(occurrence => occurrence.id));
+  const operationId = newOperationId('status');
+  const changed: RecurringOccurrence[] = [];
+  all.forEach(occurrence => {
+    if (!ids.has(occurrence.id)) return;
+    const expected = revisionOf(occurrence);
+    mutate(occurrence);
+    occurrence.revision = expected + 1;
+    occurrence.lastOperationId = operationId;
+    changed.push(occurrence);
+  });
+  if (!changed.length) return;
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
+  if (storageReady) {
+    void commitConditionalOperation({
+      operationId,
+      documents: changed.map(occurrence => ({
+        collectionName: RECURRING_OCCURRENCES_COLLECTION,
+        documentId: occurrence.id,
+        data: occurrence as unknown as Record<string, unknown>,
+        expectedRevision: revisionOf(occurrence) - 1,
+      })),
+    });
+  }
+}
+
+/**
+ * Applies one amount operation locally (occurrence, linked transaction, change
+ * record) and queues the same operation for the revision-checked cloud commit.
+ * Local first: an offline edit shows up immediately and is flagged as pending;
+ * a cloud conflict is parked for review and the realtime snapshot brings back
+ * the winning value.
+ */
+function applyAmountOperation(operation: AmountOperation) {
+  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const index = occurrences.findIndex(item => item.id === operation.occurrence.id);
+  if (index === -1) return false;
+  occurrences[index] = operation.occurrence;
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+
+  if (operation.transaction || operation.removeTransactionId) {
+    let transactions = getTransactions();
+    if (operation.removeTransactionId) {
+      transactions = transactions.filter(transaction => transaction.id !== operation.removeTransactionId);
+    }
+    if (operation.transaction) {
+      const existing = transactions.findIndex(transaction => transaction.id === operation.transaction!.id);
+      if (existing >= 0) transactions[existing] = operation.transaction;
+      else transactions.unshift(operation.transaction);
+    }
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  }
+  appendAmountChange(operation.record);
+
+  const documents: ConditionalDocumentWrite[] = [{
+    collectionName: RECURRING_OCCURRENCES_COLLECTION,
+    documentId: operation.occurrence.id,
+    data: operation.occurrence as unknown as Record<string, unknown>,
+    expectedRevision: operation.record.expectedOccurrenceRevision,
+  }];
+  if (operation.transaction) {
+    documents.push({
+      collectionName: TRANSACTIONS_COLLECTION,
+      documentId: operation.transaction.id,
+      data: operation.transaction as unknown as Record<string, unknown>,
+      expectedRevision: operation.record.expectedTransactionRevision ?? 0,
+    });
+  } else if (operation.removeTransactionId) {
+    documents.push({
+      collectionName: TRANSACTIONS_COLLECTION,
+      documentId: operation.removeTransactionId,
+      expectedRevision: operation.record.expectedTransactionRevision ?? 0,
+      remove: true,
+    });
+  }
+  if (storageReady) {
+    void commitConditionalOperation({ operationId: operation.operationId, documents, changeRecord: operation.record });
+  }
+  notifyListeners();
+  return true;
+}
 
 let storageReady = false;
 let initializationPromise: Promise<void> | null = null;
@@ -585,20 +701,11 @@ export function restoreTransaction(transaction: Transaction, linkedOccurrenceIds
   syncTransactionToFirestore(transaction);
 
   if (linkedOccurrenceIds.length > 0) {
-    const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
     const now = new Date().toISOString();
-    const changedOccurrences: RecurringOccurrence[] = [];
-    occurrences.forEach(occurrence => {
-      if (!linkedOccurrenceIds.includes(occurrence.id)) return;
-      occurrence.status = 'posted';
-      occurrence.transactionId = transaction.id;
-      occurrence.updatedAt = now;
-      changedOccurrences.push(occurrence);
-    });
-    if (changedOccurrences.length > 0) {
-      localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-      syncRecurringOccurrencesToFirestore(changedOccurrences);
-    }
+    commitOccurrenceRevisions(
+      linkedOccurrenceIds.map(id => ({ id } as RecurringOccurrence)),
+      occurrence => { occurrence.status = 'posted'; occurrence.transactionId = transaction.id; occurrence.updatedAt = now; },
+    );
   }
 
   notifyListeners();
@@ -606,13 +713,34 @@ export function restoreTransaction(transaction: Transaction, linkedOccurrenceIds
 }
 
 export function updateTransaction(id: string, updates: Partial<Transaction>): Transaction | null {
-  const txs = getTransactions();
-  const idx = txs.findIndex(t => t.id === id);
+  let txs = getTransactions();
+  let idx = txs.findIndex(t => t.id === id);
   if (idx === -1) return null;
 
   const nextType = updates.type ?? txs[idx].type;
   const nextCategoryId = updates.categoryId ?? txs[idx].categoryId;
   assertCategoryMatchesType(nextType, nextCategoryId);
+
+  // A history edit of a posted recurring payment's amount is the same
+  // correction as editing it from the fixed-expense screen: occurrence and
+  // transaction move together under one operation (PRD §8 "같은 도메인 동작").
+  const nextAmount = updates.amount == null ? null : Math.round(Number(updates.amount));
+  if (nextAmount != null && nextAmount !== Math.round(txs[idx].amount)) {
+    const linkedOccurrence = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+      .find(occurrence => occurrence.status === 'posted'
+        && (occurrence.transactionId === id || (!occurrence.transactionId && occurrence.occurrenceKey === txs[idx].recurringOccurrenceKey)));
+    if (linkedOccurrence) {
+      const operation = buildPlanAmountOperation(linkedOccurrence, txs[idx], { amount: nextAmount }, new Date().toISOString());
+      applyAmountOperation(operation);
+      txs = getTransactions();
+      idx = txs.findIndex(t => t.id === id);
+      if (idx === -1) return null;
+      const { amount: _amount, ...rest } = updates;
+      void _amount;
+      updates = rest;
+      if (Object.keys(updates).length === 0) return txs[idx];
+    }
+  }
 
   txs[idx] = {
     ...txs[idx],
@@ -647,20 +775,16 @@ export function deleteTransaction(id: string): DeletedTransactionSnapshot | null
   localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs.filter(t => t.id !== id)));
   deleteTransactionFromFirestore(id);
 
-  const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  const restoredOccurrenceIds: string[] = [];
-  occurrences.forEach(occurrence => {
-    if (occurrence.transactionId !== id) return;
-    occurrence.status = 'needs_confirmation';
-    occurrence.transactionId = null;
-    occurrence.updatedAt = new Date().toISOString();
-    restoredOccurrenceIds.push(occurrence.id);
-  });
-  if (restoredOccurrenceIds.length > 0) {
-    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-    syncRecurringOccurrencesToFirestore(
-      occurrences.filter(occurrence => restoredOccurrenceIds.includes(occurrence.id)),
-    );
+  const linked = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+    .filter(occurrence => occurrence.transactionId === id);
+  const restoredOccurrenceIds = linked.map(occurrence => occurrence.id);
+  if (linked.length > 0) {
+    const now = new Date().toISOString();
+    commitOccurrenceRevisions(linked, occurrence => {
+      occurrence.status = 'needs_confirmation';
+      occurrence.transactionId = null;
+      occurrence.updatedAt = now;
+    });
   }
 
   notifyListeners();
@@ -1120,21 +1244,16 @@ export function updateOccurrenceStatus(
   status: RecurringOccurrence['status'],
   actualAmount?: number
 ): void {
-  const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
-  if (!raw) return;
-  const all: RecurringOccurrence[] = JSON.parse(raw);
-  const target = all.find(o => o.id === occurrenceId);
-  
-  if (target) {
-    target.status = status;
-    if (actualAmount !== undefined) {
-      target.actualAmount = actualAmount;
-    }
-    target.updatedAt = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-    syncRecurringOccurrencesToFirestore([target]);
-    notifyListeners();
-  }
+  const target = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+    .find(o => o.id === occurrenceId);
+  if (!target || target.projected) return;
+  const now = new Date().toISOString();
+  commitOccurrenceRevisions([target], occurrence => {
+    occurrence.status = status;
+    if (actualAmount !== undefined) occurrence.actualAmount = actualAmount;
+    occurrence.updatedAt = now;
+  });
+  notifyListeners();
 }
 
 /**
@@ -1144,26 +1263,22 @@ export function updateOccurrenceStatus(
  */
 export function undoPostedOccurrence(occurrenceId: string): RecurringOccurrence | null {
   const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
-  const index = occurrences.findIndex(occurrence => occurrence.id === occurrenceId);
-  if (index === -1) return null;
+  const target = occurrences.find(occurrence => occurrence.id === occurrenceId);
+  if (!target || !reopenPostedOccurrence(target, '')) return null;
 
-  const reopened = reopenPostedOccurrence(occurrences[index], new Date().toISOString());
-  if (!reopened) return null;
-
-  const transactionId = occurrences[index].transactionId
-    || `tx_recurring_${occurrences[index].occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-  const transactions = getTransactions().filter(transaction => transaction.id !== transactionId);
-
-  occurrences[index] = reopened;
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
-  void deleteTransactionFromFirestore(transactionId);
-  void syncRecurringOccurrencesToFirestore([reopened]);
-  notifyListeners();
-  return reopened;
+  const transactionId = target.transactionId
+    || `tx_recurring_${target.occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const linked = getTransactions().find(transaction => transaction.id === transactionId) ?? null;
+  const operation = buildUndoPostOperation(target, linked, transactionId, new Date().toISOString());
+  return applyAmountOperation(operation) ? operation.occurrence : null;
 }
 
-/** Saves a month-specific recurring plan without posting a transaction. */
+/**
+ * Saves a cycle amount without posting a transaction. On a posted row this is
+ * a correction: the linked transaction moves with it under one operation id,
+ * so a retry, a dropped connection or a concurrent edit can never leave the
+ * two at different values (PRD acceptance #5, #21).
+ */
 export async function updateOccurrencePlan(
   occurrenceId: string,
   updates: {
@@ -1173,50 +1288,40 @@ export async function updateOccurrencePlan(
     cardId?: string | null;
   },
 ): Promise<RecurringOccurrence | null> {
-  const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
-  if (!raw) return null;
-  const all: RecurringOccurrence[] = JSON.parse(raw);
+  const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   const target = all.find(occurrence => occurrence.id === occurrenceId);
   const amount = Math.round(Number(updates.amount));
-  if (!target || !Number.isFinite(amount) || amount < 0) return null;
+  if (!target || target.projected || !Number.isFinite(amount) || amount < 0) return null;
 
-  target.plannedAmount = amount;
-  target.amountStatus = 'confirmed';
-  target.amountSource = target.status === 'posted' ? 'transaction' : 'manual';
-  target.amountConfirmedAt = new Date().toISOString();
-  target.actualAmount = amount;
-  if (updates.paymentMethodType) target.paymentMethodType = updates.paymentMethodType;
-  if (updates.paymentMethodType) {
-    target.accountId = updates.paymentMethodType === 'account' ? updates.accountId ?? null : null;
-    target.cardId = updates.paymentMethodType === 'card' ? updates.cardId ?? null : null;
-  }
-  target.updatedAt = new Date().toISOString();
-  target.expectedAmount = amount;
-  const changedOccurrences = [target];
+  const linked = target.status === 'posted'
+    ? getTransactions().find(transaction => transaction.id === target.transactionId
+      || transaction.recurringOccurrenceKey === target.occurrenceKey) ?? null
+    : null;
+  // A posted row whose transaction cannot be found is "기록 확인 필요"; never
+  // invent a transaction or quietly turn it into a plan edit.
+  if (target.status === 'posted' && !linked) return null;
 
-  const transactions = getTransactions();
-  const linkedIndex = target.status === 'posted'
-    ? transactions.findIndex(transaction => transaction.id === target.transactionId || transaction.recurringOccurrenceKey === target.occurrenceKey)
-    : -1;
-  if (linkedIndex >= 0) {
-    transactions[linkedIndex] = { ...transactions[linkedIndex], amount, updatedAt: target.updatedAt };
-    target.transactionId = transactions[linkedIndex].id;
-    target.amountIntegrityIssue = false;
-    try {
-      await commitRecurringAmountCorrection(transactions[linkedIndex], target);
-    } catch (error) {
-      console.error('Atomic recurring amount correction failed:', error);
-      return null;
-    }
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  }
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-  // A plan-only change has no transaction to keep in lockstep, so it goes
-  // through the outbox like every other local-first write and must not block
-  // the local save while offline.
-  if (linkedIndex < 0) void syncRecurringOccurrencesToFirestore(changedOccurrences);
-  notifyListeners();
-  return target;
+  const operation = buildPlanAmountOperation(target, linked, { ...updates, amount }, new Date().toISOString());
+  return applyAmountOperation(operation) ? operation.occurrence : null;
+}
+
+/**
+ * Reverses one amount change when nothing else has touched the row since.
+ * Returns the reopened state, or null when the change can no longer be undone
+ * safely (the caller explains that the row moved on).
+ */
+export function undoAmountChange(operationId: string): RecurringOccurrence | null {
+  const record = getAmountChanges().find(item => item.id === operationId);
+  if (!record) return null;
+  const current = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+    .find(occurrence => occurrence.id === record.occurrenceId);
+  if (!current) return null;
+  const linked = record.transactionId
+    ? getTransactions().find(transaction => transaction.id === record.transactionId) ?? null
+    : null;
+  const operation = buildReverseOperation(record, current, linked, new Date().toISOString());
+  if (!operation) return null;
+  return applyAmountOperation(operation) ? operation.occurrence : null;
 }
 
 /**
@@ -1228,9 +1333,10 @@ export async function updateOccurrencePlan(
  */
 export async function confirmOccurrenceAmounts(
   updates: Array<{ occurrenceId: string; amount: number }>,
-): Promise<{ confirmed: string[]; failed: string[] }> {
+): Promise<{ confirmed: string[]; failed: string[]; operationIds: string[] }> {
   const confirmed: string[] = [];
   const failed: string[] = [];
+  const operationIds: string[] = [];
   const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
   const all: RecurringOccurrence[] = raw ? JSON.parse(raw) : [];
   const transactions = getTransactions();
@@ -1245,12 +1351,18 @@ export async function confirmOccurrenceAmounts(
     try {
       const saved = await updateOccurrencePlan(update.occurrenceId, { amount: update.amount });
       (saved ? confirmed : failed).push(update.occurrenceId);
+      if (saved?.lastOperationId) operationIds.push(saved.lastOperationId);
     } catch (error) {
       console.error('Cycle amount confirmation failed:', error);
       failed.push(update.occurrenceId);
     }
   }
-  return { confirmed, failed };
+  return { confirmed, failed, operationIds };
+}
+
+/** Undo several amount changes; returns how many could be reversed safely. */
+export function undoAmountChanges(operationIds: string[]): number {
+  return operationIds.reduce((count, id) => count + (undoAmountChange(id) ? 1 : 0), 0);
 }
 
 export async function postOccurrenceToTransaction(
@@ -1264,7 +1376,7 @@ export async function postOccurrenceToTransaction(
   if (!raw) return null;
   const all: RecurringOccurrence[] = JSON.parse(raw);
   const target = all.find(o => o.id === occurrenceId);
-  if (!target || target.status === 'posted' || target.status === 'skipped') return null;
+  if (!target || target.projected || target.status === 'posted' || target.status === 'skipped') return null;
 
   const templates = getRecurringTemplates();
   const template = templates.find(t => t.id === target.templateId);
@@ -1287,7 +1399,10 @@ export async function postOccurrenceToTransaction(
 
   const now = new Date().toISOString();
   const transactionId = `tx_recurring_${target.occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-  const newTx: Transaction = {
+  // A transaction with this id already in the local ledger means the posting
+  // happened (here or on another device) and the occurrence is stale.
+  if (getTransactions().some(transaction => transaction.id === transactionId)) return null;
+  const newTx: Omit<Transaction, 'revision' | 'lastOperationId'> = {
     id: transactionId,
     type: occurrenceType,
     amount,
@@ -1306,34 +1421,9 @@ export async function postOccurrenceToTransaction(
     updatedAt: now,
   };
 
-  // Mark occurrence as posted
-  target.status = 'posted';
-  target.actualAmount = amount;
-  target.plannedAmount = amount;
-  target.amountStatus = 'confirmed';
-  target.amountSource = 'transaction';
-  target.amountConfirmedAt = now;
-  target.amountIntegrityIssue = false;
-  target.paymentMethodType = paymentMethodType;
-  target.accountId = accountId;
-  target.cardId = cardId;
-  target.transactionId = newTx.id;
-  target.updatedAt = now;
-
-  try {
-    await commitRecurringPosting(newTx, target);
-  } catch (error) {
-    console.error('Atomic recurring posting failed:', error);
-    return null;
-  }
-
-  const transactions = getTransactions().filter(transaction => transaction.id !== newTx.id);
-  transactions.unshift(newTx);
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-
-  notifyListeners();
-  return newTx;
+  const operation = buildPostOperation(target, newTx, now);
+  if (!applyAmountOperation(operation)) return null;
+  return operation.transaction ?? null;
 }
 
 /**

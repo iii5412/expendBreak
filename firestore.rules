@@ -61,6 +61,62 @@ service cloud.firestore {
           );
     }
 
+    // Cycle-amount revision protocol (docs/PRD-ui-renewal-2026-09-19.md §8).
+    // Once a row carries a revision, only two kinds of update are accepted:
+    // an operation that advances it by exactly one and names its operation id,
+    // or a metadata write that leaves the revision and every amount/status
+    // field untouched. A client that does not know the protocol (an old app
+    // version rewriting its stale local copy) is rejected instead of silently
+    // winning. Rows without a revision are legacy and stay writable until the
+    // first operation stamps them.
+    function hasRevision(data) {
+      return 'revision' in data && data.revision is number;
+    }
+
+    function revisionAdvanced() {
+      return hasRevision(request.resource.data)
+        && request.resource.data.revision == resource.data.revision + 1
+        && request.resource.data.lastOperationId is string;
+    }
+
+    function revisionKept() {
+      return hasRevision(request.resource.data)
+        && request.resource.data.revision == resource.data.revision;
+    }
+
+    function sameField(name) {
+      return request.resource.data.get(name, null) == resource.data.get(name, null);
+    }
+
+    function occurrenceAmountFieldsUnchanged() {
+      return sameField('plannedAmount') && sameField('actualAmount') && sameField('expectedAmount')
+        && sameField('amountStatus') && sameField('status') && sameField('transactionId');
+    }
+
+    function transactionAmountFieldsUnchanged() {
+      return sameField('amount') && sameField('localDate') && sameField('recurringOccurrenceKey');
+    }
+
+    // A wholesale regeneration ("계획 새로 불러오기") replaces unposted rows with
+    // fresh ones that carry no revision; posted rows are never regenerated.
+    function occurrenceRegenerated() {
+      return !hasRevision(request.resource.data)
+        && resource.data.get('status', '') != 'posted';
+    }
+
+    function occurrenceRevisionOk() {
+      return !hasRevision(resource.data)
+        || revisionAdvanced()
+        || (revisionKept() && occurrenceAmountFieldsUnchanged())
+        || occurrenceRegenerated();
+    }
+
+    function transactionRevisionOk() {
+      return !hasRevision(resource.data)
+        || revisionAdvanced()
+        || (revisionKept() && transactionAmountFieldsUnchanged());
+    }
+
     match /users/{userId} {
       allow read, write: if isOwner(userId);
 
@@ -75,6 +131,7 @@ service cloud.firestore {
       match /transactions/{transactionId} {
         allow read, delete: if isOwner(userId);
         allow create, update: if isOwner(userId)
+          && (request.method == 'create' || transactionRevisionOk())
           && validTransactionType()
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
@@ -111,7 +168,20 @@ service cloud.firestore {
       }
 
       match /recurringOccurrences/{documentId} {
-        allow read, write: if isOwner(userId);
+        allow read, delete, create: if isOwner(userId);
+        allow update: if isOwner(userId) && occurrenceRevisionOk();
+      }
+
+      // Append-only audit trail of cycle-amount operations. Written inside the
+      // same transaction as the documents it describes; never edited.
+      match /amountChanges/{operationId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && request.resource.data.id == operationId
+          && request.resource.data.kind in ['plan_amount', 'posted_correction', 'post', 'undo_post']
+          && request.resource.data.occurrenceId is string
+          && request.resource.data.expectedOccurrenceRevision is number;
+        allow update, delete: if false;
       }
 
       match /merchantRules/{documentId} {

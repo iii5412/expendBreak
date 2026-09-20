@@ -23,8 +23,10 @@ import {
   MerchantRule,
   CycleBaseline,
   QuickEntry,
-  UserProfile
+  UserProfile,
+  AmountChangeRecord,
 } from '../types';
+import { AmountConflictError, isAmountConflict } from './amountOperations';
 import {
   PendingWriteSummary,
   registerOutboxFlusher,
@@ -54,18 +56,46 @@ const COLLECTION_BANK_ACCOUNTS = 'bankAccounts';
 const COLLECTION_PAYMENT_CARDS = 'paymentCards';
 const COLLECTION_CYCLE_BASELINES = 'cycleBaselines';
 const COLLECTION_QUICK_ENTRIES = 'quickEntries';
+const COLLECTION_AMOUNT_CHANGES = 'amountChanges';
 const ACCOUNT_KEYS = {
   get firestoreOutbox() { return getAccountStorageKey('brake_firestore_outbox'); },
   get transactionHistoryFloor() { return getAccountStorageKey('brake_transaction_history_floor'); },
+  get syncConflicts() { return getAccountStorageKey('brake_sync_conflicts'); },
 };
+
+/** One document touched by a conditional (revision-checked) operation. */
+export interface ConditionalDocumentWrite {
+  collectionName: string;
+  documentId: string;
+  /** Omitted for a delete. */
+  data?: Record<string, unknown>;
+  /** Revision the operation was built on; 0 also means "must not exist". */
+  expectedRevision: number;
+  remove?: boolean;
+}
+
+/** An operation the server refused because a document moved underneath it. */
+export interface SyncConflict {
+  operationId: string;
+  documents: ConditionalDocumentWrite[];
+  changeRecord?: AmountChangeRecord;
+  queuedAt: string;
+  conflictedAt: string;
+  message: string;
+}
 
 interface PendingFirestoreWrite {
   id: string;
-  operation: 'set' | 'delete';
+  operation: 'set' | 'delete' | 'conditional';
+  /** For 'conditional' this is the primary document, used for queue de-duplication. */
   collectionName: string;
   documentId: string;
   data?: Record<string, unknown>;
   merge?: boolean;
+  /** 'conditional' only: every document in the operation plus its change record. */
+  operationId?: string;
+  documents?: ConditionalDocumentWrite[];
+  changeRecord?: AmountChangeRecord;
   queuedAt: string;
   failedAt?: string;
   lastError?: string;
@@ -105,7 +135,51 @@ const COLLECTION_LABELS: Record<string, string> = {
   cycleBaselines: '주기 생활비 계획',
   quickEntries: '퀵등록',
   appSettings: '앱 설정',
+  amountChanges: '금액 변경 이력',
 };
+
+function readSyncConflicts(): SyncConflict[] {
+  try {
+    const raw = localStorage.getItem(ACCOUNT_KEYS.syncConflicts);
+    return raw ? JSON.parse(raw) as SyncConflict[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSyncConflicts(conflicts: SyncConflict[]) {
+  if (conflicts.length === 0) localStorage.removeItem(ACCOUNT_KEYS.syncConflicts);
+  else localStorage.setItem(ACCOUNT_KEYS.syncConflicts, JSON.stringify(conflicts));
+  conflictListeners.forEach(listener => listener());
+}
+
+const conflictListeners = new Set<() => void>();
+
+/** Conflicts are kept for review, never retried blindly (PRD §8 "비교 후 적용"). */
+export function getSyncConflicts(): SyncConflict[] {
+  return readSyncConflicts();
+}
+
+export function dismissSyncConflict(operationId: string) {
+  writeSyncConflicts(readSyncConflicts().filter(conflict => conflict.operationId !== operationId));
+}
+
+export function subscribeSyncConflicts(listener: () => void): () => void {
+  conflictListeners.add(listener);
+  return () => { conflictListeners.delete(listener); };
+}
+
+function recordSyncConflict(entry: PendingFirestoreWrite, error: AmountConflictError) {
+  const conflict: SyncConflict = {
+    operationId: entry.operationId || entry.id,
+    documents: entry.documents || [],
+    changeRecord: entry.changeRecord,
+    queuedAt: entry.queuedAt,
+    conflictedAt: new Date().toISOString(),
+    message: error.message,
+  };
+  writeSyncConflicts([...readSyncConflicts().filter(item => item.operationId !== conflict.operationId), conflict]);
+}
 
 export function describePendingCollection(collectionName: string): string {
   return COLLECTION_LABELS[collectionName] || collectionName;
@@ -131,12 +205,13 @@ function enqueueFirestoreWrite(entry: Omit<PendingFirestoreWrite, 'id' | 'queued
     id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
     queuedAt: new Date().toISOString(),
   };
-  // Only the latest pending operation for one document matters. This also
+  // Only the latest pending plain write for one document matters. This also
   // collapses queues produced by older clients that retried the same write.
-  const pending = readFirestoreOutbox().filter(candidate => !(
-    candidate.collectionName === queued.collectionName
-    && candidate.documentId === queued.documentId
-  ));
+  // Conditional operations are never collapsed: each one is based on the
+  // revision the previous one produces, so they must all reach the server in order.
+  const pending = readFirestoreOutbox().filter(candidate => queued.operation === 'conditional'
+    || candidate.operation === 'conditional'
+    || !(candidate.collectionName === queued.collectionName && candidate.documentId === queued.documentId));
   writeFirestoreOutbox([...pending, queued]);
   return queued;
 }
@@ -154,7 +229,54 @@ function recordFirestoreWriteError(id: string, error: unknown): string {
   return message;
 }
 
+/**
+ * Applies every document of one operation in a single Firestore transaction,
+ * refusing when any document's revision is not the one the operation was
+ * built on. A document already carrying this operation id means a retry of an
+ * applied operation, which is a no-op rather than a second application.
+ */
+async function executeConditionalWrite(entry: PendingFirestoreWrite) {
+  const documents = entry.documents || [];
+  const operationId = entry.operationId || entry.id;
+  await runTransaction(db, async firestoreTransaction => {
+    const snapshots = await Promise.all(documents.map(document => firestoreTransaction.get(
+      scopedDoc(document.collectionName, document.documentId),
+    )));
+    if (snapshots.some(snapshot => snapshot.exists() && snapshot.data().lastOperationId === operationId)) {
+      return; // already applied by an earlier attempt
+    }
+    documents.forEach((document, index) => {
+      const snapshot = snapshots[index];
+      const currentRevision = snapshot.exists() ? Number(snapshot.data().revision ?? 0) : 0;
+      if (document.expectedRevision === 0 && snapshot.exists() && !document.remove && document.collectionName === COLLECTION_TRANSACTIONS) {
+        throw new AmountConflictError('이미 다른 기기에서 납부 완료된 항목입니다.');
+      }
+      if (currentRevision !== document.expectedRevision) {
+        throw new AmountConflictError();
+      }
+    });
+    documents.forEach((document, index) => {
+      const reference = scopedDoc(document.collectionName, document.documentId);
+      if (document.remove) {
+        if (snapshots[index].exists()) firestoreTransaction.delete(reference);
+        return;
+      }
+      firestoreTransaction.set(reference, stripUndefined(document.data || {}));
+    });
+    if (entry.changeRecord) {
+      firestoreTransaction.set(
+        scopedDoc(COLLECTION_AMOUNT_CHANGES, entry.changeRecord.id),
+        stripUndefined(entry.changeRecord as unknown as Record<string, unknown>),
+      );
+    }
+  });
+}
+
 async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
+  if (entry.operation === 'conditional') {
+    await executeConditionalWrite(entry);
+    return;
+  }
   const reference = scopedDoc(entry.collectionName, entry.documentId);
   if (entry.operation === 'delete') {
     await deleteDoc(reference);
@@ -191,9 +313,37 @@ function persistFirestoreWrite(
     return true;
   }).catch(error => {
     console.error(`${errorLabel}:`, error);
+    if (isAmountConflict(error)) {
+      // Retrying cannot succeed and must not block later writes; park it for review.
+      recordSyncConflict(queued, error);
+      removeFirestoreWrite(queued.id);
+      reportWriteFailed(error.message);
+      return false;
+    }
     reportWriteFailed(recordFirestoreWriteError(queued.id, error));
     return false;
   });
+}
+
+/**
+ * Queues one revision-checked operation. Local state is expected to be updated
+ * first; the result only says whether the cloud accepted it now. A conflict is
+ * recorded through {@link getSyncConflicts} instead of being retried.
+ */
+export function commitConditionalOperation(input: {
+  operationId: string;
+  documents: ConditionalDocumentWrite[];
+  changeRecord?: AmountChangeRecord;
+}): Promise<boolean> {
+  const primary = input.documents[0];
+  return persistFirestoreWrite({
+    operation: 'conditional',
+    collectionName: primary.collectionName,
+    documentId: primary.documentId,
+    operationId: input.operationId,
+    documents: input.documents,
+    changeRecord: input.changeRecord,
+  }, 'Conditional amount operation failed');
 }
 
 export function flushFirestoreOutbox(): Promise<boolean> {
@@ -203,13 +353,18 @@ export function flushFirestoreOutbox(): Promise<boolean> {
     const pending = [...new Map(
       readFirestoreOutbox()
         .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
-        .map(entry => [`${entry.collectionName}/${entry.documentId}`, entry]),
+        .map(entry => [entry.operation === 'conditional' ? `op/${entry.operationId || entry.id}` : `${entry.collectionName}/${entry.documentId}`, entry]),
     ).values()];
     writeFirestoreOutbox(pending);
     for (const entry of pending) {
       try {
         await executeFirestoreWrite(entry);
       } catch (error) {
+        if (isAmountConflict(error)) {
+          recordSyncConflict(entry, error);
+          removeFirestoreWrite(entry.id);
+          continue;
+        }
         failedMessage = recordFirestoreWriteError(entry.id, error);
         throw error;
       }
@@ -241,8 +396,13 @@ export function clearTransactionHistoryFloor() {
 
 export function clearFirestoreOutbox() {
   localStorage.removeItem(ACCOUNT_KEYS.firestoreOutbox);
+  localStorage.removeItem(ACCOUNT_KEYS.syncConflicts);
   resetSyncStatus();
 }
+
+export const AMOUNT_CHANGES_COLLECTION = COLLECTION_AMOUNT_CHANGES;
+export const TRANSACTIONS_COLLECTION = COLLECTION_TRANSACTIONS;
+export const RECURRING_OCCURRENCES_COLLECTION = COLLECTION_RECURRING_OCCURRENCES;
 
 const STORAGE_KEYS = {
   get TRANSACTIONS() { return getAccountStorageKey('brake_transactions'); },
@@ -591,30 +751,6 @@ export async function deleteRecurringOccurrencesFromFirestore(ids: string[]) {
   return results.every(Boolean);
 }
 
-export async function commitRecurringPosting(tx: Transaction, occurrence: RecurringOccurrence) {
-  const transactionRef = scopedDoc(COLLECTION_TRANSACTIONS, tx.id);
-  const occurrenceRef = scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occurrence.id);
-
-  await runTransaction(db, async firestoreTransaction => {
-    const currentOccurrence = await firestoreTransaction.get(occurrenceRef);
-    if (currentOccurrence.exists() && currentOccurrence.data().status === 'posted') {
-      throw new Error('이미 처리된 정기 항목입니다.');
-    }
-    firestoreTransaction.set(transactionRef, tx);
-    firestoreTransaction.set(occurrenceRef, occurrence);
-  });
-}
-
-/** Keeps a posted transaction and its cycle occurrence in lockstep. */
-export async function commitRecurringAmountCorrection(tx: Transaction, occurrence: RecurringOccurrence) {
-  const transactionRef = scopedDoc(COLLECTION_TRANSACTIONS, tx.id);
-  const occurrenceRef = scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occurrence.id);
-  await runTransaction(db, async firestoreTransaction => {
-    firestoreTransaction.set(transactionRef, tx);
-    firestoreTransaction.set(occurrenceRef, occurrence);
-  });
-}
-
 export async function syncCycleBaselineToFirestore(baseline: CycleBaseline) {
   return persistFirestoreWrite({
     operation: 'set', collectionName: COLLECTION_CYCLE_BASELINES, documentId: baseline.yearMonth,
@@ -674,6 +810,7 @@ export async function clearFirestoreAllData() {
       COLLECTION_PAYMENT_CARDS,
       COLLECTION_CYCLE_BASELINES,
       COLLECTION_QUICK_ENTRIES,
+      COLLECTION_AMOUNT_CHANGES,
     ];
 
     for (const colName of collectionsToClear) {

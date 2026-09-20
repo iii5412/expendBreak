@@ -17,6 +17,8 @@ import { useToast } from './ui/FeedbackProvider';
 export interface CycleAmountConfirmResult {
   confirmed: string[];
   failed: string[];
+  /** Operation ids of the applied changes, for a one-tap undo. */
+  operationIds?: string[];
 }
 
 export interface CycleAmountReviewItem {
@@ -33,6 +35,7 @@ interface CycleAmountReviewProps {
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
   onConfirm?: (updates: Array<{ occurrenceId: string; amount: number }>) => void | Promise<void | CycleAmountConfirmResult>;
+  onUndo?: (operationIds: string[]) => number;
 }
 
 type Draft = number | null;
@@ -60,7 +63,7 @@ function saveDrafts(yearMonth: string, drafts: Record<string, Draft>) {
 const signedKRW = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatKRW(Math.abs(value))}`;
 
 export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
-  period, items, transactions, bankAccounts, paymentCards, onConfirm,
+  period, items, transactions, bankAccounts, paymentCards, onConfirm, onUndo,
 }) => {
   const { showToast } = useToast();
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => loadDrafts(period.yearMonth));
@@ -168,7 +171,20 @@ export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
       setSelected(current => { const next = new Set(current); confirmedIds.forEach(id => next.delete(id)); return next; });
       setFailedIds(new Set(failed));
       if (failed.length) showToast({ message: `${confirmedIds.length}건 확정, ${failed.length}건은 저장하지 못했습니다. 실패한 항목만 다시 시도해 주세요.`, tone: 'warning' });
-      else showToast({ message: `${confirmedIds.length}건의 이번 주기 금액을 확정했습니다. 납부 상태와 거래는 바뀌지 않았습니다.`, tone: 'success' });
+      else {
+        const operationIds = (result && result.operationIds) || [];
+        showToast({
+          message: `${confirmedIds.length}건의 이번 주기 금액을 확정했습니다. 납부 상태와 거래는 바뀌지 않았습니다.`,
+          tone: 'success',
+          action: onUndo && operationIds.length ? {
+            label: '실행 취소',
+            onAction: () => {
+              const reverted = onUndo(operationIds);
+              showToast({ message: reverted === operationIds.length ? `${reverted}건을 되돌렸습니다.` : `${reverted}건만 되돌렸습니다. 나머지는 그 사이 바뀌었습니다.`, tone: reverted === operationIds.length ? 'info' : 'warning' });
+            },
+          } : undefined,
+        });
+      }
     } finally {
       setIsSaving(false);
     }

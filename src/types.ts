@@ -134,6 +134,9 @@ export interface Transaction {
   voiceRecord?: VoiceRecord | null;
   createdAt: string;
   updatedAt: string;
+  /** Optimistic-lock counter; missing means a legacy row at revision 0. */
+  revision?: number;
+  lastOperationId?: string | null;
 }
 
 export interface Budget {
@@ -200,6 +203,10 @@ export interface RecurringOccurrence {
    * a projected row until the plan is prepared explicitly.
    */
   projected?: boolean;
+  /** Optimistic-lock counter; missing means a legacy row at revision 0. */
+  revision?: number;
+  /** Id of the amount operation that produced this revision (idempotent retries). */
+  lastOperationId?: string | null;
   status: OccurrenceStatus;
   transactionId?: string | null;
   paymentMethodType?: PaymentMethodType;
@@ -398,3 +405,34 @@ export interface AICategorySuggestion {
 }
 
 export type BudgetAlertLevel = 'safe' | 'caution' | 'warning' | 'danger';
+
+/** What an amount operation saw before and produced after (PRD-ui-renewal §8 변경 이력). */
+export interface AmountChangeSnapshot {
+  amount: number | null;
+  amountStatus: RecurringAmountStatus;
+  status: OccurrenceStatus;
+  transactionAmount: number | null;
+  paymentMethodType: PaymentMethodType | null;
+  accountId: string | null;
+  cardId: string | null;
+}
+
+export type AmountOperationKind = 'plan_amount' | 'posted_correction' | 'post' | 'undo_post';
+
+export interface AmountChangeRecord {
+  /** Equals the operation id. */
+  id: string;
+  kind: AmountOperationKind;
+  occurrenceId: string;
+  templateId: string;
+  scheduledDate: string;
+  transactionId: string | null;
+  before: AmountChangeSnapshot;
+  after: AmountChangeSnapshot;
+  expectedOccurrenceRevision: number;
+  /** null when no transaction takes part; 0 when it must not exist yet. */
+  expectedTransactionRevision: number | null;
+  /** Set when this operation reverses an earlier one. */
+  undoOf: string | null;
+  createdAt: string;
+}

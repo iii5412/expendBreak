@@ -47,6 +47,7 @@ interface RecurringPaymentViewProps {
   onExcludeOccurrence: (occurrenceId: string) => void;
   onUpdateOccurrencePlan: (occId: string, amount: number, paymentMethodType: PaymentMethodType, accountId: string | null, cardId: string | null) => void;
   onConfirmOccurrenceAmounts?: (updates: Array<{ occurrenceId: string; amount: number }>) => void | Promise<void | CycleAmountConfirmResult>;
+  onUndoAmountChanges?: (operationIds: string[]) => number;
 }
 
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
@@ -54,7 +55,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   cardSettlementSummary, hiddenExpenseItems, onCreateOccurrence, onReloadRecurringPlan,
   duplicateManualCardSettlementCount, cardSettlementReviewItems, onResolveCardSettlementReview,
   onUpdateCardSettlementStatus, onSaveCardSettlementAmount, onPostOccurrence, onUndoPostedOccurrence, onUndoOccurrenceDirect,
-  onExcludeOccurrence, onUpdateOccurrencePlan, onConfirmOccurrenceAmounts,
+  onExcludeOccurrence, onUpdateOccurrencePlan, onConfirmOccurrenceAmounts, onUndoAmountChanges,
 }) => {
   const { showToast } = useToast();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -339,6 +340,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       bankAccounts={bankAccounts}
       paymentCards={paymentCards}
       onConfirm={onConfirmOccurrenceAmounts}
+      onUndo={onUndoAmountChanges}
     />
 
     <section className="space-y-3" aria-labelledby="account-payments-title"><div><h2 id="account-payments-title" className="text-base font-extrabold text-slate-100">계좌별 이체</h2><p className="mt-0.5 text-xs text-slate-400">계좌를 펼치면 연결된 고정지출과 카드대금을 볼 수 있습니다.</p></div>

@@ -11,7 +11,7 @@ export type SyncPhase = 'synced' | 'syncing' | 'pending' | 'offline';
 
 export interface PendingWriteSummary {
   id: string;
-  operation: 'set' | 'delete';
+  operation: 'set' | 'delete' | 'conditional';
   collectionName: string;
   documentId: string;
   queuedAt: string;

@@ -131,7 +131,7 @@ export const SyncStatusIndicator: React.FC = () => {
                     {describePendingCollection(write.collectionName)}
                   </span>
                   <span className="ml-1.5 text-slate-400">
-                    {write.operation === 'delete' ? '삭제' : '저장'}
+                    {write.operation === 'delete' ? '삭제' : write.operation === 'conditional' ? '금액 변경' : '저장'}
                   </span>
                   <div className="truncate text-xs text-slate-400">{write.documentId}</div>
                   {write.lastError && (

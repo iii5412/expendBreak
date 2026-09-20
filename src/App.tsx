@@ -52,6 +52,8 @@ import {
   updateOccurrenceStatus,
   updateOccurrencePlan,
   confirmOccurrenceAmounts,
+  undoAmountChange,
+  undoAmountChanges,
   reloadRecurringOccurrences,
   updateBudget,
   saveCategory,
@@ -89,6 +91,7 @@ import { getSignedInAccount, logoutOwner, onSessionStateChanged } from './utils/
 import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
+import { SyncConflictBanner } from './components/SyncConflictBanner';
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { QuickEntryBar } from './components/QuickEntryBar';
@@ -1401,6 +1404,7 @@ export default function App() {
         syncStatusSlot={<SyncStatusIndicator />}
       />
       <OfflineBanner />
+      <SyncConflictBanner onReview={() => handleNavigateTab('recurring_payment')} />
 
       {/* Main View Area */}
       <main
@@ -1524,18 +1528,41 @@ export default function App() {
             }}
             onExcludeOccurrence={occurrenceId => void handleExcludeRecurringOccurrence(occurrenceId)}
             onUpdateOccurrencePlan={async (occId, amount, pType, accId, cId) => {
-              await updateOccurrencePlan(occId, {
+              if (!requireSavedPlan(occId)) return;
+              const saved = await updateOccurrencePlan(occId, {
                 amount,
                 paymentMethodType: pType,
                 accountId: accId,
                 cardId: cId,
               });
               refreshAppData();
+              if (!saved) {
+                showToast({ message: '금액을 저장하지 못했습니다. 연결된 거래를 찾을 수 없거나 항목이 바뀌었습니다.', tone: 'error' });
+                return;
+              }
+              const operationId = saved.lastOperationId;
+              showToast({
+                message: saved.status === 'posted' ? '완료 기록의 금액을 거래와 함께 수정했습니다.' : '이번 주기 금액을 저장했습니다.',
+                tone: 'success',
+                action: operationId ? {
+                  label: '실행 취소',
+                  onAction: () => {
+                    const reverted = undoAmountChange(operationId);
+                    refreshAppData();
+                    showToast({ message: reverted ? '금액 변경을 되돌렸습니다.' : '그 사이 항목이 바뀌어 되돌리지 못했습니다.', tone: reverted ? 'info' : 'warning' });
+                  },
+                } : undefined,
+              });
             }}
             onConfirmOccurrenceAmounts={async updates => {
               const result = await confirmOccurrenceAmounts(updates);
               refreshAppData();
               return result;
+            }}
+            onUndoAmountChanges={operationIds => {
+              const count = undoAmountChanges(operationIds);
+              refreshAppData();
+              return count;
             }}
           />
         )}
