@@ -63,6 +63,7 @@ import { AndroidAppCard } from './AndroidAppCard';
 import { normalizeAppTheme } from '../utils/theme';
 import { ScreenHeader } from './ui/ScreenHeader';
 import { SmsImportSettingsCard } from './SmsImportSettingsCard';
+import { resolveRecurringAmount } from '../utils/recurringAmounts';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -547,7 +548,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       for (const occ of tmplOccs) {
         group.occurrences.push({ occ, tmpl });
         if (occ.status !== 'posted') {
-          group.totalExpectedAmount += occ.actualAmount ?? occ.expectedAmount;
+          group.totalExpectedAmount += resolveRecurringAmount(occ).amount ?? 0;
           group.hasUnpostedItems = true;
         }
       }
@@ -808,7 +809,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
                               <div className="flex items-center gap-3">
                                 <span className="font-bold text-slate-100">
-                                  {formatKRW(occ ? (occ.actualAmount ?? occ.expectedAmount) : tmpl.defaultAmount)}
+                                  {(() => { if (!occ) return formatKRW(tmpl.defaultAmount); const resolved = resolveRecurringAmount(occ); return resolved.amount == null ? '금액 미입력' : formatKRW(resolved.amount); })()}
                                 </span>
 
                                 {!occ ? (

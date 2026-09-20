@@ -1,4 +1,5 @@
 import { RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
+import { resolveRecurringAmount } from './recurringAmounts';
 
 /**
  * Links a hand-entered transaction to the recurring item it settles.
@@ -68,7 +69,7 @@ export function findRecurringMatches(
     if (!template) continue;
     if ((occurrence.typeSnapshot ?? template.type) !== input.type) continue;
 
-    const expectedAmount = Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
+    const expectedAmount = resolveRecurringAmount(occurrence).amount ?? 0;
     if (expectedAmount <= 0) continue;
 
     const amountDrift = Math.abs(amount - expectedAmount) / expectedAmount;

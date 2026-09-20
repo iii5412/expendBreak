@@ -2,6 +2,8 @@ import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from
 import { getAccountingPeriod, getScheduledDatesInPeriod, isDateInPeriod, isSpendingTransaction, shiftYearMonth } from './calculations';
 import { calculateMonthlyCardSettlementSummary } from './cardPayments';
 import { getInstallmentCharge } from './installments';
+import { resolveRecurringAmount } from './recurringAmounts';
+import { getRecurringAmountSuggestion } from './recurringPlans';
 
 /**
  * Money already committed for cycles that have not started yet.
@@ -20,6 +22,13 @@ export interface FutureCommitmentMonth {
   /** Card bills due, net of the installment rounds inside them. */
   cardSettlement: number;
   total: number;
+  /**
+   * True when part of `accountFixed` rests on a suggestion (a copied previous
+   * cycle amount or an ungenerated cycle) rather than a confirmed figure.
+   */
+  isEstimated: boolean;
+  /** Fixed items with no amount evidence at all; left out of `total` on purpose. */
+  excludedCount: number;
   /** Installment plans whose final round lands in this cycle. */
   endingInstallments: Array<{ merchant: string; amount: number; totalMonths: number }>;
 }
@@ -56,13 +65,20 @@ export function calculateFutureCommitments(
         || (row.paymentMethodType ?? template?.paymentMethodType) === 'card') return sum;
       return sum + Math.round(row.amount);
     }, 0);
+    let isEstimated = false;
+    let excludedCount = 0;
     for (const row of periodOccurrences) {
       const template = templateMap.get(row.templateId);
       if (!template?.active || template.cardSettlementCardId || row.status === 'posted' || row.status === 'skipped'
         || (row.typeSnapshot ?? template.type) !== 'expense'
         || (row.paymentMethodType ?? template.paymentMethodType) === 'card'
         || periodTransactions.some(tx => tx.recurringOccurrenceKey === row.occurrenceKey)) continue;
-      accountFixed += Math.round(row.actualAmount ?? row.expectedAmount);
+      // A saved cycle keeps its own amount state; a suggestion stays an estimate
+      // and a missing amount is reported instead of silently counted as zero.
+      const resolved = resolveRecurringAmount(row, transactions);
+      if (resolved.amount == null) { excludedCount += 1; continue; }
+      if (resolved.status !== 'confirmed') isEstimated = true;
+      accountFixed += resolved.amount;
     }
     for (const template of recurringTemplates) {
       if (!template.active || template.archivedAt || template.type !== 'expense'
@@ -72,7 +88,12 @@ export function calculateFutureCommitments(
       if (template.frequency === 'monthly' && (rows.length > 0 || posted.length > 0)) continue;
       for (const date of getScheduledDatesInPeriod(template, period)) {
         if (rows.some(row => row.scheduledDate === date) || posted.some(row => row.localDate === date)) continue;
-        accountFixed += Math.round(template.defaultAmount);
+        // Ungenerated cycle: project from the latest confirmed amount, never
+        // from the template. Nothing is written; this is a read-only preview.
+        const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, date, recurringOccurrences);
+        if (suggestion.amount == null) { excludedCount += 1; continue; }
+        isEstimated = true;
+        accountFixed += suggestion.amount;
       }
     }
 
@@ -129,6 +150,8 @@ export function calculateFutureCommitments(
       cardSettlement,
       total: accountFixed + installments + cardSettlement,
       endingInstallments,
+      isEstimated,
+      excludedCount,
     });
   }
 

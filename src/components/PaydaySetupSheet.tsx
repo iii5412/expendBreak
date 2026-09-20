@@ -25,6 +25,7 @@ import { buildPaydayTransferGroups, PaydayTransferGroup } from '../utils/paydayT
 import { clearPaydayFunding, getPaydayFunding, savePaydayFunding, savePaydayPaymentBatch } from '../utils/paydayPaymentState';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
+import { resolveRecurringAmount } from '../utils/recurringAmounts';
 
 /**
  * The payday routine as one flow: confirm the deposit, transfer the fixed costs,
@@ -155,7 +156,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
     setIncomeAmountDrafts(Object.fromEntries(
       incomeOccurrences.map(occurrence => [
         occurrence.id,
-        Math.round(occurrence.actualAmount ?? occurrence.expectedAmount),
+        resolveRecurringAmount(occurrence).amount ?? 0,
       ]),
     ));
     setCardAmountDrafts(Object.fromEntries(
@@ -166,7 +167,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
   const periodRange = formatPeriodRange(period);
 
   const handleConfirmIncome = async (occurrence: RecurringOccurrence) => {
-    const amount = incomeAmountDrafts[occurrence.id] ?? occurrence.expectedAmount;
+    const amount = incomeAmountDrafts[occurrence.id] ?? resolveRecurringAmount(occurrence).amount ?? 0;
     if (amount <= 0) return;
     await onPostOccurrence(occurrence.id, amount, methodOf(occurrence) ?? 'account');
   };
@@ -335,12 +336,12 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
 
                       {posted ? (
                         <p className="mt-2 text-lg font-extrabold text-emerald-300">
-                          {formatKRW(occurrence.actualAmount ?? occurrence.expectedAmount)}
+                          {formatKRW(resolveRecurringAmount(occurrence).amount ?? 0)}
                         </p>
                       ) : (
                         <div className="mt-2 space-y-2">
                           <AmountInput
-                            value={incomeAmountDrafts[occurrence.id] ?? occurrence.expectedAmount}
+                            value={incomeAmountDrafts[occurrence.id] ?? resolveRecurringAmount(occurrence).amount ?? 0}
                             onChange={amount => setIncomeAmountDrafts(drafts => ({ ...drafts, [occurrence.id]: amount }))}
                             className="text-base text-emerald-300"
                           />
@@ -534,7 +535,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                               {templateMap.get(occurrence.templateId)?.name || '고정지출'}
                             </span>
                             <span className="shrink-0 font-semibold text-slate-200">
-                              {formatKRW(Math.round(occurrence.actualAmount ?? occurrence.expectedAmount))}
+                              {formatKRW(resolveRecurringAmount(occurrence).amount ?? 0)}
                             </span>
                           </li>
                         ))}

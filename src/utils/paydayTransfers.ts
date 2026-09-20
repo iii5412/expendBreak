@@ -2,8 +2,10 @@ import type {
   BankAccount,
   RecurringOccurrence,
   RecurringTemplate,
+  Transaction,
 } from '../types';
 import type { MonthlyCardSettlement } from './cardPayments';
+import { resolveRecurringAmount } from './recurringAmounts';
 
 export type PaydayTransferItem = {
   id: string;
@@ -37,6 +39,7 @@ interface BuildPaydayTransferGroupsInput {
   recurringTemplates: RecurringTemplate[];
   bankAccounts: BankAccount[];
   cardSettlements: MonthlyCardSettlement[];
+  transactions?: Transaction[];
 }
 
 /**
@@ -49,6 +52,7 @@ export function buildPaydayTransferGroups({
   recurringTemplates,
   bankAccounts,
   cardSettlements,
+  transactions = [],
 }: BuildPaydayTransferGroupsInput): PaydayTransferGroup[] {
   const templateMap = new Map(recurringTemplates.map(template => [template.id, template]));
   const accountMap = new Map(bankAccounts.map(account => [account.id, account]));
@@ -93,7 +97,7 @@ export function buildPaydayTransferGroups({
       const method = occurrence.paymentMethodType ?? template?.paymentMethodType;
       if (type !== 'expense' || method === 'card') return;
 
-      const amount = Math.max(0, Math.round(occurrence.actualAmount ?? occurrence.expectedAmount));
+      const amount = Math.max(0, resolveRecurringAmount(occurrence, transactions).amount ?? 0);
       const accountId = occurrence.accountId || template?.accountId || null;
       const group = groupFor(accountId, {
         bankName: template?.bankName,

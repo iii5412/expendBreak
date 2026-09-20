@@ -4,6 +4,8 @@ export type RecurringFrequency = 'monthly' | 'weekly';
 export type HolidayPolicy = 'previous_business_day' | 'next_business_day' | 'fixed_date';
 export type PostingMode = 'auto' | 'confirm';
 export type OccurrenceStatus = 'scheduled' | 'needs_confirmation' | 'posted' | 'skipped' | 'overdue';
+export type RecurringAmountStatus = 'missing' | 'suggested' | 'confirmed';
+export type RecurringAmountSource = 'previous_cycle' | 'manual' | 'transaction' | 'legacy_template' | 'legacy_occurrence';
 export type PaymentMethodType = 'account' | 'card' | 'cash' | 'other';
 export type CardPaymentStatus = 'scheduled' | 'paid';
 /**
@@ -184,6 +186,14 @@ export interface RecurringOccurrence {
   scheduledDate: string; // YYYY-MM-DD
   expectedAmount: number;
   actualAmount?: number | null;
+  /** Amount for this cycle. The template is only a schedule; amounts live here. */
+  plannedAmount?: number | null;
+  amountStatus?: RecurringAmountStatus;
+  amountSource?: RecurringAmountSource;
+  sourceCycle?: string | null;
+  amountConfirmedAt?: string | null;
+  /** Set when a posted transaction and its legacy occurrence amount disagree. */
+  amountIntegrityIssue?: boolean;
   status: OccurrenceStatus;
   transactionId?: string | null;
   paymentMethodType?: PaymentMethodType;

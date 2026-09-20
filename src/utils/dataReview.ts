@@ -1,5 +1,6 @@
 import { BankAccount, RecurringOccurrence, Transaction } from '../types';
 import { getCurrentYearMonth } from './calculations';
+import { resolveRecurringAmount } from './recurringAmounts';
 
 export function findDuplicateTransactionGroups(transactions: Transaction[]): Transaction[][] {
   const groups = new Map<string, Transaction[]>();
@@ -24,5 +25,5 @@ export function findDuplicateAccountGroups(accounts: BankAccount[]): BankAccount
 export function retainedPlanSummary(occurrences: RecurringOccurrence[], monthStartDay: number, templateId?: string) {
   const rows = occurrences.filter(row => (!templateId || row.templateId === templateId) && row.status !== 'posted' && row.status !== 'skipped');
   const months = [...new Set(rows.map(row => getCurrentYearMonth(monthStartDay, new Date(`${row.scheduledDate}T12:00:00`))))].sort();
-  return { count: rows.length, months, amount: rows.reduce((sum, row) => sum + Math.round(row.actualAmount ?? row.expectedAmount), 0) };
+  return { count: rows.length, months, amount: rows.reduce((sum, row) => sum + (resolveRecurringAmount(row).amount ?? 0), 0) };
 }

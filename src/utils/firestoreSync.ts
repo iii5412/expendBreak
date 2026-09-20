@@ -605,6 +605,16 @@ export async function commitRecurringPosting(tx: Transaction, occurrence: Recurr
   });
 }
 
+/** Keeps a posted transaction and its cycle occurrence in lockstep. */
+export async function commitRecurringAmountCorrection(tx: Transaction, occurrence: RecurringOccurrence) {
+  const transactionRef = scopedDoc(COLLECTION_TRANSACTIONS, tx.id);
+  const occurrenceRef = scopedDoc(COLLECTION_RECURRING_OCCURRENCES, occurrence.id);
+  await runTransaction(db, async firestoreTransaction => {
+    firestoreTransaction.set(transactionRef, tx);
+    firestoreTransaction.set(occurrenceRef, occurrence);
+  });
+}
+
 export async function syncCycleBaselineToFirestore(baseline: CycleBaseline) {
   return persistFirestoreWrite({
     operation: 'set', collectionName: COLLECTION_CYCLE_BASELINES, documentId: baseline.yearMonth,

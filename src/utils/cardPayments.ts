@@ -1,6 +1,7 @@
 import { PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { getAccountingPeriod, getLocalDateString, getMonthlyDueDateInPeriod, getScheduledDatesInPeriod, isDateInPeriod, shiftYearMonth } from './calculations';
 import { getInstallmentCharge } from './installments';
+import { resolveRecurringAmount } from './recurringAmounts';
 
 export interface CreditCardPaymentEstimate {
   cardId: string;
@@ -312,7 +313,7 @@ export function calculateCardPaymentSummary(
       const paymentMethodType = occurrence.paymentMethodType ?? template?.paymentMethodType;
       if (paymentMethodType !== 'card') return;
 
-      const amount = Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
+      const amount = resolveRecurringAmount(occurrence).amount ?? 0;
       const cardId = occurrence.cardId ?? template?.cardId;
       addScheduledFixedCardUsage(amount, cardId);
     });

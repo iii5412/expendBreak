@@ -47,6 +47,7 @@ import {
   undoPostedOccurrence,
   updateOccurrenceStatus,
   updateOccurrencePlan,
+  confirmOccurrenceAmounts,
   reloadRecurringOccurrences,
   updateBudget,
   saveCategory,
@@ -137,6 +138,7 @@ import {
   SmsReviewCandidate,
   subscribeToPendingSms,
 } from './utils/smsImport';
+import { resolveRecurringAmount } from './utils/recurringAmounts';
 
 type BootState = 'checking' | 'locked' | 'loading' | 'ready';
 
@@ -878,7 +880,7 @@ export default function App() {
       description: '완료 처리할 때 생성된 거래를 삭제하고 미처리 상태로 되돌립니다. 정기 항목 자체는 삭제되지 않습니다.',
       details: [
         { label: '항목', value: template?.name || '정기 항목' },
-        { label: '금액', value: formatKRW(occurrence.actualAmount ?? occurrence.expectedAmount) },
+        { label: '금액', value: formatKRW(resolveRecurringAmount(occurrence, planningTransactions).amount ?? 0) },
         { label: '예정일', value: occurrence.scheduledDate },
       ],
       confirmLabel: '완료 취소',
@@ -910,7 +912,7 @@ export default function App() {
       description: '고정 항목 원본과 다른 달의 일정은 유지됩니다. 고정 지출을 새로 불러와도 이 달에는 다시 생성되지 않습니다.',
       details: [
         { label: '구분', value: isIncome ? '고정 수입' : '고정 지출' },
-        { label: '예정 금액', value: formatKRW(occurrence.actualAmount ?? occurrence.expectedAmount) },
+        { label: '예정 금액', value: (() => { const resolved = resolveRecurringAmount(occurrence); return resolved.amount == null ? '미입력' : formatKRW(resolved.amount); })() },
         { label: '예정일', value: occurrence.scheduledDate },
       ],
       confirmLabel: '이번 달 제외',
@@ -1408,6 +1410,7 @@ export default function App() {
             summary={summary}
             upcomingOccurrences={planningRecurringOccurrences}
             recurringTemplates={planningRecurringTemplates}
+            transactions={planningTransactions}
             categories={categories}
             categoryBreakdown={categoryBreakdown}
             cardPaymentSummary={cardPaymentSummary}
@@ -1487,14 +1490,19 @@ export default function App() {
               return Boolean(reopened);
             }}
             onExcludeOccurrence={occurrenceId => void handleExcludeRecurringOccurrence(occurrenceId)}
-            onUpdateOccurrencePlan={(occId, amount, pType, accId, cId) => {
-              updateOccurrencePlan(occId, {
+            onUpdateOccurrencePlan={async (occId, amount, pType, accId, cId) => {
+              await updateOccurrencePlan(occId, {
                 amount,
                 paymentMethodType: pType,
                 accountId: accId,
                 cardId: cId,
               });
               refreshAppData();
+            }}
+            onConfirmOccurrenceAmounts={async updates => {
+              const result = await confirmOccurrenceAmounts(updates);
+              refreshAppData();
+              return result;
             }}
           />
         )}

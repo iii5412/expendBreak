@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { getInstallmentCharge } from './installments';
 import { getScheduledDatesForMonth } from './recurringNormalization';
+import { resolveRecurringAmount } from './recurringAmounts';
 
 /**
  * Two-track cash model. See `docs/PRD-payday-cashflow-model.md` §4.
@@ -42,6 +43,10 @@ export interface MonthSummary {
   planningIncome: number;
   /** True while the plan rests on income that has not been deposited yet. */
   isProjected: boolean;
+  /** Whether every cycle amount is ready for decision-making. */
+  calculationStatus: 'incomplete' | 'estimated' | 'confirmed';
+  missingAmountCount: number;
+  suggestedAmountCount: number;
 
   // Expenses
   confirmedExpenses: number;
@@ -75,6 +80,8 @@ export interface MonthSummary {
   isBaselineLocked: boolean;
   /** What the living budget would be if recomputed now. Equals {@link livingBudget} when unlocked. */
   recalculatedLivingBudget: number;
+  /** Signed value before the UI clamps a negative living budget to zero. */
+  signedLivingBudget: number;
   /**
    * recalculatedLivingBudget - livingBudget. Non-zero means fixed amounts, the
    * card bill or income moved after the plan was locked. Surfaced instead of
@@ -399,6 +406,11 @@ export function calculateMonthSummary(
       // deleted template reserved as a future payment.
       && templateMap.get(o.templateId)?.active
   );
+  const pendingAmountStates = pendingOccurrences.map(o => resolveRecurringAmount(o, transactions));
+  const missingAmountCount = pendingAmountStates.filter(amount => amount.status === 'missing').length;
+  const suggestedAmountCount = pendingAmountStates.filter(amount => amount.status === 'suggested').length;
+  const calculationStatus: MonthSummary['calculationStatus'] = missingAmountCount > 0
+    ? 'incomplete' : suggestedAmountCount > 0 ? 'estimated' : 'confirmed';
 
   // Scheduled Income (recurring items with template.type === 'income')
   const scheduledIncome = pendingOccurrences
@@ -406,7 +418,7 @@ export function calculateMonthSummary(
       const tmpl = templateMap.get(o.templateId);
       return (o.typeSnapshot ?? tmpl?.type) === 'income';
     })
-    .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
+    .reduce((sum, o) => sum + (resolveRecurringAmount(o).amount ?? 0), 0);
 
   // Remaining Scheduled Expenses (recurring items with template.type === 'expense' or fallback)
   const pendingExpenseOccurrences = pendingOccurrences.filter(o => {
@@ -414,10 +426,10 @@ export function calculateMonthSummary(
     return (o.typeSnapshot ?? tmpl?.type) === 'expense';
   });
   const scheduledOccurrenceExpenses = pendingExpenseOccurrences
-    .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
+    .reduce((sum, o) => sum + (resolveRecurringAmount(o).amount ?? 0), 0);
   const scheduledCardOccurrenceExpenses = pendingExpenseOccurrences
     .filter(o => isCardPaid(o, templateMap.get(o.templateId)))
-    .reduce((sum, o) => sum + Math.round(o.actualAmount ?? o.expectedAmount), 0);
+    .reduce((sum, o) => sum + (resolveRecurringAmount(o).amount ?? 0), 0);
 
   // Occurrences are normally generated before this calculation. Keep the plan
   // safe even when a newly registered template has not materialized yet: every
@@ -483,17 +495,21 @@ export function calculateMonthSummary(
   const netCashFlow = confirmedIncome - confirmedExpenses;
 
   const disposableAfterFixed = planningIncome - accountFixedOutflow - cardSettlementOutflow;
-  const recalculatedLivingBudget = Math.max(0, disposableAfterFixed - savingsReserve);
+  const signedLivingBudget = disposableAfterFixed - savingsReserve;
+  const recalculatedLivingBudget = Math.max(0, signedLivingBudget);
 
-  // A locked plan is what the user committed to on payday. Later edits to a
-  // fixed amount or a card estimate must not move the remaining balance behind
-  // their back, or the daily figure stops meaning "what I have left" (INV-4).
+  // The current figure always follows the latest cycle amounts. A baseline is
+  // retained only as a comparison snapshot, never as a stale calculation input.
   const baseline = options.baseline ?? null;
   const isBaselineLocked = Boolean(baseline) && baseline?.yearMonth === yearMonth;
-  const livingBudget = isBaselineLocked
-    ? Math.max(0, Math.round((baseline as CycleBaseline).livingBudget))
-    : recalculatedLivingBudget;
-  const unplannedDelta = recalculatedLivingBudget - livingBudget;
+  const livingBudget = recalculatedLivingBudget;
+  const baselineSignedBudget = isBaselineLocked
+    ? Math.round((baseline as CycleBaseline).confirmedIncome
+      - (baseline as CycleBaseline).accountFixedOutflow
+      - (baseline as CycleBaseline).cardSettlement
+      - (baseline as CycleBaseline).savingsReserve)
+    : signedLivingBudget;
+  const unplannedDelta = signedLivingBudget - baselineSignedBudget;
   const remainingLivingBudget = livingBudget - confirmedVariableExpenses;
 
   // Allowance control. Keep Budget.totalLimit persisted as-is and reinterpret it as
@@ -511,7 +527,7 @@ export function calculateMonthSummary(
   
   // Daily Safe Spending Allowance. Divided over the days left in the spending
   // window, since that is the window `remainingAllowance` is measured against.
-  const dailySafeAllowance = spendPeriodStatus === 'closed' ? 0 : Math.max(
+  const dailySafeAllowance = spendPeriodStatus === 'closed' || calculationStatus === 'incomplete' ? 0 : Math.max(
     0,
     Math.floor(remainingAllowance / Math.max(1, spendPeriod.daysRemaining)),
   );
@@ -522,7 +538,7 @@ export function calculateMonthSummary(
     : null;
   const configuredLimitUsagePercent = allowanceLimit > 0
     ? Math.round(confirmedVariableExpenses / allowanceLimit * 1000) / 10 : null;
-  const fundingShortfall = Math.max(0, -disposableAfterFixed + savingsReserve);
+  const fundingShortfall = Math.max(0, -signedLivingBudget);
     
   // Alert Level
   let alertLevel: BudgetAlertLevel = 'safe';
@@ -614,6 +630,9 @@ export function calculateMonthSummary(
     totalIncome,
     planningIncome,
     isProjected,
+    calculationStatus,
+    missingAmountCount,
+    suggestedAmountCount,
     confirmedExpenses,
     confirmedFixedExpenses,
     confirmedVariableExpenses,
@@ -633,6 +652,7 @@ export function calculateMonthSummary(
     remainingLivingBudget,
     isBaselineLocked,
     recalculatedLivingBudget,
+    signedLivingBudget,
     unplannedDelta,
     totalExpectedFixedExpenses,
     netCashFlow,

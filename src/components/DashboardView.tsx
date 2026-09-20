@@ -18,7 +18,8 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { MonthSummary, formatKRW } from '../utils/calculations';
-import { RecurringOccurrence, RecurringTemplate, Category, BankAccount, PaymentCard } from '../types';
+import { RecurringOccurrence, RecurringTemplate, Category, BankAccount, PaymentCard, Transaction } from '../types';
+import { resolveRecurringAmount } from '../utils/recurringAmounts';
 import { CardPaymentSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { getPendingRecurringTimeline } from '../utils/recurringTimeline';
 
@@ -26,6 +27,8 @@ interface DashboardViewProps {
   summary: MonthSummary;
   upcomingOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
+  /** Needed to read posted amounts from their linked transactions. */
+  transactions?: Transaction[];
   categories: Category[];
   categoryBreakdown: { categoryId: string; categoryName: string; amount: number; percent: number; color: string }[];
   cardPaymentSummary: CardPaymentSummary;
@@ -102,6 +105,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   summary,
   upcomingOccurrences,
   recurringTemplates,
+  transactions = [],
   categories,
   categoryBreakdown,
   cardPaymentSummary,
@@ -221,6 +225,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const showBaselineChange = summary.isBaselineLocked
     && summary.unplannedDelta !== 0
     && !baselineChangeDismissed;
+  // The hero figure is only a decision aid when every cycle amount is known.
+  // A missing amount makes the whole sum unknowable, so show "—" rather than a
+  // confident number computed from a silent zero (PRD §5, calculation states).
+  const isIncomplete = summary.calculationStatus === 'incomplete';
+  const isEstimated = summary.calculationStatus === 'estimated' || summary.isProjected;
+  const showsShortfall = summary.spendPeriodStatus !== 'closed' && !isIncomplete && summary.fundingShortfall > 0;
 
   return (
     <div className="space-y-6 pb-24">
@@ -255,16 +265,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
           <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
             <AlertTriangle className="h-4 w-4" />
-            <span>이번 주기 계획이 바뀔 수 있습니다</span>
+            <span>처음 확정한 계획과 달라졌습니다</span>
           </div>
           <dl className="mt-2 space-y-1 text-xs">
             <div className="flex items-center justify-between">
-              <dt className="text-slate-400">확정한 생활비</dt>
-              <dd className="font-semibold text-slate-200">{formatKRW(summary.livingBudget)}</dd>
+              <dt className="text-slate-400">처음 확정한 생활비 재원</dt>
+              <dd className="font-semibold text-slate-200">{formatKRW(summary.signedLivingBudget - summary.unplannedDelta)}</dd>
             </div>
             <div className="flex items-center justify-between">
-              <dt className="text-slate-400">지금 기준으로 다시 계산하면</dt>
-              <dd className="font-semibold text-slate-200">{formatKRW(summary.recalculatedLivingBudget)}</dd>
+              <dt className="text-slate-400">지금 금액 기준 생활비 재원</dt>
+              <dd className="font-semibold text-slate-200">{formatKRW(summary.signedLivingBudget)}</dd>
             </div>
             <div className="flex items-center justify-between border-t border-amber-500/20 pt-1.5">
               <dt className="font-semibold text-slate-300">차이</dt>
@@ -274,14 +284,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </dl>
           <p className="mt-2 text-xs leading-relaxed text-slate-400">
-            고정비·카드대금·급여 중 무언가가 확정 이후에 바뀌었습니다. 그대로 두면 남은 생활비는 확정 금액을 유지합니다.
+            고정비·카드대금·급여 중 무언가가 확정 이후에 바뀌었습니다. 현재 계산에는 이미 최신 금액이 반영되어 있고, 처음 계획은 비교용으로만 남습니다.
           </p>
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={onRefreshBaseline}
               className="min-h-10 flex-1 rounded-lg bg-amber-500 text-xs font-extrabold text-slate-950 transition-colors hover:bg-amber-600"
             >
-              계획 갱신
+              비교 기준 갱신
             </button>
             <button
               onClick={onDismissBaselineChange}
@@ -310,14 +320,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="mt-7 grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div className="min-w-0">
             <h2 id="safe-money-title" className="eb-display text-sm font-bold tracking-tight text-slate-300 sm:text-base">
-              {summary.spendPeriodStatus === 'closed' ? '마감한 달의 생활비 사용' : '오늘 안전하게 쓸 수 있는 돈'}
+              {summary.spendPeriodStatus === 'closed' ? '마감한 달의 생활비 사용'
+                : isIncomplete ? '금액 입력·확인이 필요합니다'
+                : showsShortfall ? (isEstimated ? '예상 부족액' : '계획상 부족액')
+                : isEstimated ? '오늘 쓸 수 있는 돈 (예상)' : '오늘 안전하게 쓸 수 있는 돈'}
             </h2>
             <p className="eb-display eb-tabular mt-2 break-keep text-[clamp(2.55rem,11vw,4.25rem)] font-extrabold leading-none tracking-[-0.065em] text-white">
-              {formatKRW(summary.spendPeriodStatus === 'closed' ? summary.confirmedVariableExpenses : summary.dailySafeAllowance)}
+              {summary.spendPeriodStatus === 'closed' ? formatKRW(summary.confirmedVariableExpenses)
+                : isIncomplete ? '—'
+                : showsShortfall ? formatKRW(summary.fundingShortfall)
+                : formatKRW(summary.dailySafeAllowance)}
             </p>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-400">
-              {summary.spendPeriodStatus === 'closed' ? '생활비 주기가 끝났습니다. 실제 사용액과 한도 대비 결과를 확인하세요.' : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.`}
+              {summary.spendPeriodStatus === 'closed' ? '생활비 주기가 끝났습니다. 실제 사용액과 한도 대비 결과를 확인하세요.'
+                : isIncomplete ? `이번 주기 금액이 없는 고정 항목이 ${summary.missingAmountCount}건 있습니다. 금액을 입력하기 전에는 사용 가능액을 계산하지 않습니다.`
+                : showsShortfall ? `고정지출·카드대금·저축 계획이 수입보다 ${formatKRW(summary.fundingShortfall)} 많습니다. 생활비 사용 ${formatKRW(summary.confirmedVariableExpenses)}은 별도 지표이며, 실제 통장 잔액이 아닙니다.`
+                : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.${summary.suggestedAmountCount > 0 ? ` 전 주기 제안 금액 ${summary.suggestedAmountCount}건이 포함된 예상치입니다.` : ''}`}
             </p>
+            {(isIncomplete || summary.suggestedAmountCount > 0) && summary.spendPeriodStatus !== 'closed' && (
+              <button
+                type="button"
+                onClick={() => onNavigateTab('recurring_payment')}
+                className="mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 text-xs font-bold text-amber-200 transition-colors hover:bg-amber-500/20"
+              >
+                <AlertTriangle className="h-3.5 w-3.5" />
+                <span>금액 확인 {summary.missingAmountCount + summary.suggestedAmountCount}건</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
 
           <button
@@ -377,7 +407,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <button onClick={() => onNavigateTab('accounts')} className="min-h-10 rounded border border-slate-700 px-3">카드대금 {formatKRW(summary.cardSettlementOutflow)}</button>
             <button onClick={() => onNavigateTab('management', 'settings')} className="min-h-10 rounded border border-slate-700 px-3">생활비 한도 {formatKRW(summary.allowanceLimit)}</button>
           </div>
-          <p className="mt-2">수입 − 계좌 고정 지출 − 카드대금 − 저축 확보액 = 생활비 재원 {formatKRW(summary.livingBudget)}{summary.isBaselineLocked ? ' (확정 계획)' : ''}. 사용액은 급여일~다음 급여일 전날 기준입니다.</p>
+          <p className="mt-2">수입 − 계좌 고정 지출 − 카드대금 − 저축 확보액 = 생활비 재원 {formatKRW(summary.signedLivingBudget)}{summary.isBaselineLocked ? ' (최신 금액 기준, 처음 계획은 비교용)' : ''}. 사용액은 급여일~다음 급여일 전날 기준입니다.</p>
         </details>
         {/* Cash track: how the salary splits before any spending happens. */}
         <div className="mt-5 border-t border-slate-800 pt-4">
@@ -800,7 +830,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <div className="mt-1 text-slate-400">
                       {occ.scheduledDate} · {describeRecurringPaymentMethod(occ, template)}
                     </div>
-                    <div className="mt-1 font-semibold text-slate-200">이번 달 계획 금액 {formatKRW(occ.expectedAmount)}</div>
+                    <div className="mt-1 font-semibold text-slate-200">{(() => { const resolved = resolveRecurringAmount(occ, transactions); return resolved.amount == null ? '이번 주기 금액 미입력' : `이번 주기 ${resolved.status === 'suggested' ? '제안' : '계획'} 금액 ${formatKRW(resolved.amount)}`; })()}</div>
                   </div>
 
                   <button

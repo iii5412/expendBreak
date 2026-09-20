@@ -514,7 +514,7 @@ describe('INV-5 installment symmetry', () => {
   });
 });
 
-describe('INV-4 baseline lock', () => {
+describe('INV-4 baseline as a comparison snapshot', () => {
   const lockedBaseline = (overrides: Partial<CycleBaseline> = {}): CycleBaseline => ({
     yearMonth: '2026-08',
     confirmedIncome: 3_000_000,
@@ -547,18 +547,21 @@ describe('INV-4 baseline lock', () => {
     );
   }
 
-  it('holds the committed living budget when a fixed amount changes later', () => {
+  // PRD-ui-renewal §5: the current figure always follows the latest cycle
+  // amounts. The locked plan is kept only to explain "처음 계획보다 얼마 달라졌나".
+  it('recomputes the living budget from the latest amounts even while locked', () => {
     const summary = scenarioWithLateChange(lockedBaseline());
 
     expect(summary.isBaselineLocked).toBe(true);
-    expect(summary.livingBudget).toBe(1_320_000);
-    expect(summary.remainingLivingBudget).toBe(1_020_000);
+    expect(summary.livingBudget).toBe(1_305_000);
+    expect(summary.remainingLivingBudget).toBe(1_005_000);
   });
 
-  it('surfaces the drift instead of folding it into the balance', () => {
+  it('surfaces the drift against the original plan as a comparison', () => {
     const summary = scenarioWithLateChange(lockedBaseline());
 
     expect(summary.recalculatedLivingBudget).toBe(1_305_000);
+    expect(summary.signedLivingBudget).toBe(1_305_000);
     expect(summary.unplannedDelta).toBe(-15_000);
   });
 
@@ -594,12 +597,34 @@ describe('INV-4 baseline lock', () => {
     expect(before.remainingLivingBudget - after.remainingLivingBudget).toBe(50_000);
   });
 
-  it('takes the savings reserve from the locked plan', () => {
+  it('takes the savings reserve from the locked plan but still recomputes the budget', () => {
     const summary = scenarioWithLateChange(lockedBaseline({ savingsReserve: 200_000, livingBudget: 1_120_000 }));
 
     expect(summary.savingsReserve).toBe(200_000);
-    expect(summary.livingBudget).toBe(1_120_000);
+    expect(summary.livingBudget).toBe(1_105_000);
     expect(summary.recalculatedLivingBudget).toBe(1_105_000);
+    expect(summary.unplannedDelta).toBe(-15_000);
+  });
+
+  it('keeps growing the shortfall when the budget is already negative', () => {
+    // Acceptance #6/#15: a 75,280 increase must be visible even when the
+    // clamped living budget stays at zero on both sides.
+    const salary = makeTemplate({ id: 't_salary', type: 'income', categoryId: 'salary', defaultAmount: 3_000_000 });
+    const rent = makeTemplate({ id: 't_rent', defaultAmount: 700_000 });
+    const income = makeTransaction({ type: 'income', amount: 3_000_000, localDate: '2026-08-10', categoryId: 'salary', recurringTemplateId: 't_salary' });
+    const run = (rentAmount: number) => calculateMonthSummary(
+      '2026-08',
+      [income, makeTransaction({ amount: rentAmount, localDate: '2026-08-10', recurringTemplateId: 't_rent', paymentMethodType: 'account' })],
+      [], budgetWithLimit(0), [salary, rent], NOW, SALARY_DAY,
+      { cardSettlementOutflow: 2_800_000 },
+    );
+
+    const before = run(250_000);
+    const after = run(325_280);
+    expect(before.livingBudget).toBe(0);
+    expect(after.livingBudget).toBe(0);
+    expect(after.fundingShortfall - before.fundingShortfall).toBe(75_280);
+    expect(after.signedLivingBudget - before.signedLivingBudget).toBe(-75_280);
   });
 });
 
@@ -803,5 +828,47 @@ describe('card usage summary stays on the spend track', () => {
     const usage = calculateCardPaymentSummary('2026-08', transactions, [CREDIT_CARD], SALARY_DAY);
 
     expect(usage.totalCardUsage).toBe(300_000);
+  });
+});
+
+describe('calculation completeness (PRD-ui-renewal §5)', () => {
+  const salary = makeTemplate({ id: 't_salary', type: 'income', categoryId: 'salary', defaultAmount: 3_000_000 });
+  const rent = makeTemplate({ id: 't_rent', defaultAmount: 700_000 });
+  const insurance = makeTemplate({ id: 't_insurance', name: '새 보험', defaultAmount: 0 });
+  const income = makeTransaction({ type: 'income', amount: 3_000_000, localDate: '2026-08-10', categoryId: 'salary', recurringTemplateId: 't_salary' });
+
+  it('does not compute a daily allowance while a fixed amount is still missing', () => {
+    // Acceptance #14: a blank new item makes the figure "—", not a confident number.
+    const summary = calculateMonthSummary('2026-08', [income], [
+      makeOccurrence({ templateId: 't_rent', scheduledDate: '2026-08-25', plannedAmount: 700_000, amountStatus: 'confirmed', amountSource: 'manual', paymentMethodType: 'account' }),
+      makeOccurrence({ templateId: 't_insurance', scheduledDate: '2026-08-27', plannedAmount: null, amountStatus: 'missing', paymentMethodType: 'account' }),
+    ], budgetWithLimit(0), [salary, rent, insurance], NOW, SALARY_DAY);
+
+    expect(summary.calculationStatus).toBe('incomplete');
+    expect(summary.missingAmountCount).toBe(1);
+    expect(summary.dailySafeAllowance).toBe(0);
+    // The computable subtotal still excludes the blank rather than counting zero silently.
+    expect(summary.accountFixedOutflow).toBe(700_000);
+  });
+
+  it('marks the plan as estimated while it rests on a copied suggestion', () => {
+    const summary = calculateMonthSummary('2026-08', [income], [
+      makeOccurrence({ templateId: 't_rent', scheduledDate: '2026-08-25', plannedAmount: 700_000, amountStatus: 'suggested', amountSource: 'previous_cycle', sourceCycle: '2026-07', paymentMethodType: 'account' }),
+    ], budgetWithLimit(0), [salary, rent], NOW, SALARY_DAY);
+
+    expect(summary.calculationStatus).toBe('estimated');
+    expect(summary.suggestedAmountCount).toBe(1);
+    expect(summary.accountFixedOutflow).toBe(700_000);
+    expect(summary.dailySafeAllowance).toBeGreaterThan(0);
+  });
+
+  it('is confirmed once every cycle amount has been checked', () => {
+    const summary = calculateMonthSummary('2026-08', [income], [
+      makeOccurrence({ templateId: 't_rent', scheduledDate: '2026-08-25', plannedAmount: 700_000, amountStatus: 'confirmed', amountSource: 'manual', paymentMethodType: 'account' }),
+    ], budgetWithLimit(0), [salary, rent], NOW, SALARY_DAY);
+
+    expect(summary.calculationStatus).toBe('confirmed');
+    expect(summary.missingAmountCount).toBe(0);
+    expect(summary.suggestedAmountCount).toBe(0);
   });
 });

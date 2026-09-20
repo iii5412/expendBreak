@@ -49,8 +49,14 @@ export const FutureCommitmentsCard: React.FC<FutureCommitmentsCardProps> = ({ su
         {summary.months.map(month => (
           <li key={month.yearMonth} className="space-y-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-300">{month.yearMonth}</span>
-              <span className="eb-tabular font-bold text-slate-100">{formatKRW(month.total)}</span>
+              <span className="font-semibold text-slate-300">
+                {month.yearMonth}
+                {month.isEstimated && <span className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-bold text-amber-200">미확정 예상</span>}
+              </span>
+              <span className="eb-tabular font-bold text-slate-100">
+                {formatKRW(month.total)}
+                {month.excludedCount > 0 && <span className="ml-1.5 text-[11px] font-semibold text-slate-400">· 미포함 {month.excludedCount}건</span>}
+              </span>
             </div>
 
             <div

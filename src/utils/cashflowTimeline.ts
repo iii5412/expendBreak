@@ -2,6 +2,7 @@ import { hasConfirmedBalance } from './accountBalances';
 import { BankAccount, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { AccountingPeriod, getLocalDateString, isDateInPeriod } from './calculations';
 import { MonthlyCardSettlementSummary } from './cardPayments';
+import { resolveRecurringAmount } from './recurringAmounts';
 
 /**
  * Day-by-day account balance across the cycle: known inflows and outflows on
@@ -103,7 +104,8 @@ export function buildCashflowTimeline(
     const type = occurrence.typeSnapshot ?? template?.type ?? 'expense';
     const method = occurrence.paymentMethodType ?? template?.paymentMethodType;
     if (type === 'expense' && method === 'card') return; // settled through the bill
-    const amount = Math.round(occurrence.actualAmount ?? occurrence.expectedAmount);
+    const amount = resolveRecurringAmount(occurrence).amount;
+    if (amount == null) return; // no evidence yet; do not plot a phantom zero
     addMovement(occurrence.scheduledDate, template?.name || '정기 항목', type === 'income' ? amount : -amount);
   });
 

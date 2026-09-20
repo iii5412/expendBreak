@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { AlertCircle, ArrowRightLeft, Check, CheckCircle2, ChevronDown, ChevronUp, Copy, CreditCard, Pencil, Receipt, RefreshCw, Wallet, X } from 'lucide-react';
-import type { BankAccount, Category, PaymentCard, PaymentMethodType, RecurringOccurrence, RecurringTemplate } from '../types';
+import type { BankAccount, Category, PaymentCard, PaymentMethodType, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
 import { AccountingPeriod, MonthSummary, formatKRW, formatPeriodRange } from '../utils/calculations';
 import type { MonthlyCardSettlement, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import type { ManualCardSettlementCandidate } from '../utils/cardSettlementPlans';
@@ -11,6 +11,8 @@ import { AmountInput } from './ui/AmountInput';
 import { useToast } from './ui/FeedbackProvider';
 import { Modal } from './ui/Modal';
 import { ScreenHeader } from './ui/ScreenHeader';
+import { resolveRecurringAmount } from '../utils/recurringAmounts';
+import { CycleAmountReview, CycleAmountConfirmResult } from './CycleAmountReview';
 
 const HIDDEN_REASON_LABELS: Record<HiddenRecurringItem['reason'], string> = {
   card_settlement_replaced: '카드대금 자동 항목으로 대체', inactive: '사용 안 함', ended: '종료됨',
@@ -22,6 +24,7 @@ interface RecurringPaymentViewProps {
   summary: MonthSummary;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
+  transactions?: Transaction[];
   categories: Category[];
   bankAccounts: BankAccount[];
   paymentCards: PaymentCard[];
@@ -39,14 +42,15 @@ interface RecurringPaymentViewProps {
   onUndoOccurrenceDirect: (occurrenceId: string) => boolean | void | Promise<boolean | void>;
   onExcludeOccurrence: (occurrenceId: string) => void;
   onUpdateOccurrencePlan: (occId: string, amount: number, paymentMethodType: PaymentMethodType, accountId: string | null, cardId: string | null) => void;
+  onConfirmOccurrenceAmounts?: (updates: Array<{ occurrenceId: string; amount: number }>) => void | Promise<void | CycleAmountConfirmResult>;
 }
 
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
-  period, summary, recurringOccurrences, recurringTemplates, categories, bankAccounts, paymentCards,
+  period, summary, recurringOccurrences, recurringTemplates, transactions = [], categories, bankAccounts, paymentCards,
   cardSettlementSummary, hiddenExpenseItems, onCreateOccurrence, onReloadRecurringPlan,
   duplicateManualCardSettlementCount, cardSettlementReviewItems, onResolveCardSettlementReview,
   onUpdateCardSettlementStatus, onSaveCardSettlementAmount, onPostOccurrence, onUndoPostedOccurrence, onUndoOccurrenceDirect,
-  onExcludeOccurrence, onUpdateOccurrencePlan,
+  onExcludeOccurrence, onUpdateOccurrencePlan, onConfirmOccurrenceAmounts,
 }) => {
   const { showToast } = useToast();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -79,8 +83,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   const expenseOccurrences = visibleOccurrences.filter(item => item.type === 'expense').map(item => item.occurrence);
   const incomeOccurrences = visibleOccurrences.filter(item => item.type === 'income').map(item => item.occurrence);
   const transferGroups = useMemo(() => buildPaydayTransferGroups({
-    recurringOccurrences: expenseOccurrences, recurringTemplates, bankAccounts, cardSettlements: cardSettlementSummary.cards,
-  }), [expenseOccurrences, recurringTemplates, bankAccounts, cardSettlementSummary.cards]);
+    recurringOccurrences: expenseOccurrences, recurringTemplates, bankAccounts, cardSettlements: cardSettlementSummary.cards, transactions,
+  }), [expenseOccurrences, recurringTemplates, bankAccounts, cardSettlementSummary.cards, transactions]);
 
   const fundingFor = (group: PaydayTransferGroup) => {
     void stateRevision;
@@ -183,7 +187,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     const template = templateMap.get(occurrence.templateId);
     const isIncome = (occurrence.typeSnapshot ?? template?.type) === 'income';
     setSelectedOcc(occurrence);
-    setPaymentAmount(occurrence.actualAmount ?? occurrence.expectedAmount ?? template?.defaultAmount ?? 0);
+    setPaymentAmount(resolveRecurringAmount(occurrence, transactions).amount ?? 0);
     setPaymentMethodType(occurrence.paymentMethodType ?? template?.paymentMethodType ?? 'account');
     setSelectedAccountId(occurrence.accountId ?? template?.accountId ?? '');
     setSelectedCardId(occurrence.cardId ?? template?.cardId ?? '');
@@ -277,6 +281,15 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       {unlinkedAmount > 0 && <p className="mt-2 text-xs font-semibold text-amber-200">계좌 확인이 필요한 별도 납부 {formatKRW(unlinkedAmount)}</p>}
     </section>
 
+    <CycleAmountReview
+      period={period}
+      items={visibleOccurrences}
+      transactions={transactions}
+      bankAccounts={bankAccounts}
+      paymentCards={paymentCards}
+      onConfirm={onConfirmOccurrenceAmounts}
+    />
+
     <section className="space-y-3" aria-labelledby="account-payments-title"><div><h2 id="account-payments-title" className="text-base font-extrabold text-slate-100">계좌별 이체</h2><p className="mt-0.5 text-xs text-slate-400">계좌를 펼치면 연결된 고정지출과 카드대금을 볼 수 있습니다.</p></div>
       {transferGroups.length ? transferGroups.map(renderGroup) : <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-center text-sm text-slate-400">이번 주기에 처리할 정기 지출이 없습니다.</div>}
     </section>
@@ -286,7 +299,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       <ul className="space-y-2">{detailedOccurrences.map(({ occurrence, template, type }) => {
         const method = occurrence.paymentMethodType ?? template?.paymentMethodType ?? 'account';
         const account = accountMap.get(occurrence.accountId ?? template?.accountId ?? ''); const card = cardMap.get(occurrence.cardId ?? template?.cardId ?? '');
-        return <li key={occurrence.id} className="rounded-xl border border-slate-800 bg-slate-950/55 p-3 text-xs"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-1.5"><span className="font-bold text-slate-100">{template?.name || '삭제된 정기 항목'}</span>{method === 'card' && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-bold text-blue-300">카드대금에 포함</span>}{occurrence.status === 'posted' && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">완료</span>}</div><p className="mt-1 text-slate-500">{occurrence.scheduledDate} · {account ? `${account.accountName} · ${account.bankName}` : card?.cardName || '결제수단 미지정'}</p></div><span className="shrink-0 font-bold text-slate-100">{formatKRW(occurrence.actualAmount ?? occurrence.expectedAmount)}</span></div><div className="mt-2 flex justify-end gap-2">{occurrence.status === 'posted' ? <button type="button" onClick={() => onUndoPostedOccurrence(occurrence.id)} className="min-h-9 rounded-lg border border-amber-500/30 px-2.5 font-bold text-amber-200">완료 취소</button> : <><button type="button" onClick={() => onExcludeOccurrence(occurrence.id)} className="min-h-9 rounded-lg border border-slate-700 px-2.5 font-bold text-slate-400">이번 주기 제외</button><button type="button" onClick={() => openOccurrence(occurrence)} className="min-h-9 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 font-bold text-blue-200"><Pencil className="mr-1 inline h-3.5 w-3.5" />수정·처리</button></>}</div></li>;
+        return <li key={occurrence.id} className="rounded-xl border border-slate-800 bg-slate-950/55 p-3 text-xs"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-1.5"><span className="font-bold text-slate-100">{template?.name || '삭제된 정기 항목'}</span>{method === 'card' && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-bold text-blue-300">카드대금에 포함</span>}{occurrence.status === 'posted' && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">완료</span>}</div><p className="mt-1 text-slate-500">{occurrence.scheduledDate} · {account ? `${account.accountName} · ${account.bankName}` : card?.cardName || '결제수단 미지정'}</p></div><span className="shrink-0 font-bold text-slate-100">{formatKRW(resolveRecurringAmount(occurrence, transactions).amount ?? 0)}</span></div><div className="mt-2 flex justify-end gap-2">{occurrence.status === 'posted' ? <><button type="button" onClick={() => openOccurrence(occurrence)} className="min-h-9 rounded-lg border border-blue-500/30 px-2.5 font-bold text-blue-200">금액 수정</button><button type="button" onClick={() => onUndoPostedOccurrence(occurrence.id)} className="min-h-9 rounded-lg border border-amber-500/30 px-2.5 font-bold text-amber-200">완료 취소</button></> : <><button type="button" onClick={() => onExcludeOccurrence(occurrence.id)} className="min-h-9 rounded-lg border border-slate-700 px-2.5 font-bold text-slate-400">이번 주기 제외</button><button type="button" onClick={() => openOccurrence(occurrence)} className="min-h-9 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 font-bold text-blue-200"><Pencil className="mr-1 inline h-3.5 w-3.5" />수정·처리</button></>}</div></li>;
       })}</ul>
       {summary.cardFixedExpenses > 0 && <p className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3 text-xs text-blue-200">카드 결제 고정비 {formatKRW(summary.cardFixedExpenses)}은 카드대금에 포함되므로 계좌별 합계에 다시 더하지 않습니다.</p>}
       {cardSettlementReviewItems.length > 0 && <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><p className="text-xs font-bold text-amber-200"><AlertCircle className="mr-1 inline h-3.5 w-3.5" />카드대금 중복 여부 확인</p>{cardSettlementReviewItems.map(item => <div key={item.templateId} className="rounded-lg bg-slate-950/60 p-2.5 text-xs"><p className="font-bold text-slate-100">{item.templateName} · {item.cardName}</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => onResolveCardSettlementReview(item.templateId, item.cardId)} className="min-h-9 flex-1 rounded-lg bg-amber-500 font-bold text-slate-950">카드대금 맞음</button><button type="button" onClick={() => onResolveCardSettlementReview(item.templateId, null)} className="min-h-9 flex-1 rounded-lg border border-slate-700 font-bold text-slate-300">별개 지출</button></div></div>)}</div>}
@@ -303,7 +316,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       <div><label htmlFor="occurrence-amount" className="mb-1 block text-xs font-semibold text-slate-300">{isIncome ? '입금 금액' : '납부 금액'}</label><AmountInput id="occurrence-amount" value={paymentAmount} onChange={value => { setPaymentAmount(value); setPaymentError(null); }} showQuickAdd invalid={Boolean(paymentError)} />{paymentError && <p role="alert" className="mt-1 text-xs font-semibold text-rose-300">{paymentError}</p>}</div>
       <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setPaymentMethodType('account')} className={`min-h-10 rounded-xl border text-xs font-bold ${paymentMethodType === 'account' ? 'border-blue-500 bg-blue-500/15 text-blue-200' : 'border-slate-700 text-slate-400'}`}><Wallet className="mr-1 inline h-4 w-4" />계좌</button>{!isIncome && <button type="button" onClick={() => setPaymentMethodType('card')} className={`min-h-10 rounded-xl border text-xs font-bold ${paymentMethodType === 'card' ? 'border-blue-500 bg-blue-500/15 text-blue-200' : 'border-slate-700 text-slate-400'}`}><CreditCard className="mr-1 inline h-4 w-4" />카드</button>}</div>
       {paymentMethodType === 'account' ? <select value={selectedAccountId} onChange={event => setSelectedAccountId(event.target.value)} className="min-h-11 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm"><option value="">계좌 미지정</option>{bankAccounts.map(account => <option key={account.id} value={account.id}>{account.accountName} · {account.bankName}</option>)}</select> : <select value={selectedCardId} onChange={event => setSelectedCardId(event.target.value)} className="min-h-11 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm"><option value="">카드 선택</option>{paymentCards.map(card => <option key={card.id} value={card.id}>{card.cardName} · {card.cardCompany}</option>)}</select>}
-      <div className="grid grid-cols-2 gap-2 border-t border-slate-800 pt-4"><button type="button" onClick={handleSavePlan} className="min-h-11 rounded-xl border border-blue-500/30 bg-blue-500/10 text-xs font-bold text-blue-200"><Pencil className="mr-1 inline h-4 w-4" />계획만 저장</button><button type="button" onClick={() => void handlePostOccurrence()} className="min-h-11 rounded-xl bg-emerald-500 text-xs font-extrabold text-slate-950"><CheckCircle2 className="mr-1 inline h-4 w-4" />{isIncome ? '입금 완료' : '납부 완료'}</button></div>
+      <div className={`grid gap-2 border-t border-slate-800 pt-4 ${selectedOcc.status === 'posted' ? '' : 'grid-cols-2'}`}><button type="button" onClick={handleSavePlan} className="min-h-11 rounded-xl border border-blue-500/30 bg-blue-500/10 text-xs font-bold text-blue-200"><Pencil className="mr-1 inline h-4 w-4" />{selectedOcc.status === 'posted' ? '거래와 함께 금액 수정' : '계획만 저장'}</button>{selectedOcc.status !== 'posted' && <button type="button" onClick={() => void handlePostOccurrence()} className="min-h-11 rounded-xl bg-emerald-500 text-xs font-extrabold text-slate-950"><CheckCircle2 className="mr-1 inline h-4 w-4" />{isIncome ? '입금 완료' : '납부 완료'}</button>}</div>
     </div>; })()}</Modal>
 
     <Modal isOpen={Boolean(editingCardBill)} onClose={() => setEditingCardBill(null)} labelledById="card-bill-edit-title">{editingCardBill && <div className="space-y-4 text-slate-100"><div className="flex items-start justify-between gap-3"><div><p className="text-xs text-blue-300">{editingCardBill.cardName}</p><h3 id="card-bill-edit-title" className="mt-1 text-lg font-extrabold">카드대금 확인</h3></div><button type="button" onClick={() => setEditingCardBill(null)} aria-label="닫기" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800"><X className="h-4 w-4" /></button></div><div><label htmlFor="card-bill-amount" className="mb-1 block text-xs font-semibold text-slate-300">이번 결제분 확정 금액</label><AmountInput id="card-bill-amount" value={cardBillAmount} onChange={setCardBillAmount} showQuickAdd /><p className="mt-2 text-xs text-slate-400">0원으로 저장하면 확정된 납부 없음으로 표시하며 0원 거래는 만들지 않습니다.</p></div><button type="button" onClick={() => { onSaveCardSettlementAmount(editingCardBill.cardId, cardBillAmount); setEditingCardBill(null); }} className="min-h-11 w-full rounded-xl bg-blue-500 text-sm font-extrabold text-white">확정 금액 저장</button></div>}</Modal>

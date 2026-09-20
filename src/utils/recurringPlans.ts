@@ -1,7 +1,12 @@
-import { RecurringOccurrence } from '../types';
+import { RecurringAmountSource, RecurringAmountStatus, RecurringOccurrence } from '../types';
+import { resolveRecurringAmount } from './recurringAmounts';
 
-/** Beyond this gap the previous month reads as a one-off, not the new normal. */
-const CARRY_FORWARD_TOLERANCE = 0.3;
+export interface RecurringAmountSuggestion {
+  amount: number | null;
+  status: RecurringAmountStatus;
+  source: RecurringAmountSource | null;
+  sourceCycle: string | null;
+}
 
 /**
  * A new monthly occurrence inherits the latest saved amount for the same item.
@@ -12,31 +17,34 @@ const CARRY_FORWARD_TOLERANCE = 0.3;
  * skipped payment would otherwise become the silent baseline for every month
  * after it. Those fall back to the template amount for the user to adjust.
  */
-export function getCarriedRecurringAmount(
+export function getRecurringAmountSuggestion(
   templateId: string,
-  defaultAmount: number,
+  legacyTemplateAmount: number | undefined,
   scheduledDate: string,
   occurrences: RecurringOccurrence[],
-): number {
+): RecurringAmountSuggestion {
   const history = occurrences
     .filter(occurrence => occurrence.templateId === templateId
       && occurrence.scheduledDate < scheduledDate
-      && occurrence.status !== 'skipped')
+      && occurrence.status !== 'skipped'
+      && resolveRecurringAmount(occurrence).status === 'confirmed')
     .sort((left, right) => right.scheduledDate.localeCompare(left.scheduledDate));
-
-  const amountOf = (occurrence?: RecurringOccurrence) =>
-    occurrence ? Math.round(occurrence.actualAmount ?? occurrence.expectedAmount) : null;
-
-  const previousAmount = amountOf(history[0]);
-  if (previousAmount === null) return Math.round(defaultAmount);
-
-  // Compare the last month against the one before it, not against the template:
-  // utilities climb gradually all summer and that drift is the real amount. What
-  // must not stick is a single spike, so an outlier month falls back instead.
-  const reference = amountOf(history[1]) ?? Math.round(defaultAmount);
-  if (reference > 0) {
-    const drift = Math.abs(previousAmount - reference) / reference;
-    if (drift > CARRY_FORWARD_TOLERANCE) return Math.round(defaultAmount);
+  const previous = history[0];
+  if (previous) {
+    return {
+      amount: resolveRecurringAmount(previous).amount,
+      status: 'suggested', source: 'previous_cycle', sourceCycle: previous.scheduledDate.slice(0, 7),
+    };
   }
-  return previousAmount;
+  if (legacyTemplateAmount != null && legacyTemplateAmount > 0) {
+    return { amount: Math.round(legacyTemplateAmount), status: 'suggested', source: 'legacy_template', sourceCycle: null };
+  }
+  return { amount: null, status: 'missing', source: null, sourceCycle: null };
+}
+
+/** @deprecated Compatibility wrapper for older callers/tests. */
+export function getCarriedRecurringAmount(
+  templateId: string, defaultAmount: number, scheduledDate: string, occurrences: RecurringOccurrence[],
+): number {
+  return getRecurringAmountSuggestion(templateId, defaultAmount, scheduledDate, occurrences).amount ?? 0;
 }

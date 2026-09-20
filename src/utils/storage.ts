@@ -42,6 +42,7 @@ import {
   syncRecurringOccurrencesToFirestore,
   deleteRecurringOccurrencesFromFirestore,
   commitRecurringPosting,
+  commitRecurringAmountCorrection,
   syncMerchantRuleToFirestore,
   syncBankAccountToFirestore,
   deleteBankAccountFromFirestore,
@@ -67,7 +68,8 @@ import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch, getAccountStorageKey, getSignedInAccount } from './auth';
 import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
-import { getCarriedRecurringAmount } from './recurringPlans';
+import { getRecurringAmountSuggestion } from './recurringPlans';
+import { resolveRecurringAmount } from './recurringAmounts';
 import { resolveInheritedAllowanceLimit } from './budgetPlans';
 import {
   getScheduledDatesForMonth,
@@ -396,7 +398,7 @@ function generateOccurrencesForMonth(
         // A recurring item is a monthly plan, not one immutable template
         // amount. Seed the new month from the latest saved month so utilities
         // and other variable fixed expenses carry forward until edited.
-        const carriedAmount = getCarriedRecurringAmount(
+        const suggestion = getRecurringAmountSuggestion(
           tmpl.id,
           tmpl.defaultAmount,
           scheduledDate,
@@ -407,8 +409,12 @@ function generateOccurrencesForMonth(
           templateId: tmpl.id,
           occurrenceKey,
           scheduledDate,
-          expectedAmount: carriedAmount,
+          expectedAmount: suggestion.amount ?? 0,
           actualAmount: null,
+          plannedAmount: suggestion.amount,
+          amountStatus: suggestion.status,
+          amountSource: suggestion.source ?? undefined,
+          sourceCycle: suggestion.sourceCycle,
           status: tmpl.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
           typeSnapshot: tmpl.type,
           categoryIdSnapshot: tmpl.categoryId,
@@ -428,13 +434,8 @@ function generateOccurrencesForMonth(
           || existingOccurrence.status === 'overdue')
         && existingOccurrence.templateRevision !== tmpl.updatedAt
       ) {
-        // Any template edit bumps `updatedAt`, so only adopt the template amount
-        // when the amount itself moved. Renaming an item or switching its card
-        // must not wipe the amount carried forward or set for this month.
-        const previousTemplateAmount = existingOccurrence.templateAmountSnapshot;
-        if (previousTemplateAmount === undefined || previousTemplateAmount !== tmpl.defaultAmount) {
-          existingOccurrence.expectedAmount = tmpl.defaultAmount;
-        }
+        // Template edits update schedule/payment metadata only. A cycle amount
+        // never changes behind the user's back.
         existingOccurrence.templateAmountSnapshot = tmpl.defaultAmount;
         existingOccurrence.typeSnapshot = tmpl.type;
         existingOccurrence.categoryIdSnapshot = tmpl.categoryId;
@@ -1011,9 +1012,10 @@ export function createOccurrenceForPeriod(
     templateId: template.id,
     occurrenceKey,
     scheduledDate,
-    expectedAmount: getCarriedRecurringAmount(
-      template.id, template.defaultAmount, scheduledDate, occurrences,
-    ),
+    ...(() => {
+      const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, scheduledDate, occurrences);
+      return { expectedAmount: suggestion.amount ?? 0, plannedAmount: suggestion.amount, amountStatus: suggestion.status, amountSource: suggestion.source ?? undefined, sourceCycle: suggestion.sourceCycle };
+    })(),
     actualAmount: null,
     status: template.postingMode === 'auto' ? 'scheduled' : 'needs_confirmation',
     typeSnapshot: template.type,
@@ -1083,7 +1085,7 @@ export function undoPostedOccurrence(occurrenceId: string): RecurringOccurrence 
 }
 
 /** Saves a month-specific recurring plan without posting a transaction. */
-export function updateOccurrencePlan(
+export async function updateOccurrencePlan(
   occurrenceId: string,
   updates: {
     amount: number;
@@ -1091,37 +1093,85 @@ export function updateOccurrencePlan(
     accountId?: string | null;
     cardId?: string | null;
   },
-): RecurringOccurrence | null {
+): Promise<RecurringOccurrence | null> {
   const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
   if (!raw) return null;
   const all: RecurringOccurrence[] = JSON.parse(raw);
   const target = all.find(occurrence => occurrence.id === occurrenceId);
   const amount = Math.round(Number(updates.amount));
-  if (!target || target.status === 'posted' || !Number.isFinite(amount) || amount < 0) return null;
+  if (!target || !Number.isFinite(amount) || amount < 0) return null;
 
+  target.plannedAmount = amount;
+  target.amountStatus = 'confirmed';
+  target.amountSource = target.status === 'posted' ? 'transaction' : 'manual';
+  target.amountConfirmedAt = new Date().toISOString();
   target.actualAmount = amount;
   if (updates.paymentMethodType) target.paymentMethodType = updates.paymentMethodType;
-  target.accountId = updates.paymentMethodType === 'account' ? updates.accountId ?? null : null;
-  target.cardId = updates.paymentMethodType === 'card' ? updates.cardId ?? null : null;
+  if (updates.paymentMethodType) {
+    target.accountId = updates.paymentMethodType === 'account' ? updates.accountId ?? null : null;
+    target.cardId = updates.paymentMethodType === 'card' ? updates.cardId ?? null : null;
+  }
   target.updatedAt = new Date().toISOString();
+  target.expectedAmount = amount;
   const changedOccurrences = [target];
 
-  // If future months were already opened/generated, keep carrying this value
-  // through months that have not received their own override yet.
-  all.forEach(occurrence => {
-    if (occurrence.templateId !== target.templateId
-      || occurrence.scheduledDate <= target.scheduledDate
-      || occurrence.actualAmount !== null
-      || occurrence.status === 'posted'
-      || occurrence.status === 'skipped') return;
-    occurrence.expectedAmount = amount;
-    occurrence.updatedAt = target.updatedAt;
-    changedOccurrences.push(occurrence);
-  });
+  const transactions = getTransactions();
+  const linkedIndex = target.status === 'posted'
+    ? transactions.findIndex(transaction => transaction.id === target.transactionId || transaction.recurringOccurrenceKey === target.occurrenceKey)
+    : -1;
+  if (linkedIndex >= 0) {
+    transactions[linkedIndex] = { ...transactions[linkedIndex], amount, updatedAt: target.updatedAt };
+    target.transactionId = transactions[linkedIndex].id;
+    target.amountIntegrityIssue = false;
+    try {
+      await commitRecurringAmountCorrection(transactions[linkedIndex], target);
+    } catch (error) {
+      console.error('Atomic recurring amount correction failed:', error);
+      return null;
+    }
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  }
   localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
-  syncRecurringOccurrencesToFirestore(changedOccurrences);
+  // A plan-only change has no transaction to keep in lockstep, so it goes
+  // through the outbox like every other local-first write and must not block
+  // the local save while offline.
+  if (linkedIndex < 0) void syncRecurringOccurrencesToFirestore(changedOccurrences);
   notifyListeners();
   return target;
+}
+
+/**
+ * Confirm several cycle amounts without creating or completing payments.
+ * Skipped rows and already-confirmed rows with the same amount are left
+ * untouched so a retry never double-applies (PRD acceptance #13). A posted
+ * row is only touched when its amount actually changes, which then goes
+ * through the atomic transaction correction path.
+ */
+export async function confirmOccurrenceAmounts(
+  updates: Array<{ occurrenceId: string; amount: number }>,
+): Promise<{ confirmed: string[]; failed: string[] }> {
+  const confirmed: string[] = [];
+  const failed: string[] = [];
+  const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
+  const all: RecurringOccurrence[] = raw ? JSON.parse(raw) : [];
+  const transactions = getTransactions();
+  for (const update of updates) {
+    const target = all.find(occurrence => occurrence.id === update.occurrenceId);
+    if (!target || target.status === 'skipped') { failed.push(update.occurrenceId); continue; }
+    const current = resolveRecurringAmount(target, transactions);
+    if (current.status === 'confirmed' && !current.integrityIssue && current.amount === Math.round(update.amount)) {
+      confirmed.push(update.occurrenceId);
+      continue;
+    }
+    try {
+      const saved = await updateOccurrencePlan(update.occurrenceId, { amount: update.amount });
+      (saved ? confirmed : failed).push(update.occurrenceId);
+    } catch (error) {
+      console.error('Cycle amount confirmation failed:', error);
+      failed.push(update.occurrenceId);
+    }
+  }
+  return { confirmed, failed };
 }
 
 export async function postOccurrenceToTransaction(
@@ -1141,7 +1191,8 @@ export async function postOccurrenceToTransaction(
   const template = templates.find(t => t.id === target.templateId);
   if (!template) return null;
 
-  const amount = customAmount ?? target.actualAmount ?? target.expectedAmount;
+  const amount = customAmount ?? resolveRecurringAmount(target).amount;
+  if (amount == null || amount <= 0) return null;
   const paymentMethodType = customPaymentMethodType ?? target.paymentMethodType ?? template.paymentMethodType;
   const accountId = customAccountId ?? target.accountId ?? template.accountId;
   const cardId = customCardId ?? target.cardId ?? template.cardId;
@@ -1179,6 +1230,11 @@ export async function postOccurrenceToTransaction(
   // Mark occurrence as posted
   target.status = 'posted';
   target.actualAmount = amount;
+  target.plannedAmount = amount;
+  target.amountStatus = 'confirmed';
+  target.amountSource = 'transaction';
+  target.amountConfirmedAt = now;
+  target.amountIntegrityIssue = false;
   target.paymentMethodType = paymentMethodType;
   target.accountId = accountId;
   target.cardId = cardId;
