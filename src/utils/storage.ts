@@ -950,18 +950,45 @@ export function getAllRecurringOccurrences(): RecurringOccurrence[] {
   return readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
 }
 
+export type CyclePlanState = 'saved' | 'projected' | 'none';
+
+/** Whether the selected cycle has saved rows, and if not, why nothing was written. */
+export function getCyclePlanState(yearMonth: string, monthStartDay: number = 1, now = new Date()): CyclePlanState {
+  initializeStorageIfEmpty();
+  const period = getAccountingPeriod(yearMonth, monthStartDay, now);
+  const hasRows = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+    .some(occurrence => isDateInPeriod(occurrence.scheduledDate, period));
+  if (hasRows) return 'saved';
+  return getLocalDateString(now) < period.startDate ? 'projected' : 'none';
+}
+
 /**
  * Explicit mutation boundary for period generation/normalization. Realtime
  * snapshot callbacks may call the getters freely without causing DB writes.
+ *
+ * Cycle lifecycle (PRD-ui-renewal §8): only the cycle that contains today is
+ * generated on first access. Looking at a future cycle is a read-only
+ * projection and a past cycle never grows new rows by itself; both need the
+ * explicit {@link prepareCyclePlan}.
  */
-export function ensureRecurringOccurrences(yearMonth: string, monthStartDay: number = 1) {
+export function ensureRecurringOccurrences(
+  yearMonth: string,
+  monthStartDay: number = 1,
+  options: { explicit?: boolean; now?: Date } = {},
+) {
   initializeStorageIfEmpty();
-  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const now = options.now ?? new Date();
+  const period = getAccountingPeriod(yearMonth, monthStartDay, now);
   const existingPlan = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
     .some(occurrence => isDateInPeriod(occurrence.scheduledDate, period));
   // A period is a snapshot. Once it has rows, master-list edits wait for the
   // explicit "새로 불러오기" action instead of silently rewriting the month.
-  if (existingPlan) return { removedCount: 0, upsertedCount: 0 };
+  if (existingPlan) return { removedCount: 0, upsertedCount: 0, skipped: null };
+  if (!options.explicit) {
+    const today = getLocalDateString(now);
+    if (today < period.startDate) return { removedCount: 0, upsertedCount: 0, skipped: 'future' as const };
+    if (today > period.endDate) return { removedCount: 0, upsertedCount: 0, skipped: 'past' as const };
+  }
   const templates = getRecurringTemplates();
   const startResult = generateOccurrencesForMonth(
     period.startDate.slice(0, 7), templates, period.monthStartDay,
@@ -973,7 +1000,59 @@ export function ensureRecurringOccurrences(yearMonth: string, monthStartDay: num
   return {
     removedCount: startResult.removedCount + endResult.removedCount,
     upsertedCount: startResult.upsertedCount + endResult.upsertedCount,
+    skipped: null,
   };
+}
+
+/** User-initiated "미리 준비하기": creates the cycle plan once, whatever the date. */
+export function prepareCyclePlan(yearMonth: string, monthStartDay: number = 1) {
+  return ensureRecurringOccurrences(yearMonth, monthStartDay, { explicit: true });
+}
+
+/**
+ * Read-only projection of a cycle that has no saved plan. Saved rows (there are
+ * none by definition, but the check keeps this safe to call anywhere) are kept;
+ * every other active item gets an in-memory row seeded with the same
+ * suggestion a real generation would use. Nothing is written.
+ */
+export function projectRecurringOccurrences(yearMonth: string, monthStartDay: number = 1): RecurringOccurrence[] {
+  initializeStorageIfEmpty();
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const saved = all.filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period));
+  const projected: RecurringOccurrence[] = [];
+  for (const template of getRecurringTemplates()) {
+    if (!template.active || template.archivedAt) continue;
+    if (template.frequency === 'monthly' && saved.some(row => row.templateId === template.id)) continue;
+    for (const scheduledDate of getScheduledDatesInPeriod(template, period)) {
+      if (saved.some(row => row.templateId === template.id && row.scheduledDate === scheduledDate)) continue;
+      const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, scheduledDate, all);
+      projected.push({
+        id: `projected_${template.id}_${scheduledDate}`,
+        templateId: template.id,
+        occurrenceKey: `${template.id}_${scheduledDate}`,
+        scheduledDate,
+        expectedAmount: suggestion.amount ?? 0,
+        actualAmount: null,
+        plannedAmount: suggestion.amount,
+        amountStatus: suggestion.status,
+        amountSource: suggestion.source ?? undefined,
+        sourceCycle: suggestion.sourceCycle,
+        status: 'needs_confirmation',
+        typeSnapshot: template.type,
+        categoryIdSnapshot: template.categoryId,
+        paymentMethodType: template.paymentMethodType,
+        accountId: template.accountId,
+        cardId: template.cardId,
+        templateRevision: template.updatedAt,
+        templateAmountSnapshot: template.defaultAmount,
+        projected: true,
+        createdAt: '',
+        updatedAt: '',
+      });
+    }
+  }
+  return [...saved, ...projected];
 }
 
 /**

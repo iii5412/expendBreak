@@ -357,10 +357,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
     if (editingTemplateId && onUpdateRecurringTemplate) {
       onUpdateRecurringTemplate(editingTemplateId, payload);
-      triggerToast(`'${recName}' 원본 항목을 수정했습니다. 정기납부에서 새로 불러오면 월 계획에 반영됩니다.`);
+      triggerToast(`'${recName}' 원본 항목을 수정했습니다. 고정지출 메뉴에서 새로 불러오면 월 계획에 반영됩니다.`);
     } else {
       onSaveRecurringTemplate(payload);
-      triggerToast(`'${recName}' 원본 항목을 등록했습니다. 정기납부에서 새로 불러오면 월 계획에 반영됩니다.`);
+      triggerToast(`'${recName}' 원본 항목을 등록했습니다. 고정지출 메뉴에서 새로 불러오면 월 계획에 반영됩니다.`);
     }
 
     setIsAddRecurringOpen(false);
@@ -372,7 +372,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     const retained = retainedPlanSummary(allRecurringOccurrences, activeMonthStartDay, id);
     const accepted = await confirm({
       title: '이 고정 항목 원본을 삭제할까요?',
-      description: '선택한 월의 계획과 납부 기록은 유지됩니다. 정기납부에서 새로 불러오면 해당 월의 미처리 목록에서 빠집니다.',
+      description: '선택한 월의 계획과 납부 기록은 유지됩니다. 고정지출 메뉴에서 새로 불러오면 해당 월의 미처리 목록에서 빠집니다.',
       details: [
         { label: '항목', value: name },
         { label: '유지되는 미처리 일정', value: retained.count + '건 · ' + (retained.months.join(', ') || '없음') },
@@ -692,7 +692,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           <div className="rounded-2xl border border-indigo-500/30 bg-indigo-500/10 p-4 text-xs leading-relaxed text-indigo-100">
             <p className="font-bold">이 목록은 특정 월에 속하지 않는 고정 항목 원본입니다.</p>
             <p className="mt-1 text-slate-300">
-              여기서 추가·수정·삭제한 뒤 정기납부 메뉴의 <strong className="text-indigo-200">고정 지출 새로 불러오기</strong>를 누르면 선택한 월의 미처리 계획에 최신 원본이 반영됩니다. 이미 납부 완료한 기록은 바뀌지 않습니다.
+              여기서 추가·수정·삭제한 뒤 고정지출 메뉴의 <strong className="text-indigo-200">고정 지출 새로 불러오기</strong>를 누르면 선택한 월의 미처리 계획에 최신 원본이 반영됩니다. 이미 납부 완료한 기록은 바뀌지 않습니다.
             </p>
           </div>
 

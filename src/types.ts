@@ -194,6 +194,12 @@ export interface RecurringOccurrence {
   amountConfirmedAt?: string | null;
   /** Set when a posted transaction and its legacy occurrence amount disagree. */
   amountIntegrityIssue?: boolean;
+  /**
+   * True only on rows built in memory for a cycle that has no saved plan
+   * (a future or never-visited cycle). Never persisted; no action may target
+   * a projected row until the plan is prepared explicitly.
+   */
+  projected?: boolean;
   status: OccurrenceStatus;
   transactionId?: string | null;
   paymentMethodType?: PaymentMethodType;

@@ -17,6 +17,10 @@ import {
   getAllRecurringOccurrences,
   createOccurrenceForPeriod,
   ensureRecurringOccurrences,
+  getCyclePlanState,
+  prepareCyclePlan,
+  projectRecurringOccurrences,
+  type CyclePlanState,
   getMerchantRules,
   getUserProfile,
   getBankAccounts,
@@ -164,6 +168,7 @@ export default function App() {
   const [budget, setBudget] = useState<Budget>(() => getSampleBudget(getYearMonthString()));
   const [recurringTemplates, setRecurringTemplates] = useState<RecurringTemplate[]>([]);
   const [recurringOccurrences, setRecurringOccurrences] = useState<RecurringOccurrence[]>([]);
+  const [cyclePlanState, setCyclePlanState] = useState<CyclePlanState>('saved');
   const [allRecurringOccurrences, setAllRecurringOccurrences] = useState<RecurringOccurrence[]>([]);
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile>(INITIAL_USER_PROFILE);
@@ -203,7 +208,13 @@ export default function App() {
     setCategories(getCategories());
     setBudget(getBudget(currentYM));
     setRecurringTemplates(getRecurringTemplates());
-    setRecurringOccurrences(getRecurringOccurrences(currentYM, startDay));
+    // A cycle without a saved plan is shown as a read-only projection (future)
+    // or left empty (past); neither view writes anything.
+    const planState = getCyclePlanState(currentYM, startDay);
+    setCyclePlanState(planState);
+    setRecurringOccurrences(planState === 'projected'
+      ? projectRecurringOccurrences(currentYM, startDay)
+      : getRecurringOccurrences(currentYM, startDay));
     setAllRecurringOccurrences(getAllRecurringOccurrences());
     setMerchantRules(getMerchantRules());
     setBankAccounts(getBankAccounts());
@@ -862,7 +873,26 @@ export default function App() {
     quickEntries,
   ]);
 
+  /** Projected rows only exist in memory; every action needs the plan first. */
+  const requireSavedPlan = (occurrenceId?: string) => {
+    if (cyclePlanState === 'saved' && !occurrenceId?.startsWith('projected_')) return true;
+    showToast({ message: '이 주기는 아직 계획이 없습니다. 고정지출에서 ‘미리 준비하기’를 먼저 눌러 주세요.', tone: 'info' });
+    return false;
+  };
+
+  const handlePrepareCycle = async () => {
+    const result = prepareCyclePlan(currentYM, monthStartDay);
+    refreshAppData();
+    showToast({
+      message: result.upsertedCount > 0
+        ? `${currentYM.replace('-', '년 ')}월 주기 계획을 만들었습니다. 금액은 제안 상태이며 확인이 필요합니다.`
+        : '이 주기의 계획이 이미 있습니다.',
+      tone: 'success',
+    });
+  };
+
   const handlePostOccurrence = async (occId: string) => {
+    if (!requireSavedPlan(occId)) return;
     await postOccurrenceToTransaction(occId);
     refreshAppData();
   };
@@ -1365,7 +1395,8 @@ export default function App() {
         userProfile={userProfile}
         accountName={getSignedInAccount().name}
         nextPaydayText={nextPaydayText}
-        onOpenSettings={() => handleNavigateTab('management', 'settings')}
+        activeTab={activeTab}
+        onNavigateTab={tab => handleNavigateTab(tab)}
         onLock={handleLock}
         syncStatusSlot={<SyncStatusIndicator />}
       />
@@ -1457,6 +1488,8 @@ export default function App() {
         {activeTab === 'recurring_payment' && (
           <RecurringPaymentView
             period={period}
+            planState={cyclePlanState}
+            onPrepareCycle={() => void handlePrepareCycle()}
             summary={summary}
             recurringOccurrences={planningRecurringOccurrences}
             recurringTemplates={planningRecurringTemplates}

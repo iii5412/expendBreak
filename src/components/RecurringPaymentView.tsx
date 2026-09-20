@@ -13,6 +13,7 @@ import { Modal } from './ui/Modal';
 import { ScreenHeader } from './ui/ScreenHeader';
 import { resolveRecurringAmount } from '../utils/recurringAmounts';
 import { CycleAmountReview, CycleAmountConfirmResult } from './CycleAmountReview';
+import type { CyclePlanState } from '../utils/storage';
 
 const HIDDEN_REASON_LABELS: Record<HiddenRecurringItem['reason'], string> = {
   card_settlement_replaced: '카드대금 자동 항목으로 대체', inactive: '사용 안 함', ended: '종료됨',
@@ -21,6 +22,9 @@ const HIDDEN_REASON_LABELS: Record<HiddenRecurringItem['reason'], string> = {
 
 interface RecurringPaymentViewProps {
   period: AccountingPeriod;
+  /** 'projected' = future cycle shown read-only; 'none' = past cycle with no plan. */
+  planState?: CyclePlanState;
+  onPrepareCycle?: () => void | Promise<void>;
   summary: MonthSummary;
   recurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
@@ -46,7 +50,7 @@ interface RecurringPaymentViewProps {
 }
 
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
-  period, summary, recurringOccurrences, recurringTemplates, transactions = [], categories, bankAccounts, paymentCards,
+  period, planState = 'saved', onPrepareCycle, summary, recurringOccurrences, recurringTemplates, transactions = [], categories, bankAccounts, paymentCards,
   cardSettlementSummary, hiddenExpenseItems, onCreateOccurrence, onReloadRecurringPlan,
   duplicateManualCardSettlementCount, cardSettlementReviewItems, onResolveCardSettlementReview,
   onUpdateCardSettlementStatus, onSaveCardSettlementAmount, onPostOccurrence, onUndoPostedOccurrence, onUndoOccurrenceDirect,
@@ -272,7 +276,54 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   });
 
   return <div className="space-y-5 pb-20">
-    <ScreenHeader eyebrow="Payday payments" title="정기납부" description="급여일에 계좌별로 보낼 돈을 확인하고 한 번에 처리하세요." icon={<Receipt className="h-4 w-4" />} meta={<span>{period.yearMonth.replace('-', '년 ')}월 주기{formatPeriodRange(period) ? ` · ${formatPeriodRange(period)}` : ''}</span>} actions={<button type="button" onClick={async () => { setIsReloading(true); try { await onReloadRecurringPlan(); } finally { setIsReloading(false); } }} disabled={isReloading} className="inline-flex min-h-10 items-center gap-1.5 border border-slate-700 bg-slate-900 px-3 text-xs font-bold text-slate-200 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${isReloading ? 'animate-spin' : ''}`} />{isReloading ? '불러오는 중' : '계획 새로 불러오기'}</button>} />
+    <ScreenHeader eyebrow="이번 주기" title="고정지출" description="이번 주기 금액을 확인하고, 계좌별로 보낼 돈을 정리하세요." icon={<Receipt className="h-4 w-4" />} meta={<span>{period.yearMonth.replace('-', '년 ')}월 주기{formatPeriodRange(period) ? ` · ${formatPeriodRange(period)}` : ''}</span>} actions={planState === 'saved' && <button type="button" onClick={async () => { setIsReloading(true); try { await onReloadRecurringPlan(); } finally { setIsReloading(false); } }} disabled={isReloading} className="inline-flex min-h-10 items-center gap-1.5 border border-slate-700 bg-slate-900 px-3 text-xs font-bold text-slate-200 disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${isReloading ? 'animate-spin' : ''}`} />{isReloading ? '불러오는 중' : '계획 새로 불러오기'}</button>} />
+
+    {planState !== 'saved' && (() => {
+      const rows = visibleOccurrences
+        .slice()
+        .sort((left, right) => left.occurrence.scheduledDate.localeCompare(right.occurrence.scheduledDate));
+      const expenseTotal = rows.filter(row => row.type === 'expense').reduce((sum, row) => sum + (resolveRecurringAmount(row.occurrence).amount ?? 0), 0);
+      const missing = rows.filter(row => resolveRecurringAmount(row.occurrence).amount == null).length;
+      const isFuture = planState === 'projected';
+      return (
+        <section className={`rounded-2xl border p-4 ${isFuture ? 'border-blue-500/35 bg-blue-500/5' : 'border-slate-700 bg-slate-900/70'}`} aria-labelledby="cycle-plan-state-title">
+          <h2 id="cycle-plan-state-title" className="text-base font-extrabold text-slate-100">
+            {isFuture ? '아직 시작하지 않은 주기 · 읽기 전용 예상' : '저장된 계획이 없는 주기'}
+          </h2>
+          <p className="mt-1 text-xs text-slate-400">
+            {isFuture
+              ? '조회만으로는 아무것도 저장하지 않습니다. 아래 금액은 최근 확정 금액에서 가져온 미확정 예상이며, 지금 금액을 입력해 두려면 계획을 먼저 만들어야 합니다.'
+              : '지나간 주기의 납부 기록은 자동으로 만들지 않습니다. 이 주기의 계획이 필요하면 직접 만들 수 있습니다.'}
+          </p>
+          {onPrepareCycle && (
+            <button type="button" onClick={() => void onPrepareCycle()} className="mt-3 min-h-11 w-full rounded-xl bg-blue-500 text-sm font-extrabold text-white">
+              {isFuture ? '이 주기 미리 준비하기' : '이 주기 계획 만들기'}
+            </button>
+          )}
+          {isFuture && rows.length > 0 && (
+            <>
+              <ul className="mt-4 divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-950/70">
+                {rows.map(({ occurrence, template, type }) => {
+                  const resolved = resolveRecurringAmount(occurrence);
+                  return (
+                    <li key={occurrence.id} className="flex items-center justify-between gap-3 p-3 text-xs">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-bold text-slate-100">{template?.name || '정기 항목'}{type === 'income' && <span className="ml-1.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-bold text-emerald-300">수입</span>}</span>
+                        <span className="mt-0.5 block text-slate-500">{occurrence.scheduledDate}{resolved.sourceCycle ? ` · ${Number(resolved.sourceCycle.slice(5, 7))}월 주기 금액에서 예상` : resolved.amount == null ? ' · 근거 금액 없음' : ''}</span>
+                      </span>
+                      <span className={`shrink-0 font-bold ${resolved.amount == null ? 'text-amber-200' : 'text-slate-100'}`}>{resolved.amount == null ? '미입력' : formatKRW(resolved.amount)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="mt-2 text-xs text-slate-400">계산 가능한 예상 고정지출 소계 {formatKRW(expenseTotal)}{missing > 0 ? ` · 미포함 ${missing}건` : ''}</p>
+            </>
+          )}
+        </section>
+      );
+    })()}
+
+    {planState === 'saved' && <>
 
     <section className="overflow-hidden rounded-2xl border border-amber-400/25 bg-gradient-to-br from-slate-900 to-amber-950/20 p-5" aria-label="이번 주기 납부 요약">
       <p className="text-xs font-bold text-amber-200">이번 주기 총 지출예정액</p><p className="eb-tabular mt-1 text-3xl font-black tracking-tight text-white">{formatKRW(totalExpected)}</p>
@@ -311,6 +362,8 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
       {groupAction === 'fund' ? <div><label htmlFor="group-funding-amount" className="mb-1 block text-xs font-semibold text-slate-300">이 계좌에 납부용으로 확보한 금액</label><AmountInput id="group-funding-amount" value={fundingAmount} onChange={setFundingAmount} showQuickAdd /><p className="mt-2 text-xs leading-relaxed text-slate-400">실제 계좌 잔액 전체가 아닌, 이번 주기 납부에 쓸 수 있는 금액만 입력합니다. 저장해도 실제 납부 완료로 바뀌지 않습니다.</p></div> : groupAction === 'pay' ? <><div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-xs text-slate-400">한 번에 납부 완료할 금액</p><p className="eb-tabular mt-1 text-2xl font-black text-emerald-300">{formatKRW(selectedGroup.pendingAmount)}</p></div><p className="text-xs leading-relaxed text-slate-300">이 계좌에 연결된 미납부 고정지출과 카드대금을 모두 완료 처리합니다. 카드대금은 정산 거래로 기록되어 생활비 소비에 다시 더해지지 않습니다.</p></> : <p className="text-sm leading-relaxed text-slate-300">이 화면에서 마지막으로 함께 처리한 항목만 미납부 상태로 되돌립니다. 이전에 개별 완료한 항목은 유지됩니다.</p>}
       <div className="flex gap-2 border-t border-slate-800 pt-4"><button type="button" disabled={isProcessing} onClick={() => setSelectedGroup(null)} className="min-h-11 flex-1 rounded-xl border border-slate-700 font-bold text-slate-300">취소</button><button type="button" data-autofocus disabled={isProcessing || (groupAction === 'fund' && fundingAmount < 0)} onClick={() => void handleGroupAction()} className={`min-h-11 flex-[1.4] rounded-xl font-extrabold ${groupAction === 'undo' ? 'bg-amber-500' : 'bg-emerald-500'} text-slate-950 disabled:opacity-50`}>{isProcessing ? '처리 중…' : groupAction === 'fund' ? '이체 준비 저장' : groupAction === 'pay' ? '모두 납부 완료' : '일괄 처리 취소'}</button></div>
     </div>}</Modal>
+
+    </>}
 
     <Modal isOpen={Boolean(selectedOcc)} onClose={() => setSelectedOcc(null)} labelledById="occurrence-edit-title">{selectedOcc && (() => { const template = templateMap.get(selectedOcc.templateId); const isIncome = (selectedOcc.typeSnapshot ?? template?.type) === 'income'; return <div className="space-y-4 text-slate-100"><div className="flex items-start justify-between gap-3"><div><p className="text-xs text-slate-400">{template?.name || '정기 항목'}</p><h3 id="occurrence-edit-title" className="mt-1 text-lg font-extrabold">이번 주기 금액·결제수단</h3></div><button type="button" onClick={() => setSelectedOcc(null)} aria-label="닫기" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800"><X className="h-4 w-4" /></button></div>
       <div><label htmlFor="occurrence-amount" className="mb-1 block text-xs font-semibold text-slate-300">{isIncome ? '입금 금액' : '납부 금액'}</label><AmountInput id="occurrence-amount" value={paymentAmount} onChange={value => { setPaymentAmount(value); setPaymentError(null); }} showQuickAdd invalid={Boolean(paymentError)} />{paymentError && <p role="alert" className="mt-1 text-xs font-semibold text-rose-300">{paymentError}</p>}</div>
