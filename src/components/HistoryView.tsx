@@ -16,7 +16,7 @@ import {
   ChevronRight,
   MessageSquareText,
 } from 'lucide-react';
-import { Transaction, Category, BankAccount, PaymentCard, PaymentMethodType } from '../types';
+import { Transaction, Category, BankAccount, PaymentCard, PaymentMethodType, RecurringTemplate } from '../types';
 import { AccountingPeriod, formatKRW, formatPeriodRange, getLocalDateString } from '../utils/calculations';
 import { normalizeTags } from '../utils/receipt';
 import { ReceiptDetailsModal } from './ReceiptDetailsModal';
@@ -64,6 +64,9 @@ interface HistoryViewProps {
   period: AccountingPeriod;
   initialView?: string;
   replacedTemplateIds?: string[];
+  /** Names for the "고정지출 · 항목명" link on recurring postings. */
+  recurringTemplates?: RecurringTemplate[];
+  onOpenRecurring?: () => void;
   /** Owns the confirmation dialog and the undo window (see App). */
   onDeleteTransaction: (transaction: Transaction) => void;
   onUpdateTransaction: (id: string, updates: Partial<Transaction>) => void;
@@ -77,9 +80,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   period,
   initialView,
   replacedTemplateIds = [],
+  recurringTemplates = [],
+  onOpenRecurring,
   onDeleteTransaction,
   onUpdateTransaction,
 }) => {
+  const templateNameMap = useMemo(() => new Map(recurringTemplates.map(template => [template.id, template.name])), [recurringTemplates]);
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [searchTerm, setSearchTerm] = useState('');
@@ -523,6 +529,16 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       <span className="text-xs bg-slate-800 text-slate-300 border border-slate-700 px-1.5 py-0.5 rounded">
                         {cat?.name || '기타'}
                       </span>
+                      {t.recurringTemplateId && !replacedIds.has(t.recurringTemplateId) && (t.role ?? 'normal') === 'normal' && (
+                        <button
+                          type="button"
+                          onClick={event => { event.stopPropagation(); onOpenRecurring?.(); }}
+                          className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-200"
+                          title="고정지출 화면에서 이번 주기 금액을 확인합니다"
+                        >
+                          고정지출 · {templateNameMap.get(t.recurringTemplateId) || '정기 항목'} →
+                        </button>
+                      )}
                       {t.recurringTemplateId && replacedIds.has(t.recurringTemplateId) && <span className="text-xs text-amber-300">카드대금으로 대체 · 소비 합계 제외</span>}
                       {t.role === 'card_settlement' && <span className="text-xs text-blue-300">카드 납부 · 소비 합계 제외</span>}
                       {t.role === 'transfer' && <span className="text-xs text-blue-300">이체 · 소비 합계 제외</span>}

@@ -1639,6 +1639,8 @@ export default function App() {
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
             period={period}
+            recurringTemplates={recurringTemplates}
+            onOpenRecurring={() => handleNavigateTab('recurring_payment')}
             onDeleteTransaction={handleDeleteTransaction}
             onUpdateTransaction={updateTransaction}
           />
@@ -1657,6 +1659,7 @@ export default function App() {
 
         {activeTab === 'management' && (
           <ManagementView
+            onOpenRecurringPayments={() => handleNavigateTab('recurring_payment')}
             allRecurringOccurrences={allRecurringOccurrences}
             initialSubTab={managementSubTab}
             recurringTemplates={recurringTemplates}

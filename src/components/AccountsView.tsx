@@ -417,7 +417,17 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
           <div className="eb-panel flex flex-col items-center justify-between gap-3 rounded-xl p-4 xs:flex-row">
             <div>
               <span className="text-xs text-slate-400 font-medium">확인된 잔액 합계</span>
-              <p className="eb-tabular mt-1 text-3xl font-extrabold text-white">{formatKRW(totalAccountBalance)}</p>
+              {(() => {
+                // Never show "총자산 0원" when nothing was entered (PRD-ui-renewal §3-5).
+                const unconfirmed = bankAccounts.filter(account => !hasConfirmedBalance(account)).length;
+                const confirmed = bankAccounts.length - unconfirmed;
+                return confirmed === 0 && bankAccounts.length > 0
+                  ? <p className="mt-1 text-2xl font-extrabold text-slate-300">잔액 미입력 · {unconfirmed}개 계좌</p>
+                  : <>
+                    <p className="eb-tabular mt-1 text-3xl font-extrabold text-white">{formatKRW(totalAccountBalance)}</p>
+                    {unconfirmed > 0 && <p className="mt-0.5 text-xs text-amber-200">확인된 {confirmed}개 계좌 기준 · 잔액 미입력 {unconfirmed}개는 제외</p>}
+                  </>;
+              })()}
             </div>
             <button
               onClick={() => handleOpenAccountModal()}

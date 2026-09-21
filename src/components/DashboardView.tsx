@@ -20,6 +20,8 @@ import {
 import { MonthSummary, formatKRW } from '../utils/calculations';
 import { RecurringOccurrence, RecurringTemplate, Category, BankAccount, PaymentCard, Transaction } from '../types';
 import { resolveRecurringAmount } from '../utils/recurringAmounts';
+import { buildHomeActions } from '../utils/homeActions';
+import { getLocalDateString } from '../utils/calculations';
 import { CardPaymentSummary, MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { getPendingRecurringTimeline } from '../utils/recurringTimeline';
 
@@ -231,6 +233,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const isIncomplete = summary.calculationStatus === 'incomplete';
   const isEstimated = summary.calculationStatus === 'estimated' || summary.isProjected;
   const showsShortfall = summary.spendPeriodStatus !== 'closed' && !isIncomplete && summary.fundingShortfall > 0;
+  const homeActions = buildHomeActions({
+    summary, occurrences: upcomingOccurrences, transactions, bankAccounts, cardSettlementSummary,
+    showPaydayPrompt, today: getLocalDateString(new Date()),
+  });
+  const runHomeAction = (target: typeof homeActions[number]['target']) => {
+    if (target === 'payday') onStartPayday();
+    else onNavigateTab(target);
+  };
 
   return (
     <div className="space-y-6 pb-24">
@@ -307,7 +317,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <section className="eb-instrument eb-enter rounded-xl p-5 sm:p-6" aria-labelledby="safe-money-title">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
-            <span className="font-bold uppercase tracking-[0.16em] text-rose-400">Brake status</span>
+            <span className="font-bold text-rose-400">이번 주기</span>
             <span>{shortDate(summary.spendPeriodStartDate)}–{shortDate(summary.spendPeriodEndDate)}</span>
             <span>{summary.spendPeriodStatus === 'closed' ? '마감' : summary.spendPeriodStatus === 'upcoming' ? '시작 전' : `남은 ${summary.spendDaysRemaining}일`}</span>
           </div>
@@ -337,16 +347,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 : showsShortfall ? `고정지출·카드대금·저축 계획이 수입보다 ${formatKRW(summary.fundingShortfall)} 많습니다. 생활비 사용 ${formatKRW(summary.confirmedVariableExpenses)}은 별도 지표이며, 실제 통장 잔액이 아닙니다.`
                 : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.${summary.suggestedAmountCount > 0 ? ` 전 주기 제안 금액 ${summary.suggestedAmountCount}건이 포함된 예상치입니다.` : ''}`}
             </p>
-            {(isIncomplete || summary.suggestedAmountCount > 0) && summary.spendPeriodStatus !== 'closed' && (
-              <button
-                type="button"
-                onClick={() => onNavigateTab('recurring_payment')}
-                className="mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 text-xs font-bold text-amber-200 transition-colors hover:bg-amber-500/20"
-              >
-                <AlertTriangle className="h-3.5 w-3.5" />
-                <span>금액 확인 {summary.missingAmountCount + summary.suggestedAmountCount}건</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
+            {homeActions.length > 0 && (
+              <ul className="mt-4 divide-y divide-slate-800/80 border-y border-slate-800/80" aria-label="확인할 일">
+                {homeActions.map(action => (
+                  <li key={action.id}>
+                    <button
+                      type="button"
+                      onClick={() => runHomeAction(action.target)}
+                      className="flex min-h-11 w-full items-center justify-between gap-3 py-2 text-left"
+                    >
+                      <span className="min-w-0">
+                        <span className={`block text-sm font-bold ${action.tone === 'warning' ? 'text-amber-200' : 'text-slate-100'}`}>{action.label}</span>
+                        <span className="block text-xs text-slate-400">{action.detail}</span>
+                      </span>
+                      <ArrowRight className="h-4 w-4 shrink-0 text-slate-500" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
 

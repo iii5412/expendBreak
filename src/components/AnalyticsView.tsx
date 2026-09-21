@@ -31,6 +31,7 @@ import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
 import { getInstallmentCharge } from '../utils/installments';
 import { ScreenHeader } from './ui/ScreenHeader';
+import { compareCycleElapsed, reviewUncategorized } from '../utils/cycleComparison';
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
@@ -166,10 +167,17 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   const ruleBasedConclusion = spendingConclusion(summary);
 
+  // Same elapsed days against the previous cycle, and the "기타" review list
+  // (PRD-ui-renewal §5 분석). Record-based only; not a habit verdict.
+  const monthStartDay = Number(summary.spendPeriodStartDate.slice(8, 10));
+  const comparison = compareCycleElapsed(summary.yearMonth, transactions, monthStartDay);
+  const uncategorized = reviewUncategorized(transactions, categories, comparison.currentPeriod);
+  const shortRange = (start: string, end: string) => `${Number(start.slice(5, 7))}/${Number(start.slice(8, 10))}–${Number(end.slice(5, 7))}/${Number(end.slice(8, 10))}`;
+
   return (
     <div className="space-y-6 pb-24">
       <ScreenHeader
-        eyebrow="Spending intelligence"
+        eyebrow="이번 주기"
         title="지출 분석"
         description="차트를 해석하는 대신, 이번 주기의 결론과 원인 그리고 지금 바꿀 행동을 먼저 보여드립니다."
         icon={<TrendingUp className="h-4 w-4" />}
@@ -180,7 +188,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       <section className="eb-instrument rounded-xl p-5" aria-labelledby="weekly-conclusion-title">
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <p className="eb-kicker text-amber-300">Decision first</p>
+            <p className="eb-kicker text-amber-300">결론 먼저</p>
             <h3 id="weekly-conclusion-title" className="eb-display mt-1 text-lg font-extrabold text-white">이번 주 결론</h3>
           </div>
 
@@ -251,6 +259,37 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           </div>
         )}
       </section>
+
+      {/* Same-elapsed-day comparison: the only fair "전 주기 대비" while a cycle is open. */}
+      {comparison.elapsedDays > 0 && (
+        <section className="eb-panel rounded-xl p-4" aria-labelledby="cycle-comparison-title">
+          <h3 id="cycle-comparison-title" className="text-sm font-extrabold text-slate-100">
+            {comparison.isFullCycle ? '전 주기 대비 생활비' : `같은 경과일 비교 · ${comparison.elapsedDays}일차`}
+          </h3>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+              <dt className="text-slate-400">이번 주기 {comparison.isFullCycle ? '' : `첫 ${comparison.elapsedDays}일`}</dt>
+              <dd className="eb-tabular mt-1 text-base font-extrabold text-slate-100">{formatKRW(comparison.currentSpend)}</dd>
+              <dd className="text-[11px] text-slate-500">{shortRange(comparison.currentPeriod.startDate, comparison.isFullCycle ? comparison.currentPeriod.endDate : comparison.currentPeriod.startDate)}{comparison.isFullCycle ? '' : ` 이후 ${comparison.elapsedDays}일`}</dd>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+              <dt className="text-slate-400">전 주기 {comparison.isFullCycle ? '' : `첫 ${comparison.elapsedDays}일`}</dt>
+              <dd className="eb-tabular mt-1 text-base font-extrabold text-slate-300">{formatKRW(comparison.previousSpend)}</dd>
+              <dd className="text-[11px] text-slate-500">{shortRange(comparison.previousPeriod.startDate, comparison.previousPeriod.endDate)}</dd>
+            </div>
+          </dl>
+          <p className={`mt-2 text-sm font-bold ${comparison.delta > 0 ? 'text-rose-300' : comparison.delta < 0 ? 'text-emerald-300' : 'text-slate-300'}`}>
+            {comparison.delta === 0 ? '전 주기와 같은 수준입니다.'
+              : `${comparison.delta > 0 ? '+' : '−'}${formatKRW(Math.abs(comparison.delta))}${comparison.deltaPercent != null ? ` (${comparison.deltaPercent > 0 ? '+' : ''}${comparison.deltaPercent}%)` : ''} · 기록 기준`}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">일회성 지출과 기록 누락을 통제한 결과가 아니므로 습관 변화로 단정하지 않습니다.</p>
+          {uncategorized && uncategorized.count > 0 && (
+            <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs text-amber-100">
+              <span className="font-bold">‘{uncategorized.categoryName}’ {uncategorized.count}건 분류 확인</span> · {formatKRW(uncategorized.amount)} · 생활비의 {uncategorized.sharePercent}%. 내역에서 사용처를 보고 카테고리를 정해 주세요. 자동으로 바꾸지 않습니다.
+            </p>
+          )}
+        </section>
+      )}
 
       <CashflowTimelineCard timeline={cashflowTimeline} />
 

@@ -84,6 +84,8 @@ const POPULAR_KOREAN_BANKS = [
 
 interface ManagementViewProps {
   initialSubTab?: string;
+  /** Opens the fixed-expense screen, where this cycle's amounts are edited. */
+  onOpenRecurringPayments?: () => void;
   recurringTemplates: RecurringTemplate[];
   recurringOccurrences: RecurringOccurrence[];
   allRecurringOccurrences?: RecurringOccurrence[];
@@ -126,6 +128,7 @@ interface ManagementViewProps {
 
 export const ManagementView: React.FC<ManagementViewProps> = ({
   initialSubTab = 'recurring',
+  onOpenRecurringPayments,
   recurringTemplates,
   recurringOccurrences,
   allRecurringOccurrences = recurringOccurrences,
@@ -654,7 +657,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-emerald-400" />
-                <span>월과 무관한 고정 항목 원본</span>
+                <span>고정 항목 설정 · 반복 규칙</span>
               </h3>
 
               <button
@@ -666,31 +669,38 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </button>
             </div>
 
+            {/* Amounts live per cycle now (PRD-ui-renewal §8). The template
+                figure is only the seed for an item's first cycle. */}
+            <div className="flex flex-col gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-xs text-amber-100 sm:flex-row sm:items-center sm:justify-between">
+              <span>이번 주기의 실제 금액·확정 상태는 <strong>고정지출</strong> 화면에서 관리합니다. 아래 금액은 첫 주기의 제안값으로만 쓰이는 참고 금액입니다.</span>
+              {onOpenRecurringPayments && <button type="button" onClick={onOpenRecurringPayments} className="min-h-9 shrink-0 rounded-lg border border-amber-400/40 px-3 font-bold">고정지출 열기</button>}
+            </div>
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-center">
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">기본 고정 수입</span>
+                <span className="text-slate-400 text-xs block mb-0.5">참고 고정 수입</span>
                 <span className="font-extrabold text-emerald-400">{formatKRW(monthlyFixedIncome)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">계좌 고정지출</span>
+                <span className="text-slate-400 text-xs block mb-0.5">참고 계좌 고정지출</span>
                 <span className="font-extrabold text-rose-400">{formatKRW(nonCardFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-indigo-500/20">
-                <span className="text-slate-400 text-xs block mb-0.5">카드 고정지출</span>
+                <span className="text-slate-400 text-xs block mb-0.5">참고 카드 고정지출</span>
                 <span className="font-extrabold text-indigo-300">{formatKRW(cardPaidFixedExpense)}</span>
               </div>
 
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-xs block mb-0.5">기본 지출 합계</span>
+                <span className="text-slate-400 text-xs block mb-0.5">참고 지출 합계</span>
                 <span className="font-extrabold text-rose-300">{formatKRW(totalFixedOutflow)}</span>
               </div>
             </div>
           </div>
 
           <div className="rounded-2xl border border-indigo-500/30 bg-indigo-500/10 p-4 text-xs leading-relaxed text-indigo-100">
-            <p className="font-bold">이 목록은 특정 월에 속하지 않는 고정 항목 원본입니다.</p>
+            <p className="font-bold">이 목록은 특정 주기에 속하지 않는 반복 규칙(이름·납부일·결제수단)입니다.</p>
             <p className="mt-1 text-slate-300">
               여기서 추가·수정·삭제한 뒤 고정지출 메뉴의 <strong className="text-indigo-200">고정 지출 새로 불러오기</strong>를 누르면 선택한 월의 미처리 계획에 최신 원본이 반영됩니다. 이미 납부 완료한 기록은 바뀌지 않습니다.
             </p>
