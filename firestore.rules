@@ -1,22 +1,35 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Every account receives a Firebase custom token whose UID is also used in
-    // its users/{userId} path. No authenticated account may read a spouse's
-    // ledger, including the original users/owner data.
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return request.auth != null
+        && request.auth.uid == userId;
     }
 
     function validTransactionType() {
       return request.resource.data.type in ['income', 'expense'];
     }
 
+    function validYearMonth(value) {
+      return value is string
+        && value.matches('^[0-9]{4}-(0[1-9]|1[0-2])$');
+    }
+
+    function validDateTimeString(value) {
+      return value is string
+        && value.size() >= 20
+        && value.size() <= 40;
+    }
+
     function categoryMatches(userId) {
       return request.resource.data.categoryId is string
-        && exists(/databases/$(database)/documents/users/$(userId)/categories/$(request.resource.data.categoryId))
-        && get(/databases/$(database)/documents/users/$(userId)/categories/$(request.resource.data.categoryId)).data.type
-          == request.resource.data.type;
+        && exists(
+          /databases/$(database)/documents/users/$(userId)/categories/$(request.resource.data.categoryId)
+        )
+        && get(
+          /databases/$(database)/documents/users/$(userId)/categories/$(request.resource.data.categoryId)
+        ).data.type == request.resource.data.type;
     }
 
     function validReceipt(userId) {
@@ -29,46 +42,115 @@ service cloud.firestore {
           && request.resource.data.receipt.ocrConfidence <= 1
           && request.resource.data.receipt.lineItems is list
           && request.resource.data.receipt.lineItems.size() <= 50
-          && (!('rawText' in request.resource.data.receipt)
+          && (
+            !('rawText' in request.resource.data.receipt)
             || request.resource.data.receipt.rawText == null
-            || request.resource.data.receipt.rawText.size() <= 5000)
-          && (!('storagePath' in request.resource.data.receipt)
+            || request.resource.data.receipt.rawText.size() <= 5000
+          )
+          && (
+            !('storagePath' in request.resource.data.receipt)
             || request.resource.data.receipt.storagePath == null
-            || request.resource.data.receipt.storagePath.matches('users/' + userId + '/receipts/[^/]+/original\\.jpg'))
+            || request.resource.data.receipt.storagePath.matches(
+              'users/' + userId + '/receipts/[^/]+/original\\.jpg'
+            )
+          )
         );
     }
 
     function validVoiceRecord() {
       return request.resource.data.source == 'voice'
         ? (
-            'voiceRecord' in request.resource.data
-            && request.resource.data.voiceRecord != null
-            && request.resource.data.voiceRecord.transcript is string
-            && request.resource.data.voiceRecord.transcript.size() <= 500
-            && request.resource.data.voiceRecord.durationMs is number
-            && request.resource.data.voiceRecord.durationMs >= 1
-            && request.resource.data.voiceRecord.durationMs <= 8000
-            && request.resource.data.voiceRecord.confidence is number
-            && request.resource.data.voiceRecord.confidence >= 0
-            && request.resource.data.voiceRecord.confidence <= 1
-            && request.resource.data.voiceRecord.modelUsed is string
-            && request.resource.data.voiceRecord.modelUsed.size() <= 100
-            && request.resource.data.voiceRecord.fallbackUsed is bool
-          )
+          'voiceRecord' in request.resource.data
+          && request.resource.data.voiceRecord != null
+          && request.resource.data.voiceRecord.transcript is string
+          && request.resource.data.voiceRecord.transcript.size() <= 500
+          && request.resource.data.voiceRecord.durationMs is number
+          && request.resource.data.voiceRecord.durationMs >= 1
+          && request.resource.data.voiceRecord.durationMs <= 8000
+          && request.resource.data.voiceRecord.confidence is number
+          && request.resource.data.voiceRecord.confidence >= 0
+          && request.resource.data.voiceRecord.confidence <= 1
+          && request.resource.data.voiceRecord.modelUsed is string
+          && request.resource.data.voiceRecord.modelUsed.size() <= 100
+          && request.resource.data.voiceRecord.fallbackUsed is bool
+        )
         : (
-            !('voiceRecord' in request.resource.data)
-            || request.resource.data.voiceRecord == null
-          );
+          !('voiceRecord' in request.resource.data)
+          || request.resource.data.voiceRecord == null
+        );
     }
 
+    function validPaydayFunding() {
+      return request.resource.data.keys().hasAll([
+          'yearMonth',
+          'groupKey',
+          'amount',
+          'preparedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'yearMonth',
+          'groupKey',
+          'amount',
+          'preparedAt'
+        ])
+        && validYearMonth(request.resource.data.yearMonth)
+        && request.resource.data.groupKey is string
+        && request.resource.data.groupKey.size() > 0
+        && request.resource.data.groupKey.size() <= 300
+        && request.resource.data.amount is int
+        && request.resource.data.amount >= 0
+        && request.resource.data.amount <= 100000000000
+        && validDateTimeString(request.resource.data.preparedAt);
+    }
+
+    function validPaydayPaymentBatch(batchId) {
+      return request.resource.data.keys().hasAll([
+          'id',
+          'yearMonth',
+          'groupKey',
+          'itemIds',
+          'paidAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id',
+          'yearMonth',
+          'groupKey',
+          'itemIds',
+          'paidAt',
+          'undoneAt'
+        ])
+        && request.resource.data.id is string
+        && request.resource.data.id == batchId
+        && validYearMonth(request.resource.data.yearMonth)
+        && request.resource.data.groupKey is string
+        && request.resource.data.groupKey.size() > 0
+        && request.resource.data.groupKey.size() <= 300
+        && request.resource.data.itemIds is list
+        && request.resource.data.itemIds.size() > 0
+        && request.resource.data.itemIds.size() <= 100
+        && request.resource.data.itemIds.toSet().size()
+          == request.resource.data.itemIds.size()
+        && validDateTimeString(request.resource.data.paidAt)
+        && (
+          !('undoneAt' in request.resource.data)
+          || request.resource.data.undoneAt == null
+          || validDateTimeString(request.resource.data.undoneAt)
+        );
+    }
+
+    // ------------------------------------------------------------------
     // Cycle-amount revision protocol (docs/PRD-ui-renewal-2026-09-19.md §8).
-    // Once a row carries a revision, only two kinds of update are accepted:
-    // an operation that advances it by exactly one and names its operation id,
-    // or a metadata write that leaves the revision and every amount/status
-    // field untouched. A client that does not know the protocol (an old app
-    // version rewriting its stale local copy) is rejected instead of silently
-    // winning. Rows without a revision are legacy and stay writable until the
-    // first operation stamps them.
+    //
+    // Once a row carries a `revision`, only two kinds of update are accepted:
+    //   (a) an operation that advances it by exactly one and names its
+    //       operation id, or
+    //   (b) a metadata write that leaves the revision and every amount /
+    //       status / link field untouched.
+    // A client that does not know the protocol (an old app version writing
+    // its stale local copy) is rejected instead of silently winning. Rows
+    // without a revision are legacy and stay writable until the first
+    // operation stamps them.
+    // ------------------------------------------------------------------
     function hasRevision(data) {
       return 'revision' in data && data.revision is number;
     }
@@ -89,16 +171,22 @@ service cloud.firestore {
     }
 
     function occurrenceAmountFieldsUnchanged() {
-      return sameField('plannedAmount') && sameField('actualAmount') && sameField('expectedAmount')
-        && sameField('amountStatus') && sameField('status') && sameField('transactionId');
+      return sameField('plannedAmount')
+        && sameField('actualAmount')
+        && sameField('expectedAmount')
+        && sameField('amountStatus')
+        && sameField('status')
+        && sameField('transactionId');
     }
 
     function transactionAmountFieldsUnchanged() {
-      return sameField('amount') && sameField('localDate') && sameField('recurringOccurrenceKey');
+      return sameField('amount')
+        && sameField('localDate')
+        && sameField('recurringOccurrenceKey');
     }
 
-    // A wholesale regeneration ("계획 새로 불러오기") replaces unposted rows with
-    // fresh ones that carry no revision; posted rows are never regenerated.
+    // "계획 새로 불러오기" replaces unposted rows with fresh ones that carry
+    // no revision; posted rows are never regenerated.
     function occurrenceRegenerated() {
       return !hasRevision(request.resource.data)
         && resource.data.get('status', '') != 'posted';
@@ -122,27 +210,54 @@ service cloud.firestore {
 
       match /categories/{categoryId} {
         allow read: if isOwner(userId);
+
         allow create, update: if isOwner(userId)
           && request.resource.data.type in ['income', 'expense']
           && request.resource.data.name is string;
+
         allow delete: if isOwner(userId);
       }
 
       match /transactions/{transactionId} {
         allow read, delete: if isOwner(userId);
+
         allow create, update: if isOwner(userId)
+          // [revision] a posted recurring payment's amount only moves through
+          // a revision-advancing operation once it has been stamped.
           && (request.method == 'create' || transactionRevisionOk())
           && validTransactionType()
           && request.resource.data.amount is number
           && request.resource.data.amount > 0
-          && request.resource.data.source in ['manual', 'ai', 'receipt', 'voice', 'sms']
-          && (!('sourceFingerprint' in request.resource.data)
-              || request.resource.data.sourceFingerprint == null
-              || (request.resource.data.sourceFingerprint is string && request.resource.data.sourceFingerprint.size() <= 100))
-          && (!('sourceReference' in request.resource.data)
-              || request.resource.data.sourceReference == null
-              || (request.resource.data.sourceReference is string && request.resource.data.sourceReference.size() <= 40))
-          && (!('tags' in request.resource.data) || request.resource.data.tags is list && request.resource.data.tags.size() <= 10)
+          && request.resource.data.source in [
+            'manual',
+            'ai',
+            'receipt',
+            'voice',
+            'sms'
+          ]
+          && (
+            !('sourceFingerprint' in request.resource.data)
+            || request.resource.data.sourceFingerprint == null
+            || (
+              request.resource.data.sourceFingerprint is string
+              && request.resource.data.sourceFingerprint.size() <= 100
+            )
+          )
+          && (
+            !('sourceReference' in request.resource.data)
+            || request.resource.data.sourceReference == null
+            || (
+              request.resource.data.sourceReference is string
+              && request.resource.data.sourceReference.size() <= 40
+            )
+          )
+          && (
+            !('tags' in request.resource.data)
+            || (
+              request.resource.data.tags is list
+              && request.resource.data.tags.size() <= 10
+            )
+          )
           && categoryMatches(userId)
           && validReceipt(userId)
           && validVoiceRecord();
@@ -150,16 +265,19 @@ service cloud.firestore {
 
       match /recurringTemplates/{templateId} {
         allow read, delete: if isOwner(userId);
+
         allow create, update: if isOwner(userId)
           && validTransactionType()
           && request.resource.data.defaultAmount is number
-          // 0 means "no reference amount": the first cycle row asks for one.
+          // [revision] 0 means "no reference amount": the item's first cycle
+          // row asks for one instead of guessing.
           && request.resource.data.defaultAmount >= 0
           && categoryMatches(userId);
       }
 
       match /appSettings/{documentId} {
         allow read, delete: if isOwner(userId);
+
         allow create, update: if isOwner(userId)
           && !('accessPin' in request.resource.data);
       }
@@ -170,18 +288,28 @@ service cloud.firestore {
 
       match /recurringOccurrences/{documentId} {
         allow read, delete, create: if isOwner(userId);
-        allow update: if isOwner(userId) && occurrenceRevisionOk();
+
+        // [revision] see occurrenceRevisionOk above.
+        allow update: if isOwner(userId)
+          && occurrenceRevisionOk();
       }
 
-      // Append-only audit trail of cycle-amount operations. Written inside the
-      // same transaction as the documents it describes; never edited.
+      // [revision] Append-only audit trail of cycle-amount operations. Written
+      // inside the same transaction as the documents it describes; never edited.
       match /amountChanges/{operationId} {
         allow read: if isOwner(userId);
+
         allow create: if isOwner(userId)
           && request.resource.data.id == operationId
-          && request.resource.data.kind in ['plan_amount', 'posted_correction', 'post', 'undo_post']
+          && request.resource.data.kind in [
+            'plan_amount',
+            'posted_correction',
+            'post',
+            'undo_post'
+          ]
           && request.resource.data.occurrenceId is string
           && request.resource.data.expectedOccurrenceRevision is number;
+
         allow update, delete: if false;
       }
 
@@ -191,12 +319,18 @@ service cloud.firestore {
 
       match /quickEntries/{documentId} {
         allow read, delete: if isOwner(userId);
+
         allow create, update: if isOwner(userId)
           && validTransactionType()
           && request.resource.data.label is string
-          && (!('amount' in request.resource.data)
-              || request.resource.data.amount == null
-              || (request.resource.data.amount is number && request.resource.data.amount > 0))
+          && (
+            !('amount' in request.resource.data)
+            || request.resource.data.amount == null
+            || (
+              request.resource.data.amount is number
+              && request.resource.data.amount > 0
+            )
+          )
           && categoryMatches(userId);
       }
 
@@ -212,14 +346,44 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
 
+      match /paydayFunding/{documentId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId)
+          && validPaydayFunding();
+
+        allow update: if isOwner(userId)
+          && validPaydayFunding()
+          && request.resource.data.yearMonth
+            == resource.data.yearMonth
+          && request.resource.data.groupKey
+            == resource.data.groupKey;
+      }
+
+      match /paydayPaymentBatches/{batchId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId)
+          && validPaydayPaymentBatch(batchId)
+          && (
+            !('undoneAt' in request.resource.data)
+            || request.resource.data.undoneAt == null
+          );
+
+        allow update: if isOwner(userId)
+          && validPaydayPaymentBatch(batchId)
+          && request.resource.data.diff(resource.data)
+            .affectedKeys()
+            .hasOnly(['undoneAt'])
+          && request.resource.data.undoneAt is string;
+      }
+
       match /migrations/{documentId} {
         allow read: if isOwner(userId);
         allow write: if false;
       }
     }
 
-    // Legacy global collections are copied by the trusted Admin migration endpoint.
-    // Client access remains closed; source documents are retained for rollback.
     match /{document=**} {
       allow read, write: if false;
     }
