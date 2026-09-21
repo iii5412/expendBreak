@@ -43,6 +43,7 @@ describe('RecurringPaymentView', () => {
             }],
           }}
           hiddenExpenseItems={[]}
+          initialView="accounts"
           onCreateOccurrence={() => undefined}
           onReloadRecurringPlan={async () => undefined}
           duplicateManualCardSettlementCount={0}

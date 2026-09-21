@@ -9,6 +9,7 @@ import {
 import { getInstallmentCharge } from './installments';
 import { getScheduledDatesForMonth } from './recurringNormalization';
 import { resolveRecurringAmount } from './recurringAmounts';
+import { getActivePaydaySchedule, periodBoundsFor, yearMonthForDateInSchedule } from './paydaySchedule';
 
 /**
  * Two-track cash model. See `docs/PRD-payday-cashflow-model.md` §4.
@@ -47,6 +48,8 @@ export interface MonthSummary {
   calculationStatus: 'incomplete' | 'estimated' | 'confirmed';
   missingAmountCount: number;
   suggestedAmountCount: number;
+  /** Posted rows whose stored amount disagrees with the linked transaction ("기록 차이 확인 중"). */
+  integrityIssueCount: number;
 
   // Expenses
   confirmedExpenses: number;
@@ -187,6 +190,8 @@ export interface AccountingPeriod {
   daysInMonth: number; // total days in the period
   daysPassed: number;
   daysRemaining: number; // includes today
+  /** First cycle after a payday change; starts where the old cycle ended. */
+  isTransition?: boolean;
 }
 
 /** Days 29-31 do not exist in every month, so the cycle start is capped at 28. */
@@ -208,11 +213,20 @@ export function getAccountingPeriod(
   monthStartDay: number = 1,
   now = new Date(),
 ): AccountingPeriod {
-  const startDay = normalizeMonthStartDay(monthStartDay);
+  // A registered payday schedule (profile history of payday changes) wins over
+  // the single day passed in, so every caller sees the same cycle boundaries
+  // including the irregular transition cycle after a change.
+  const schedule = getActivePaydaySchedule();
+  const bounds = schedule ? periodBoundsFor(yearMonth, schedule) : null;
+  const startDay = bounds ? bounds.monthStartDay : normalizeMonthStartDay(monthStartDay);
   const [year, month] = yearMonth.split('-').map(Number);
 
-  const start = new Date(year, month - 1, startDay);
-  const nextStart = new Date(year, month, startDay);
+  const parse = (localDate: string) => {
+    const [y, m, d] = localDate.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const start = bounds ? parse(bounds.startDate) : new Date(year, month - 1, startDay);
+  const nextStart = bounds ? new Date(parse(bounds.endDate).getTime() + MS_PER_DAY) : new Date(year, month, startDay);
   const end = new Date(nextStart.getTime() - MS_PER_DAY);
 
   const startDate = getLocalDateString(start);
@@ -239,6 +253,7 @@ export function getAccountingPeriod(
     daysPassed,
     // Days remaining includes today
     daysRemaining: today > endDate ? 0 : Math.min(daysInMonth, daysInMonth - daysPassed + 1),
+    isTransition: bounds?.isTransition || undefined,
   };
 }
 
@@ -284,6 +299,8 @@ export function getScheduledDatesInPeriod(
 
 /** Which period a date belongs to, e.g. 2026-09-02 with start day 25 -> 2026-08. */
 export function getYearMonthForDate(localDate: string, monthStartDay: number = 1): string {
+  const schedule = getActivePaydaySchedule();
+  if (schedule) return yearMonthForDateInSchedule(localDate, schedule);
   const startDay = normalizeMonthStartDay(monthStartDay);
   const calendarMonth = localDate.slice(0, 7);
   const day = Number(localDate.slice(8, 10));
@@ -297,7 +314,7 @@ export function getCurrentYearMonth(monthStartDay: number = 1, now = new Date())
 
 /** Short label such as `8/25~9/24`, omitted when the period is a plain calendar month. */
 export function formatPeriodRange(period: AccountingPeriod): string {
-  if (period.monthStartDay === 1) return '';
+  if (period.monthStartDay === 1 && !period.isTransition) return '';
   const short = (date: string) => {
     const [, month, day] = date.split('-').map(Number);
     return `${month}/${day}`;
@@ -409,8 +426,13 @@ export function calculateMonthSummary(
   const pendingAmountStates = pendingOccurrences.map(o => resolveRecurringAmount(o, transactions));
   const missingAmountCount = pendingAmountStates.filter(amount => amount.status === 'missing').length;
   const suggestedAmountCount = pendingAmountStates.filter(amount => amount.status === 'suggested').length;
+  // A posted amount that disagrees with its transaction is shown from the
+  // transaction but keeps the whole figure provisional until it is settled.
+  const integrityIssueCount = occurrences.filter(o => o.status === 'posted'
+    && isDateInPeriod(o.scheduledDate, period)
+    && resolveRecurringAmount(o, transactions).integrityIssue).length;
   const calculationStatus: MonthSummary['calculationStatus'] = missingAmountCount > 0
-    ? 'incomplete' : suggestedAmountCount > 0 ? 'estimated' : 'confirmed';
+    ? 'incomplete' : suggestedAmountCount > 0 || integrityIssueCount > 0 ? 'estimated' : 'confirmed';
 
   // Scheduled Income (recurring items with template.type === 'income')
   const scheduledIncome = pendingOccurrences
@@ -633,6 +655,7 @@ export function calculateMonthSummary(
     calculationStatus,
     missingAmountCount,
     suggestedAmountCount,
+    integrityIssueCount,
     confirmedExpenses,
     confirmedFixedExpenses,
     confirmedVariableExpenses,

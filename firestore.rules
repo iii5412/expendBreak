@@ -153,7 +153,8 @@ service cloud.firestore {
         allow create, update: if isOwner(userId)
           && validTransactionType()
           && request.resource.data.defaultAmount is number
-          && request.resource.data.defaultAmount > 0
+          // 0 means "no reference amount": the first cycle row asks for one.
+          && request.resource.data.defaultAmount >= 0
           && categoryMatches(userId);
       }
 

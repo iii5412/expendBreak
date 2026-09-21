@@ -1,4 +1,5 @@
 import { RecurringAmountSource, RecurringAmountStatus, RecurringOccurrence } from '../types';
+import { getYearMonthForDate, shiftYearMonth } from './calculations';
 import { resolveRecurringAmount } from './recurringAmounts';
 
 export interface RecurringAmountSuggestion {
@@ -8,34 +9,64 @@ export interface RecurringAmountSuggestion {
   sourceCycle: string | null;
 }
 
+export interface SuggestionOptions {
+  frequency?: 'monthly' | 'weekly';
+  monthStartDay?: number;
+}
+
+const isEvidence = (occurrence: RecurringOccurrence) =>
+  occurrence.status !== 'skipped' && !occurrence.projected && resolveRecurringAmount(occurrence).status === 'confirmed';
+
+const suggestFrom = (occurrence: RecurringOccurrence, cycle: string): RecurringAmountSuggestion => ({
+  amount: resolveRecurringAmount(occurrence).amount,
+  status: 'suggested',
+  source: 'previous_cycle',
+  sourceCycle: cycle,
+});
+
 /**
- * A new monthly occurrence inherits the latest saved amount for the same item.
- * Card bills are not represented by recurring occurrences; they are calculated
- * separately from card-linked transactions and therefore are never copied here.
+ * The amount proposed for a new cycle row (PRD-ui-renewal §6 "다음 주기의 제안값").
  *
- * An unusually large or small month is not carried: a one-time settlement or a
- * skipped payment would otherwise become the silent baseline for every month
- * after it. Those fall back to the template amount for the user to adjust.
+ * The most recent confirmed amount for the item is proposed, never confirmed
+ * automatically. A cycle that only holds a copied suggestion is not evidence,
+ * so the search walks back to the last confirmed one and names that cycle.
+ *
+ * Weekly items match occurrence ordinals between cycles (2nd of this cycle ←
+ * 2nd of the previous). When this cycle has more occurrences than the last,
+ * the extra ones take the most recent single confirmed amount rather than a
+ * copy of a total.
  */
 export function getRecurringAmountSuggestion(
   templateId: string,
   legacyTemplateAmount: number | undefined,
   scheduledDate: string,
   occurrences: RecurringOccurrence[],
+  options: SuggestionOptions = {},
 ): RecurringAmountSuggestion {
+  if (options.frequency === 'weekly') {
+    const monthStartDay = options.monthStartDay ?? 1;
+    const cycle = getYearMonthForDate(scheduledDate, monthStartDay);
+    const ordinal = occurrences.filter(occurrence => occurrence.templateId === templateId
+      && occurrence.scheduledDate < scheduledDate
+      && getYearMonthForDate(occurrence.scheduledDate, monthStartDay) === cycle).length;
+    const previousCycle = shiftYearMonth(cycle, -1);
+    const previousRows = occurrences
+      .filter(occurrence => occurrence.templateId === templateId
+        && getYearMonthForDate(occurrence.scheduledDate, monthStartDay) === previousCycle)
+      .sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate));
+    const counterpart = previousRows[ordinal];
+    if (counterpart && isEvidence(counterpart)) return suggestFrom(counterpart, previousCycle);
+    const latestPrevious = [...previousRows].reverse().find(isEvidence);
+    if (latestPrevious) return suggestFrom(latestPrevious, previousCycle);
+  }
+
   const history = occurrences
     .filter(occurrence => occurrence.templateId === templateId
       && occurrence.scheduledDate < scheduledDate
-      && occurrence.status !== 'skipped'
-      && resolveRecurringAmount(occurrence).status === 'confirmed')
+      && isEvidence(occurrence))
     .sort((left, right) => right.scheduledDate.localeCompare(left.scheduledDate));
   const previous = history[0];
-  if (previous) {
-    return {
-      amount: resolveRecurringAmount(previous).amount,
-      status: 'suggested', source: 'previous_cycle', sourceCycle: previous.scheduledDate.slice(0, 7),
-    };
-  }
+  if (previous) return suggestFrom(previous, previous.scheduledDate.slice(0, 7));
   if (legacyTemplateAmount != null && legacyTemplateAmount > 0) {
     return { amount: Math.round(legacyTemplateAmount), status: 'suggested', source: 'legacy_template', sourceCycle: null };
   }

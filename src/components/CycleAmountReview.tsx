@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckSquare, Square } from 'lucide-react';
 import type { BankAccount, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction } from '../types';
-import { AccountingPeriod, formatKRW, formatPeriodRange } from '../utils/calculations';
+import { AccountingPeriod, formatKRW, formatPeriodRange, getYearMonthForDate } from '../utils/calculations';
 import { resolveRecurringAmount, ResolvedRecurringAmount } from '../utils/recurringAmounts';
 import { AmountInput } from './ui/AmountInput';
 import { useToast } from './ui/FeedbackProvider';
@@ -36,6 +36,8 @@ interface CycleAmountReviewProps {
   paymentCards: PaymentCard[];
   onConfirm?: (updates: Array<{ occurrenceId: string; amount: number }>) => void | Promise<void | CycleAmountConfirmResult>;
   onUndo?: (operationIds: string[]) => number;
+  /** All saved rows; used to detect that a suggestion's source cycle changed since it was copied. */
+  history?: RecurringOccurrence[];
 }
 
 type Draft = number | null;
@@ -63,7 +65,7 @@ function saveDrafts(yearMonth: string, drafts: Record<string, Draft>) {
 const signedKRW = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatKRW(Math.abs(value))}`;
 
 export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
-  period, items, transactions, bankAccounts, paymentCards, onConfirm, onUndo,
+  period, items, transactions, bankAccounts, paymentCards, onConfirm, onUndo, history = [],
 }) => {
   const { showToast } = useToast();
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => loadDrafts(period.yearMonth));
@@ -110,6 +112,20 @@ export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowIds]);
+
+  // The value the source cycle holds *now*. When it differs from what was
+  // copied, the copy is not changed silently; the row offers to fetch it again.
+  const sourceCycleAmountNow = (occurrence: RecurringOccurrence): number | null => {
+    const state = resolved.get(occurrence.id)!;
+    if (state.status !== 'suggested' || !state.sourceCycle) return null;
+    const sourceRows = history.filter(row => row.templateId === occurrence.templateId
+      && row.id !== occurrence.id
+      && !row.projected
+      && getYearMonthForDate(row.scheduledDate, period.monthStartDay) === state.sourceCycle
+      && resolveRecurringAmount(row, transactions).status === 'confirmed')
+      .sort((left, right) => right.scheduledDate.localeCompare(left.scheduledDate));
+    return sourceRows.length ? resolveRecurringAmount(sourceRows[0], transactions).amount : null;
+  };
 
   const draftOf = (occurrence: RecurringOccurrence): Draft => {
     if (occurrence.id in drafts) return drafts[occurrence.id];
@@ -247,6 +263,8 @@ export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
               const failed = failedIds.has(occurrence.id);
               const statusLabel = state.status === 'missing' ? '금액 입력 필요' : state.integrityIssue ? '기록 불일치' : '제안';
               const statusClass = state.status === 'missing' ? 'bg-amber-500/15 text-amber-200' : state.integrityIssue ? 'bg-rose-500/15 text-rose-200' : 'bg-slate-700/60 text-slate-200';
+              const sourceNow = sourceCycleAmountNow(occurrence);
+              const sourceChanged = sourceNow != null && previous != null && sourceNow !== previous;
               const previousLabel = previous == null
                 ? '전 주기 기록 없음'
                 : `전 주기 ${formatKRW(previous)}${state.sourceCycle ? ` · ${Number(state.sourceCycle.slice(5, 7))}월 주기에서 가져옴` : state.source === 'legacy_template' ? ' · 기존 원본 금액' : ''}`;
@@ -271,6 +289,12 @@ export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
                         {failed && <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[11px] font-bold text-rose-200">저장 실패</span>}
                       </div>
                       <p className="mt-0.5 text-xs text-slate-500">{occurrence.scheduledDate} · {describeMethod(occurrence, template)}</p>
+                      {sourceChanged && (
+                        <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-amber-200">
+                          <span>전 주기 기록이 {formatKRW(sourceNow!)}(으)로 바뀌었습니다. 이 주기의 제안값은 그대로 두었습니다.</span>
+                          <button type="button" onClick={() => setDrafts(current => ({ ...current, [occurrence.id]: sourceNow }))} className="min-h-8 rounded border border-amber-400/40 px-2 font-bold">다시 가져오기</button>
+                        </p>
+                      )}
                       <div className="mt-2 grid items-center gap-2 sm:grid-cols-[1fr_170px]">
                         <p className="text-xs text-slate-400">{previousLabel}</p>
                         <div>
@@ -282,6 +306,12 @@ export const CycleAmountReview: React.FC<CycleAmountReviewProps> = ({
                           {delta != null && (
                             <p className={`mt-1 text-right text-[11px] font-bold ${delta > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{signedKRW(delta)} 전 주기 대비</p>
                           )}
+                          {/* A blank means "unknown"; zero is a decision and must be explicit (PRD §6). */}
+                          {draft === 0
+                            ? <p className="mt-1 flex items-center justify-between text-[11px] font-bold text-emerald-300"><span>확정 0원 · 이번 주기 납부 없음</span><button type="button" onClick={() => setDrafts(current => ({ ...current, [occurrence.id]: null }))} className="rounded border border-slate-700 px-1.5 py-0.5 font-semibold text-slate-400">지우기</button></p>
+                            : draft == null && (
+                              <button type="button" onClick={() => setDrafts(current => ({ ...current, [occurrence.id]: 0 }))} className="mt-1 min-h-9 w-full rounded-lg border border-slate-700 text-[11px] font-bold text-slate-300">이번 주기 납부 없음 (0원 확정)</button>
+                            )}
                         </div>
                       </div>
                     </div>

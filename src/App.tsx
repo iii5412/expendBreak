@@ -52,6 +52,7 @@ import {
   updateOccurrenceStatus,
   updateOccurrencePlan,
   confirmOccurrenceAmounts,
+  applyTemplateToCycle,
   undoAmountChange,
   undoAmountChanges,
   reloadRecurringOccurrences,
@@ -92,6 +93,7 @@ import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
 import { SyncConflictBanner } from './components/SyncConflictBanner';
+import { normalizePaydaySchedule, startDayForYearMonth } from './utils/paydaySchedule';
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { QuickEntryBar } from './components/QuickEntryBar';
@@ -590,15 +592,30 @@ export default function App() {
   }, [bootState, idleLockMinutes]);
 
   // Accounting period. monthStartDay lets a salaried user align the cycle with payday.
-  const monthStartDay = useMemo(
-    () => normalizeMonthStartDay(userProfile.monthStartDay),
-    [userProfile.monthStartDay],
-  );
+  // With a payday schedule the day depends on the cycle being viewed; the
+  // period functions consult the schedule themselves, this is the label value.
+  const monthStartDay = useMemo(() => {
+    const schedule = normalizePaydaySchedule(userProfile.paydaySchedule);
+    return schedule ? startDayForYearMonth(currentYM, schedule) : normalizeMonthStartDay(userProfile.monthStartDay);
+  }, [userProfile.monthStartDay, userProfile.paydaySchedule, currentYM]);
   const period = useMemo(
     () => getAccountingPeriod(currentYM, monthStartDay),
     [currentYM, monthStartDay, dateKey],
   );
   const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay, dateKey]);
+
+  // Keep the legacy `monthStartDay` field mirroring the current cycle's day so
+  // older clients and exports read the right value once a scheduled change lands.
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    const schedule = normalizePaydaySchedule(userProfile.paydaySchedule);
+    if (!schedule) return;
+    const currentDay = startDayForYearMonth(currentPeriodYM, schedule);
+    if (currentDay !== normalizeMonthStartDay(userProfile.monthStartDay)) {
+      updateUserProfile({ monthStartDay: currentDay });
+      refreshAppData();
+    }
+  }, [bootState, currentPeriodYM, userProfile.paydaySchedule, userProfile.monthStartDay]);
   // Detection needs the generated bill amounts, which in turn need the card list
   // only — no dependency on planning, so this stays above the planning memos.
   const rawCardSettlementSummary = useMemo(
@@ -1053,19 +1070,20 @@ export default function App() {
   };
 
   const handleReloadRecurringPlan = async () => {
+    if (!requireSavedPlan()) return;
     const pending = recurringOccurrences.filter(row => row.status !== 'posted' && row.status !== 'skipped');
-    const overrides = pending.filter(row => row.actualAmount != null);
+    const confirmedRows = pending.filter(row => resolveRecurringAmount(row).status === 'confirmed');
     const retired = pending.filter(row => recurringTemplates.some(template => template.id === row.templateId && template.archivedAt));
     const accepted = await confirm({
-      title: `${currentYM} 정기 항목을 새로 불러올까요?`,
-      description: '납부일 변경으로 남은 중복 건을 정리하고, 미처리 일정만 현재 정기/고정 설정에서 다시 만듭니다. 이미 확정된 거래와 납부 완료 기록은 유지됩니다.',
+      title: `${currentYM} 고정지출 계획을 새로 불러올까요?`,
+      description: '반복 규칙이 바뀐 뒤 남은 중복 건을 정리하고, 미납 일정만 현재 규칙으로 다시 만듭니다. 이번 주기에 확정한 금액은 같은 항목의 새 일정에 그대로 옮기고, 납부 완료 기록과 거래는 건드리지 않습니다.',
       details: [
         { label: '대상 기간', value: `${period.startDate} ~ ${period.endDate}` },
-        { label: '다시 만드는 미처리 일정', value: pending.length + '건' },
+        { label: '다시 만드는 미납 일정', value: pending.length + '건' },
+        { label: '보존되는 확정 금액', value: confirmedRows.length + '건' },
+        ...confirmedRows.slice(0, 8).map(row => ({ label: (recurringTemplates.find(template => template.id === row.templateId)?.name || '정기 항목') + ' ' + row.scheduledDate, value: formatKRW(resolveRecurringAmount(row).amount ?? 0) + ' 유지' })),
         { label: '삭제 원본에서 제외될 일정', value: retired.length + '건' },
-        { label: '월별 직접 수정액 초기화', value: overrides.length + '건 · 이전 월 기록 또는 원본 금액으로 재산정' },
-        ...overrides.map(row => ({ label: (recurringTemplates.find(template => template.id === row.templateId)?.name || '정기 항목') + ' ' + row.scheduledDate, value: formatKRW(row.actualAmount!) + ' → 이전 월 기록/원본 기준' })),
-        { label: '납부 완료·건너뜀', value: '변경하지 않음' },
+        { label: '납부 완료·이번 주기 제외', value: '변경하지 않음' },
       ],
       confirmLabel: '새로 불러오기',
     });
@@ -1074,8 +1092,8 @@ export default function App() {
     const result = await reloadRecurringOccurrences(currentYM, monthStartDay);
     refreshAppData();
     showToast({
-      message: '정기 항목을 현재 설정으로 새로 불러왔습니다.',
-      description: `기존 미처리 ${result.removedCount}건 정리 · 현재 일정 ${result.loadedCount}건`,
+      message: '고정지출 계획을 현재 규칙으로 새로 불러왔습니다.',
+      description: `기존 미납 ${result.removedCount}건 정리 · 현재 일정 ${result.loadedCount}건 · 확정 금액 ${result.preservedCount}건 보존`,
       tone: 'success',
     });
   };
@@ -1494,6 +1512,8 @@ export default function App() {
             period={period}
             planState={cyclePlanState}
             onPrepareCycle={() => void handlePrepareCycle()}
+            onOpenTemplateSettings={() => handleNavigateTab('management', 'recurring')}
+            allRecurringOccurrences={allRecurringOccurrences}
             summary={summary}
             recurringOccurrences={planningRecurringOccurrences}
             recurringTemplates={planningRecurringTemplates}
@@ -1515,8 +1535,8 @@ export default function App() {
             onResolveCardSettlementReview={handleResolveCardSettlementReview}
             onUpdateCardSettlementStatus={handleCardSettlementStatus}
             onSaveCardSettlementAmount={handleSaveCardSettlementAmount}
-            onPostOccurrence={async (occId, amt, pType, accId, cId) => {
-              const posted = await postOccurrenceToTransaction(occId, amt, pType, accId, cId);
+            onPostOccurrence={async (occId, amt, pType, accId, cId, paidOn) => {
+              const posted = await postOccurrenceToTransaction(occId, amt, pType, accId, cId, paidOn);
               refreshAppData();
               return Boolean(posted);
             }}
@@ -1675,6 +1695,18 @@ export default function App() {
             cardSettlementSummary={cardSettlementSummary}
             classificationIssues={classificationIssues}
             onSaveRecurringTemplate={saveRecurringTemplate}
+            onAddTemplateToCurrentCycle={templateId => {
+              if (cyclePlanState !== 'saved') return false;
+              const created = createOccurrenceForPeriod(templateId, currentYM, monthStartDay);
+              refreshAppData();
+              return Boolean(created);
+            }}
+            onApplyTemplateToCurrentCycle={templateId => {
+              if (cyclePlanState !== 'saved') return 0;
+              const count = applyTemplateToCycle(templateId, currentYM, monthStartDay);
+              refreshAppData();
+              return count;
+            }}
             onUpdateRecurringTemplate={updateRecurringTemplate}
             onDeleteRecurringTemplate={deleteRecurringTemplate}
             onPostOccurrence={handlePostOccurrence}

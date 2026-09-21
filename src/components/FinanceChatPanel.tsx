@@ -146,7 +146,7 @@ export const FinanceChatPanel: React.FC<FinanceChatPanelProps> = ({
             className={`rounded-lg px-3 py-2 text-left transition-colors ${provider === 'openai' ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/35' : 'text-slate-400 hover:text-slate-200'}`}
           >
             <span className="block text-xs font-extrabold">GPT 경제형</span>
-            <span className="mt-0.5 block text-[10px] opacity-75">5.6 Luna · 빠른 질문</span>
+            <span className="mt-0.5 block text-[11px] opacity-75">5.6 Luna · 빠른 질문</span>
           </button>
           <button
             type="button"
@@ -154,7 +154,7 @@ export const FinanceChatPanel: React.FC<FinanceChatPanelProps> = ({
             className={`rounded-lg px-3 py-2 text-left transition-colors ${provider === 'gemini' ? 'bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/35' : 'text-slate-400 hover:text-slate-200'}`}
           >
             <span className="block text-xs font-extrabold">Gemini 정밀형</span>
-            <span className="mt-0.5 block text-[10px] opacity-75">3.7 Flash · 복합 분석</span>
+            <span className="mt-0.5 block text-[11px] opacity-75">3.7 Flash · 복합 분석</span>
           </button>
         </div>
       </div>
@@ -218,7 +218,7 @@ export const FinanceChatPanel: React.FC<FinanceChatPanelProps> = ({
         </button>
       </div>
 
-      <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[10px] leading-relaxed text-emerald-100/75">
+      <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] leading-relaxed text-emerald-100/75">
         <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <p>계좌·카드 번호, PIN, 영수증 원문, 음성 원본은 보내지 않습니다. 정제된 거래와 계산 요약만 선택한 AI로 전송되며 대화는 저장되지 않습니다.</p>
       </div>

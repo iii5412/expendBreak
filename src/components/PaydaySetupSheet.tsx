@@ -416,12 +416,12 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                           )}
                         </div>
                         <div className="shrink-0 text-right">
-                          <p className="text-[10px] text-slate-400">보낼 금액</p>
+                          <p className="text-[11px] text-slate-400">보낼 금액</p>
                           <p className="font-bold text-amber-300">{formatKRW(transferAmount)}</p>
                           {selectedAmount !== group.pendingAmount && (
-                            <p className="text-[10px] text-slate-500">전체 {formatKRW(group.pendingAmount)}</p>
+                            <p className="text-[11px] text-slate-500">전체 {formatKRW(group.pendingAmount)}</p>
                           )}
-                          {fundedAmount > 0 && <p className="text-[10px] text-blue-300">확보 {formatKRW(fundedAmount)}</p>}
+                          {fundedAmount > 0 && <p className="text-[11px] text-blue-300">확보 {formatKRW(fundedAmount)}</p>}
                         </div>
                       </div>
 
@@ -467,7 +467,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                                     <span className={`block truncate font-semibold ${item.completed ? 'text-emerald-300 line-through' : 'text-slate-200'}`}>
                                       {item.label}
                                     </span>
-                                    <span className="block text-[10px] text-slate-500">
+                                    <span className="block text-[11px] text-slate-500">
                                       {item.detail}{item.dueDate ? ` · ${item.dueDate}` : ''}
                                       {!item.completed && item.amount <= 0 ? ' · 금액 확인 필요' : ''}
                                       {!item.completed && !item.accountId && !group.accountNumber ? ' · 계좌 미지정' : ''}
@@ -588,7 +588,7 @@ export const PaydaySetupSheet: React.FC<PaydaySetupSheetProps> = ({
                               : `${card.usageYearMonth} 사용분 (이용기간 미설정, 추정)`}
                           </p>
                         </div>
-                        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold ${
+                        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-bold ${
                           card.source === 'confirmed'
                             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                             : 'border-slate-700 bg-slate-800 text-slate-300'

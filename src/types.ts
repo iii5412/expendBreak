@@ -291,6 +291,12 @@ export interface UserProfile {
   currency: string;
   timezone: string;
   monthStartDay: number; // Salary/payday accounting cycle start (default 10)
+  /**
+   * History of payday changes. Past cycles keep the day they were created
+   * with; the first cycle of a new day is a transition cycle (see
+   * utils/paydaySchedule.ts). `monthStartDay` mirrors the day of the current cycle.
+   */
+  paydaySchedule?: Array<{ fromYearMonth: string; monthStartDay: number }> | null;
   /** One-time persisted migration marker for the salary-day planning model. */
   paydayPlanningVersion?: number;
   /** Set once the user has seen why the card bill changed their figures. */

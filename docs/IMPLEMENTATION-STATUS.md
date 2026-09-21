@@ -15,13 +15,14 @@
 | 2 · 원자적 수정·revision·이력·충돌 | 완료(클라이언트+규칙) | `utils/amountOperations.ts`, `firestoreSync.ts` 조건부 커밋, `firestore.rules` revision 프로토콜, `components/SyncConflictBanner.tsx`. 별도 v2 컬렉션 복사·마이그레이션 잠금은 규칙 기반 차단으로 대체 |
 | 3 · 주기 시작 일괄 확인, 금액 수정 시트, 홈 계산 상태 | 완료 | `components/CycleAmountReview.tsx`, `RecurringPaymentView.tsx`, `DashboardView.tsx` 대표 숫자(미입력 `—`, 예상, 계획상 부족액) |
 | 4 · 홈·내비게이션 | 완료 | 하단 홈/고정지출/+/내역/분석, 상단 더보기(계좌·카드, 설정). 홈 ‘확인할 일’ 최대 3개(`utils/homeActions.ts`), 마감 주기 결론 분리(`utils/spendingStatus.ts`) |
-| 5 · 내역·분석·계좌·설정 | 부분 완료 | 내역: 고정지출 바로가기. 분석: 같은 경과일 비교·‘기타’ 분류 확인(`utils/cycleComparison.ts`). 계좌: 잔액 미입력 표시. 설정: 반복 규칙 중심 문구·고정지출 연결. **미완: Android 실기기·접근성(TalkBack, 200% 확대) 검증, 급여일 변경 전환 주기 규칙, 주간 항목 slot 대응** |
+| 5 · 내역·분석·계좌·설정 | 완료(코드) | 내역: 고정지출 바로가기. 분석: 같은 경과일 비교·‘기타’ 분류 확인(`utils/cycleComparison.ts`). 계좌: 잔액 미입력 표시. 설정: 반복 규칙 중심, 항목 추가 시 ‘이번 주기에도 추가’ 기본 선택, 규칙 수정 시 ‘이번 주기 미납 건에도 반영’ 선택(`applyTemplateToCycle`) |
+| 8장 잔여 규칙 | 완료 | 급여일 변경: `utils/paydaySchedule.ts` — 저장된 마지막 주기 다음부터 적용, 전환 주기는 직전 종료일 다음 날부터 새 급여일 정규 종료일까지(공백·중복 없음), 과거 주기 불변, 설정에 미리보기·예약 표시. 주간 반복: 발생 순번 대응 제안, 추가 건은 최근 확정 1회 금액. 납부일 변경: 미납 행을 같은 주기 안에서 이동해 금액·revision 보존(`recurringNormalization`). 새로 불러오기: 확정 금액 보존 + 영향 미리보기, 보조 기능으로 강등. 미래 예정 건 완료: 실제 납부일 입력(기본 오늘). 확인 화면 ‘0원 확정’, 전 주기 기록 변경 시 ‘다시 가져오기’, 저장 전 재원 변화 미리보기, 항목별/계좌별 보기 기억 |
 
-미구현·보류:
+검증 못 한 것(코드 외):
 
-- 급여일 변경 시 전환 주기 구성(8장 표 마지막 행)과 주간 반복의 발생 순번 대응 제안.
-- 확인 화면에서 ‘확정 0원’ 직접 입력(빈칸=미입력으로 처리, 0원 확정은 개별 수정 시트에서만 가능).
-- `firestore.rules` revision 규칙은 에뮬레이터 검증 전이며 `docs/DEPLOYMENT.md` §3-1 절차로 배포 후 확인 필요.
+- Android 실기기, TalkBack, 200% 글자 확대, 키보드·하단 버튼 겹침, 뒤로가기 동작(수용 #11). 10px 글자는 모두 11px 이상으로 올렸고 터치 영역은 44px 기준을 따랐다.
+- `firestore.rules` revision 규칙은 에뮬레이터 검증 전이며 `docs/DEPLOYMENT.md` §3-1 절차로 배포 후 확인 필요. `recurringTemplates.defaultAmount`는 0(참고 금액 없음)을 허용하도록 완화했다.
+- 성공 지표(§9)는 사용성 측정이 필요하다.
 
 ## 이번 작업에서 완료
 

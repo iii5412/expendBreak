@@ -1,4 +1,5 @@
 import { RecurringOccurrence, RecurringTemplate } from '../types';
+import { getActivePaydaySchedule, yearMonthForDateInSchedule } from './paydaySchedule';
 
 const toLocalDate = (date: Date) => {
   const year = date.getFullYear();
@@ -21,6 +22,8 @@ const adjustForWeekend = (dateText: string, policy: RecurringTemplate['holidayPo
  * purpose: that module already imports this one, and the rule is four lines.
  */
 const cycleOf = (dateText: string, monthStartDay: number) => {
+  const schedule = getActivePaydaySchedule();
+  if (schedule) return yearMonthForDateInSchedule(dateText, schedule);
   const startDay = Math.min(28, Math.max(1, Math.trunc(monthStartDay) || 1));
   const [year, month] = dateText.split('-').map(Number);
   const day = Number(dateText.slice(8, 10));
@@ -97,6 +100,8 @@ export function getScheduledDatesForMonth(
 export interface NormalizedRecurringOccurrences {
   occurrences: RecurringOccurrence[];
   removedIds: string[];
+  /** Rows whose due date was moved within their cycle; amount state preserved. */
+  movedIds?: string[];
 }
 
 /**
@@ -145,6 +150,8 @@ export function normalizeRecurringOccurrencesForMonth(
 ): NormalizedRecurringOccurrences {
   const templateMap = new Map(templates.map(template => [template.id, template]));
   const removedIds = new Set<string>();
+  const movedIds = new Set<string>();
+  const now = new Date().toISOString();
 
   const monthOccurrences = occurrences.filter(occurrence => occurrence.scheduledDate.startsWith(`${yearMonth}-`));
   const templateIds = new Set(monthOccurrences.map(occurrence => occurrence.templateId));
@@ -180,7 +187,38 @@ export function normalizeRecurringOccurrencesForMonth(
       .filter(occurrence => occurrence.status !== 'posted'
         && occurrence.status !== 'skipped'
         && !canonicalDates.has(occurrence.scheduledDate))
-      .forEach(occurrence => removedIds.add(occurrence.id));
+      .forEach(occurrence => {
+        // A changed due day moves the cycle's existing row instead of
+        // replacing it, so the amount the user confirmed for this cycle and
+        // its revision survive (PRD-ui-renewal acceptance #17). Only within
+        // the same cycle: a row never changes cycle by itself.
+        if (template.frequency === 'monthly') {
+          const target = [...canonicalDates].find(date => cycleOf(date, monthStartDay) === cycleOf(occurrence.scheduledDate, monthStartDay));
+          const occupied = target && candidates.some(other => other.id !== occurrence.id && other.scheduledDate === target && !removedIds.has(other.id));
+          if (target && !occupied) {
+            occurrence.scheduledDate = target;
+            occurrence.occurrenceKey = `${template.id}_${target}`;
+            occurrence.updatedAt = now;
+            movedIds.add(occurrence.id);
+            return;
+          }
+          if (!target) {
+            // The due day now falls in another cycle. This cycle keeps its
+            // obligation unless it already has another row for the item, in
+            // which case this one is a leftover of an earlier date shift.
+            const cycle = cycleOf(occurrence.scheduledDate, monthStartDay);
+            const alreadyCovered = occurrences.some(other => other.id !== occurrence.id
+              && other.templateId === template.id
+              && !removedIds.has(other.id)
+              && cycleOf(other.scheduledDate, monthStartDay) === cycle);
+            // Only a row the user actually decided on is worth keeping; a stale
+            // suggestion (for example one left by an old holiday shift) is dropped.
+            const userDecided = occurrence.amountStatus === 'confirmed' || occurrence.actualAmount != null;
+            if (!alreadyCovered && userDecided) return;
+          }
+        }
+        removedIds.add(occurrence.id);
+      });
 
     canonicalDates.forEach(date => {
       const duplicates = candidates
@@ -198,5 +236,6 @@ export function normalizeRecurringOccurrencesForMonth(
   return {
     occurrences: occurrences.filter(occurrence => !removedIds.has(occurrence.id)),
     removedIds: [...removedIds],
+    movedIds: [...movedIds],
   };
 }

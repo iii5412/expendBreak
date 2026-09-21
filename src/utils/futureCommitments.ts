@@ -90,7 +90,7 @@ export function calculateFutureCommitments(
         if (rows.some(row => row.scheduledDate === date) || posted.some(row => row.localDate === date)) continue;
         // Ungenerated cycle: project from the latest confirmed amount, never
         // from the template. Nothing is written; this is a read-only preview.
-        const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, date, recurringOccurrences);
+        const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, date, recurringOccurrences, { frequency: template.frequency, monthStartDay });
         if (suggestion.amount == null) { excludedCount += 1; continue; }
         isEstimated = true;
         accountFixed += suggestion.amount;

@@ -78,3 +78,39 @@ describe('next-cycle amount suggestion', () => {
     expect(suggestion.status).toBe('suggested');
   });
 });
+
+describe('weekly items match occurrence ordinals across cycles (PRD-ui-renewal §6)', () => {
+  // Payday on the 10th. August cycle: 8/14, 8/21, 8/28, 9/4 (4 rows). September cycle: 9/11, 9/18, 9/25, 10/2, 10/9 (5 rows).
+  const weekly = (id: string, scheduledDate: string, amount: number | null, extra: Partial<RecurringOccurrence> = {}) => occurrence({
+    id, templateId: 'lesson', occurrenceKey: `lesson_${scheduledDate}`, scheduledDate,
+    plannedAmount: amount, amountStatus: amount == null ? 'missing' : 'confirmed', amountSource: amount == null ? undefined : 'manual', ...extra,
+  });
+  const august = [
+    weekly('a1', '2026-08-14', 50_000), weekly('a2', '2026-08-21', 55_000),
+    weekly('a3', '2026-08-28', 60_000), weekly('a4', '2026-09-04', 65_000),
+  ];
+  const options = { frequency: 'weekly' as const, monthStartDay: 10 };
+
+  it('proposes the same ordinal from the previous cycle', () => {
+    const second = getRecurringAmountSuggestion('lesson', 40_000, '2026-09-18', [...august, weekly('s1', '2026-09-11', null)], options);
+    expect(second).toEqual({ amount: 55_000, status: 'suggested', source: 'previous_cycle', sourceCycle: '2026-08' });
+  });
+
+  it('gives an extra occurrence the most recent single confirmed amount, not a total', () => {
+    const rows = [...august,
+      weekly('s1', '2026-09-11', null), weekly('s2', '2026-09-18', null),
+      weekly('s3', '2026-09-25', null), weekly('s4', '2026-10-02', null)];
+    const fifth = getRecurringAmountSuggestion('lesson', 40_000, '2026-10-09', rows, options);
+    expect(fifth.amount).toBe(65_000);
+    expect(fifth.sourceCycle).toBe('2026-08');
+  });
+
+  it('skips a counterpart that was only a suggestion and uses the last confirmed one', () => {
+    const rows = [
+      weekly('a1', '2026-08-14', 50_000),
+      weekly('a2', '2026-08-21', 55_000, { amountStatus: 'suggested', amountSource: 'previous_cycle' }),
+    ];
+    const second = getRecurringAmountSuggestion('lesson', 40_000, '2026-09-18', [...rows, weekly('s1', '2026-09-11', null)], options);
+    expect(second.amount).toBe(50_000);
+  });
+});

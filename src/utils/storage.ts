@@ -72,6 +72,7 @@ import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 import { getRecurringAmountSuggestion } from './recurringPlans';
 import { resolveRecurringAmount } from './recurringAmounts';
+import { configurePaydaySchedule } from './paydaySchedule';
 import {
   AmountOperation,
   buildPlanAmountOperation,
@@ -490,6 +491,11 @@ function generateOccurrencesForMonth(
     monthStartDay,
   );
   occurrences = normalized.occurrences;
+  // Rows moved to a new due date must reach the cloud with their kept amounts.
+  (normalized.movedIds ?? []).forEach(id => {
+    const moved = occurrences.find(occurrence => occurrence.id === id);
+    if (moved) changedOccurrences.push(moved);
+  });
 
   for (const tmpl of templates) {
     if (!tmpl.active || tmpl.archivedAt) continue;
@@ -519,6 +525,7 @@ function generateOccurrencesForMonth(
           tmpl.defaultAmount,
           scheduledDate,
           occurrences,
+          { frequency: tmpl.frequency, monthStartDay },
         );
         const newOccurrence: RecurringOccurrence = {
           id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
@@ -550,14 +557,10 @@ function generateOccurrencesForMonth(
           || existingOccurrence.status === 'overdue')
         && existingOccurrence.templateRevision !== tmpl.updatedAt
       ) {
-        // Template edits update schedule/payment metadata only. A cycle amount
-        // never changes behind the user's back.
+        // A rule edit reaches existing rows only when the user chose so
+        // (applyTemplateToCycle). Generation just records that it saw the
+        // revision; neither the amount nor the payment details move here.
         existingOccurrence.templateAmountSnapshot = tmpl.defaultAmount;
-        existingOccurrence.typeSnapshot = tmpl.type;
-        existingOccurrence.categoryIdSnapshot = tmpl.categoryId;
-        existingOccurrence.paymentMethodType = tmpl.paymentMethodType;
-        existingOccurrence.accountId = tmpl.accountId;
-        existingOccurrence.cardId = tmpl.cardId;
         existingOccurrence.templateRevision = tmpl.updatedAt;
         existingOccurrence.updatedAt = new Date().toISOString();
         changedOccurrences.push(existingOccurrence);
@@ -968,6 +971,21 @@ export async function updateBudget(budget: Budget): Promise<Budget> {
 export interface ReloadRecurringOccurrencesResult {
   removedCount: number;
   loadedCount: number;
+  /** Confirmed cycle amounts carried onto the regenerated rows. */
+  preservedCount: number;
+}
+
+/** Amount decisions worth carrying across a regeneration (PRD §8 "수정값 보존"). */
+function confirmedAmountSnapshot(rows: RecurringOccurrence[]) {
+  const byKey = new Map<string, RecurringOccurrence>();
+  rows.forEach(row => {
+    if (resolveRecurringAmount(row).status !== 'confirmed') return;
+    byKey.set(row.occurrenceKey, row);
+    // A monthly item is one row per cycle, so its amount follows the item even
+    // when the due date moved.
+    byKey.set(`template:${row.templateId}`, row);
+  });
+  return byKey;
 }
 
 /** Rebuilds only the selected period's unposted plan from the current templates. */
@@ -984,24 +1002,53 @@ export async function reloadRecurringOccurrences(
       && occurrence.status !== 'skipped')
     .map(occurrence => occurrence.id);
   const resetIdSet = new Set(resetIds);
+  const resetRows = all.filter(occurrence => resetIdSet.has(occurrence.id));
   const preserved = all.filter(occurrence => !resetIdSet.has(occurrence.id));
+  const templates = getRecurringTemplates();
+  const templateMap = new Map(templates.map(template => [template.id, template]));
+  const keptAmounts = confirmedAmountSnapshot(resetRows);
 
   localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(preserved));
   if (resetIds.length > 0) await deleteRecurringOccurrencesFromFirestore(resetIds);
 
-  const templates = getRecurringTemplates();
   generateOccurrencesForMonth(period.startDate.slice(0, 7), templates, period.monthStartDay);
   if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
     generateOccurrencesForMonth(period.endDate.slice(0, 7), templates, period.monthStartDay);
   }
 
-  const loadedCount = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
+  // Regeneration rebuilds the schedule, not the user's decisions: a confirmed
+  // amount for this cycle goes back onto the new row for the same item.
+  const regenerated = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const restored: RecurringOccurrence[] = [];
+  regenerated.forEach(occurrence => {
+    if (!isDateInPeriod(occurrence.scheduledDate, period) || occurrence.status === 'posted' || occurrence.status === 'skipped') return;
+    const template = templateMap.get(occurrence.templateId);
+    const kept = keptAmounts.get(occurrence.occurrenceKey)
+      ?? (template?.frequency === 'monthly' ? keptAmounts.get(`template:${occurrence.templateId}`) : undefined);
+    if (!kept) return;
+    const amount = resolveRecurringAmount(kept).amount;
+    if (amount == null) return;
+    occurrence.plannedAmount = amount;
+    occurrence.expectedAmount = amount;
+    occurrence.actualAmount = amount;
+    occurrence.amountStatus = 'confirmed';
+    occurrence.amountSource = kept.amountSource === 'transaction' ? 'manual' : kept.amountSource ?? 'manual';
+    occurrence.amountConfirmedAt = kept.amountConfirmedAt ?? kept.updatedAt;
+    occurrence.sourceCycle = kept.sourceCycle ?? null;
+    restored.push(occurrence);
+  });
+  if (restored.length > 0) {
+    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(regenerated));
+    if (storageReady) void syncRecurringOccurrencesToFirestore(restored);
+  }
+
+  const loadedCount = regenerated
     .filter(occurrence => isDateInPeriod(occurrence.scheduledDate, period)
       && occurrence.status !== 'posted'
       && occurrence.status !== 'skipped')
     .length;
   notifyListeners();
-  return { removedCount: resetIds.length, loadedCount };
+  return { removedCount: resetIds.length, loadedCount, preservedCount: restored.length };
 }
 
 export function getRecurringTemplates(): RecurringTemplate[] {
@@ -1046,6 +1093,45 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
   syncRecurringTemplateToFirestore(tmpls[idx]);
   notifyListeners();
   return tmpls[idx];
+}
+
+/**
+ * Applies a rule edit (name is read from the template; account/card/due day
+ * live on the row) to this cycle's unpaid rows. Amount state and revision
+ * semantics are untouched: this is a metadata-only write (PRD §8 "이름·계좌·납부일 변경").
+ */
+export function applyTemplateToCycle(templateId: string, yearMonth: string, monthStartDay: number = 1): number {
+  const template = getRecurringTemplates().find(item => item.id === templateId);
+  if (!template) return 0;
+  const period = getAccountingPeriod(yearMonth, monthStartDay);
+  const all = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
+  const changed: RecurringOccurrence[] = [];
+  all.forEach(occurrence => {
+    if (occurrence.templateId !== templateId || !isDateInPeriod(occurrence.scheduledDate, period)) return;
+    if (occurrence.status === 'posted' || occurrence.status === 'skipped') return;
+    occurrence.paymentMethodType = template.paymentMethodType;
+    occurrence.accountId = template.accountId;
+    occurrence.cardId = template.cardId;
+    occurrence.typeSnapshot = template.type;
+    occurrence.categoryIdSnapshot = template.categoryId;
+    occurrence.templateRevision = template.updatedAt;
+    occurrence.templateAmountSnapshot = template.defaultAmount;
+    occurrence.updatedAt = new Date().toISOString();
+    changed.push(occurrence);
+  });
+  if (changed.length === 0) return 0;
+  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
+  // The due-day move itself happens through normalization on the next
+  // generation pass, which keeps the row and its amount (see recurringNormalization).
+  if (storageReady) {
+    void syncRecurringOccurrencesToFirestore(changed);
+    generateOccurrencesForMonth(period.startDate.slice(0, 7), getRecurringTemplates(), period.monthStartDay);
+    if (period.endDate.slice(0, 7) !== period.startDate.slice(0, 7)) {
+      generateOccurrencesForMonth(period.endDate.slice(0, 7), getRecurringTemplates(), period.monthStartDay);
+    }
+  }
+  notifyListeners();
+  return changed.length;
 }
 
 export function deleteRecurringTemplate(id: string): boolean {
@@ -1150,7 +1236,7 @@ export function projectRecurringOccurrences(yearMonth: string, monthStartDay: nu
     if (template.frequency === 'monthly' && saved.some(row => row.templateId === template.id)) continue;
     for (const scheduledDate of getScheduledDatesInPeriod(template, period)) {
       if (saved.some(row => row.templateId === template.id && row.scheduledDate === scheduledDate)) continue;
-      const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, scheduledDate, all);
+      const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, scheduledDate, all, { frequency: template.frequency, monthStartDay });
       projected.push({
         id: `projected_${template.id}_${scheduledDate}`,
         templateId: template.id,
@@ -1216,7 +1302,7 @@ export function createOccurrenceForPeriod(
     occurrenceKey,
     scheduledDate,
     ...(() => {
-      const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, scheduledDate, occurrences);
+      const suggestion = getRecurringAmountSuggestion(template.id, template.defaultAmount, scheduledDate, occurrences, { frequency: template.frequency, monthStartDay });
       return { expectedAmount: suggestion.amount ?? 0, plannedAmount: suggestion.amount, amountStatus: suggestion.status, amountSource: suggestion.source ?? undefined, sourceCycle: suggestion.sourceCycle };
     })(),
     actualAmount: null,
@@ -1370,7 +1456,12 @@ export async function postOccurrenceToTransaction(
   customAmount?: number,
   customPaymentMethodType?: PaymentMethodType,
   customAccountId?: string | null,
-  customCardId?: string | null
+  customCardId?: string | null,
+  /**
+   * Actual payment date. A future scheduled date is never copied onto the
+   * transaction by itself (PRD-ui-renewal acceptance #9): it defaults to today.
+   */
+  paidOn?: string,
 ): Promise<Transaction | null> {
   const raw = localStorage.getItem(STORAGE_KEYS.RECURRING_OCCURRENCES);
   if (!raw) return null;
@@ -1398,6 +1489,10 @@ export async function postOccurrenceToTransaction(
   }
 
   const now = new Date().toISOString();
+  const today = getLocalDateString();
+  const paymentDate = paidOn && /^\d{4}-\d{2}-\d{2}$/.test(paidOn)
+    ? paidOn
+    : target.scheduledDate <= today ? target.scheduledDate : today;
   const transactionId = `tx_recurring_${target.occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
   // A transaction with this id already in the local ledger means the posting
   // happened (here or on another device) and the occurrence is stale.
@@ -1406,8 +1501,8 @@ export async function postOccurrenceToTransaction(
     id: transactionId,
     type: occurrenceType,
     amount,
-    occurredAt: `${target.scheduledDate}T10:00:00.000Z`,
-    localDate: target.scheduledDate,
+    occurredAt: `${paymentDate}T10:00:00.000Z`,
+    localDate: paymentDate,
     categoryId: occurrenceCategoryId,
     merchant: template.counterparty || template.name,
     memo: `[정기] ${template.name}`,
@@ -1708,6 +1803,8 @@ export function getUserProfile(): UserProfile {
   initializeStorageIfEmpty();
   const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
   const { accessPin: _legacyPin, ...safeProfile } = profile;
+  // Every period calculation in the app consults the registered schedule.
+  configurePaydaySchedule(profile.paydaySchedule);
   return { ...safeProfile, securityPinEnabled: true } as UserProfile;
 }
 

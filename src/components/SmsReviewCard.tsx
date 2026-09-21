@@ -57,7 +57,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong className="truncate text-sm text-white">{candidate.merchant}</strong>
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${isCancellation ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/15 text-sky-200'}`}>
+                    <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${isCancellation ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/15 text-sky-200'}`}>
                       {isCancellation ? '승인취소 후보' : '지출 후보'}
                     </span>
                   </div>

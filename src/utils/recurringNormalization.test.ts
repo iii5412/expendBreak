@@ -144,3 +144,29 @@ describe('holiday shifts stay inside their salary cycle', () => {
     expect(result.removedIds).toEqual(['stale-10-09']);
   });
 });
+
+describe('due-day changes keep the cycle row (PRD-ui-renewal acceptance #17)', () => {
+  const rent: RecurringTemplate = {
+    id: 'rent', name: '월세', type: 'expense', categoryId: 'housing', defaultAmount: 700_000,
+    frequency: 'monthly', dayOfMonth: 15, startDate: '2026-01-01', holidayPolicy: 'fixed_date',
+    postingMode: 'confirm', paymentMethodType: 'account', active: true, createdAt: '', updatedAt: '',
+  } as RecurringTemplate;
+
+  it('moves an unposted row to the new due date within the same cycle, keeping its amount state', () => {
+    const row = { ...occurrence('rent-sep', '2026-09-25'), templateId: 'rent', plannedAmount: 725_000, amountStatus: 'confirmed' as const, revision: 2 };
+    const result = normalizeRecurringOccurrencesForMonth([row], [rent], '2026-09', 10);
+
+    expect(result.removedIds).toEqual([]);
+    expect(result.movedIds).toEqual(['rent-sep']);
+    const moved = result.occurrences.find(item => item.id === 'rent-sep')!;
+    expect(moved).toMatchObject({ scheduledDate: '2026-09-15', occurrenceKey: 'rent_2026-09-15', plannedAmount: 725_000, amountStatus: 'confirmed', revision: 2 });
+  });
+
+  it('keeps a confirmed row in its cycle when the new due day belongs to another cycle', () => {
+    // Cycle starts on the 20th: 9/15 is in the August cycle, the new 9/25 in September's.
+    const row = { ...occurrence('rent-aug', '2026-09-15'), templateId: 'rent', plannedAmount: 700_000, amountStatus: 'confirmed' as const };
+    const result = normalizeRecurringOccurrencesForMonth([row], [{ ...rent, dayOfMonth: 25 }], '2026-09', 20);
+    expect(result.removedIds).toEqual([]);
+    expect(result.movedIds).toEqual([]);
+  });
+});

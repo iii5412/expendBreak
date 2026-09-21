@@ -50,7 +50,10 @@ import {
   getMonthlyDueDateInPeriod,
   MonthSummary,
   normalizeMonthStartDay,
+  shiftYearMonth,
+  getYearMonthForDate,
 } from '../utils/calculations';
+import { getActivePaydaySchedule, periodBoundsFor, planPaydayChange } from '../utils/paydaySchedule';
 import { authenticatedFetch } from '../utils/auth';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
@@ -105,7 +108,11 @@ interface ManagementViewProps {
     orphanOccurrenceCount: number;
     totalCount: number;
   };
-  onSaveRecurringTemplate: (tmpl: Omit<RecurringTemplate, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onSaveRecurringTemplate: (tmpl: Omit<RecurringTemplate, 'id' | 'createdAt' | 'updatedAt'>) => RecurringTemplate | void;
+  /** Adds the new item to the cycle in progress as a row with no amount yet (PRD §8 항목 추가). */
+  onAddTemplateToCurrentCycle?: (templateId: string) => boolean;
+  /** Applies name/account/due-day edits to this cycle's unpaid rows, keeping their amounts. */
+  onApplyTemplateToCurrentCycle?: (templateId: string) => number;
   onUpdateRecurringTemplate?: (id: string, updates: Partial<RecurringTemplate>) => void;
   onDeleteRecurringTemplate?: (id: string) => void;
   onPostOccurrence: (occId: string, customAmount?: number) => void;
@@ -129,6 +136,8 @@ interface ManagementViewProps {
 export const ManagementView: React.FC<ManagementViewProps> = ({
   initialSubTab = 'recurring',
   onOpenRecurringPayments,
+  onAddTemplateToCurrentCycle,
+  onApplyTemplateToCurrentCycle,
   recurringTemplates,
   recurringOccurrences,
   allRecurringOccurrences = recurringOccurrences,
@@ -188,6 +197,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   );
   const [recDay, setRecDay] = useState('25');
   const [recPostingMode, setRecPostingMode] = useState<'confirm' | 'auto'>('confirm');
+  const [recAddToCurrentCycle, setRecAddToCurrentCycle] = useState(true);
+  const [recApplyToCurrentCycle, setRecApplyToCurrentCycle] = useState(true);
   const [recBankName, setRecBankName] = useState('신한은행');
   const [recAccountNumber, setRecAccountNumber] = useState('');
   const [recAccountHolder, setRecAccountHolder] = useState('');
@@ -245,6 +256,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     setRecDay('25');
     setRecPostingMode('confirm');
     setRecPaymentMethodType('account');
+    setRecAddToCurrentCycle(true);
+    setRecApplyToCurrentCycle(true);
 
     if (bankAccounts && bankAccounts.length > 0) {
       const firstAcc = bankAccounts[0];
@@ -301,8 +314,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       setRecurringError('항목 명칭을 입력해 주세요.');
       return;
     }
-    if (isNaN(amountNum) || amountNum <= 0) {
-      setRecurringError('1원 이상의 정수 금액을 입력해 주세요.');
+    // A new item may be saved without an amount: its first cycle row then
+    // shows "금액 입력 필요" instead of a guessed figure (PRD acceptance #4).
+    const amountMissing = recAmount.trim() === '' || isNaN(amountNum);
+    if (!amountMissing && amountNum < 0) {
+      setRecurringError('0원 이상의 정수 금액을 입력해 주세요.');
       return;
     }
     if (isNaN(dayNum) || dayNum < 1 || dayNum > 31) {
@@ -323,7 +339,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     const payload = {
       type: recType,
       name: recName,
-      defaultAmount: amountNum,
+      defaultAmount: amountMissing ? 0 : amountNum,
       categoryId: recCategoryId,
       counterparty: recAccountHolder || recName,
       expenseNature: 'fixed' as const,
@@ -351,19 +367,26 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
         title: '정기 원본 변경 영향 확인',
         description: '이미 불러온 월별 계획은 유지됩니다. 해당 월에서 새로 불러오면 현재 원본과 이전 월 기록을 기준으로 다시 계산합니다.',
         details: [
-          { label: '원본 금액 변경', value: formatKRW(existingTemplate.defaultAmount) + ' → ' + formatKRW(amountNum) },
+          { label: '참고 금액 변경', value: formatKRW(existingTemplate.defaultAmount) + ' → ' + (amountMissing ? '없음' : formatKRW(amountNum)) },
           { label: '납부일 변경', value: existingTemplate.dayOfMonth + '일 → ' + dayNum + '일' },
+          { label: '이번 주기 미납 건', value: recApplyToCurrentCycle ? '이름·계좌·납부일만 반영, 확정 금액 유지' : '변경하지 않음 (다음 주기부터 적용)' },
           { label: '유지되는 미처리 계획', value: retained.count + '건 · ' + retained.months.join(', ') },
           { label: '보존 기록', value: '완료 거래와 건너뜀은 유지' },
-        ], confirmLabel: '원본 수정',
+        ], confirmLabel: '규칙 수정',
       })) return;
     }
     if (editingTemplateId && onUpdateRecurringTemplate) {
       onUpdateRecurringTemplate(editingTemplateId, payload);
-      triggerToast(`'${recName}' 원본 항목을 수정했습니다. 고정지출 메뉴에서 새로 불러오면 월 계획에 반영됩니다.`);
+      const applied = recApplyToCurrentCycle && onApplyTemplateToCurrentCycle ? onApplyTemplateToCurrentCycle(editingTemplateId) : 0;
+      triggerToast(applied > 0
+        ? `'${recName}' 규칙을 수정하고 이번 주기 미납 ${applied}건에 반영했습니다. 금액은 그대로입니다.`
+        : `'${recName}' 규칙을 수정했습니다. 다음 주기부터 적용됩니다.`);
     } else {
-      onSaveRecurringTemplate(payload);
-      triggerToast(`'${recName}' 원본 항목을 등록했습니다. 고정지출 메뉴에서 새로 불러오면 월 계획에 반영됩니다.`);
+      const created = onSaveRecurringTemplate(payload);
+      const added = recAddToCurrentCycle && created && onAddTemplateToCurrentCycle ? onAddTemplateToCurrentCycle(created.id) : false;
+      triggerToast(added
+        ? `'${recName}' 항목을 등록하고 이번 주기에 추가했습니다.${amountMissing ? ' 고정지출에서 금액을 입력해 주세요.' : ''}`
+        : `'${recName}' 항목을 등록했습니다. 다음 주기부터 계획에 포함됩니다.`);
     }
 
     setIsAddRecurringOpen(false);
@@ -1013,7 +1036,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
                         <div className="flex items-center justify-between gap-3 sm:justify-end">
                           <div className="text-right">
-                            <span className="block font-black text-slate-100">{formatKRW(tmpl.defaultAmount)}</span>
+                            <span className="block font-black text-slate-100">{tmpl.defaultAmount > 0 ? formatKRW(tmpl.defaultAmount) : '참고 금액 없음'}</span>
                             <span className="text-xs text-slate-400">월 반영 기본값</span>
                           </div>
 
@@ -1323,24 +1346,34 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 value={normalizeMonthStartDay(userProfile.monthStartDay)}
                 onChange={async event => {
                   const nextStartDay = normalizeMonthStartDay(Number(event.target.value));
-                  if (nextStartDay === normalizeMonthStartDay(userProfile.monthStartDay)) return;
-                  const preview = getAccountingPeriod(
-                    getCurrentYearMonth(nextStartDay),
-                    nextStartDay,
-                  );
+                  if (nextStartDay === activeMonthStartDay) return;
+                  // PRD-ui-renewal §8: the new payday applies from the first cycle
+                  // after every cycle that already exists (current or prepared
+                  // ahead). Past cycles keep their boundaries; the first new cycle
+                  // is a transition cycle with no gap or overlap.
+                  const currentCycle = getCurrentYearMonth(activeMonthStartDay);
+                  const lastSavedCycle = allRecurringOccurrences.reduce((latest, occurrence) => {
+                    const cycle = getYearMonthForDate(occurrence.scheduledDate, activeMonthStartDay);
+                    return cycle > latest ? cycle : latest;
+                  }, currentCycle);
+                  const effectiveFrom = shiftYearMonth(lastSavedCycle, 1);
+                  const schedule = planPaydayChange(getActivePaydaySchedule(), activeMonthStartDay, nextStartDay, effectiveFrom);
+                  const transition = periodBoundsFor(effectiveFrom, schedule);
+                  const following = periodBoundsFor(shiftYearMonth(effectiveFrom, 1), schedule);
                   const accepted = await confirm({
-                    title: '예산 주기를 바꿀까요?',
-                    description: '기록된 거래는 바뀌지 않지만, 각 기간에 어떤 거래가 포함되는지가 달라집니다.',
+                    title: '급여일을 바꿀까요?',
+                    description: '지금 진행 중이거나 미리 준비한 주기는 그대로 두고, 그 다음 주기부터 새 급여일을 적용합니다. 과거 기록의 소속 주기는 바뀌지 않습니다.',
                     details: [
-                      { label: '새 시작일', value: `매월 ${nextStartDay}일` },
-                      { label: '현재 기간', value: `${preview.startDate} ~ ${preview.endDate}` },
-                      { label: '영향 범위', value: '홈 요약 · 분석 · 카드 정산 · CSV' },
+                      { label: '새 급여일', value: `매월 ${nextStartDay}일` },
+                      { label: '적용 시작', value: `${effectiveFrom.replace('-', '년 ')}월 주기` },
+                      { label: '전환 주기', value: `${transition.startDate} ~ ${transition.endDate}` },
+                      { label: '그 다음 주기', value: `${following.startDate} ~ ${following.endDate}` },
                     ],
-                    confirmLabel: '주기 변경',
+                    confirmLabel: '급여일 변경',
                   });
                   if (!accepted) return;
-                  onUpdateUserProfile({ monthStartDay: nextStartDay });
-                  triggerToast(`예산 주기를 매월 ${nextStartDay}일 시작으로 변경했습니다.`);
+                  onUpdateUserProfile({ paydaySchedule: schedule });
+                  triggerToast(`${effectiveFrom.replace('-', '년 ')}월 주기부터 매월 ${nextStartDay}일 시작으로 바뀝니다.`);
                 }}
                 className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 font-bold text-slate-100 focus:border-rose-500 focus:outline-none"
               >
@@ -1354,8 +1387,19 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               현재 기간: <span className="font-semibold text-slate-200">
                 {currentPeriodPreview.startDate} ~ {currentPeriodPreview.endDate}
               </span>
-              {normalizeMonthStartDay(userProfile.monthStartDay) === 1 && ' (달력 월과 동일)'}
+              {activeMonthStartDay === 1 && ' (달력 월과 동일)'}
             </p>
+            {(() => {
+              const schedule = getActivePaydaySchedule();
+              const pending = schedule?.find(entry => entry.fromYearMonth > getCurrentYearMonth(activeMonthStartDay));
+              if (!pending) return null;
+              const transition = periodBoundsFor(pending.fromYearMonth, schedule!);
+              return (
+                <p className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-xs text-blue-100">
+                  예약된 변경: {pending.fromYearMonth.replace('-', '년 ')}월 주기부터 매월 {pending.monthStartDay}일. 전환 주기 {transition.startDate} ~ {transition.endDate}.
+                </p>
+              );
+            })()}
             <p className="text-xs text-slate-400">
               매월 29~31일은 없는 달이 있어 시작일은 28일까지만 선택할 수 있습니다.
             </p>
@@ -1678,7 +1722,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1">기본 예상 금액 (KRW)</label>
+                <label className="text-slate-400 block mb-1">참고 금액 (KRW) · 비워 두면 이번 주기에 ‘금액 입력 필요’로 표시</label>
                 <AmountInput
                   value={parseAmountInput(recAmount)}
                   onChange={next => {
@@ -1958,6 +2002,21 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                   </div>
                 )}
               </div>
+
+              <label className="flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={editingTemplateId ? recApplyToCurrentCycle : recAddToCurrentCycle}
+                  onChange={event => (editingTemplateId ? setRecApplyToCurrentCycle : setRecAddToCurrentCycle)(event.target.checked)}
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  <span className="block font-bold text-slate-100">{editingTemplateId ? '이번 주기 미납 건에도 반영' : '이번 주기에도 추가'}</span>
+                  <span className="block text-slate-400">{editingTemplateId
+                    ? '이름·계좌·납부일만 이번 주기 미납 건에 적용합니다. 확정한 금액과 납부 완료 기록은 바뀌지 않습니다. 끄면 다음 주기부터 적용됩니다.'
+                    : '켜면 진행 중인 주기에 바로 추가됩니다. 끄면 다음 주기부터 계획에 들어갑니다.'}</span>
+                </span>
+              </label>
 
               <div>
                 <label className="text-slate-400 block mb-1">반영 방식</label>

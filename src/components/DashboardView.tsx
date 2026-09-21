@@ -345,7 +345,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {summary.spendPeriodStatus === 'closed' ? '생활비 주기가 끝났습니다. 실제 사용액과 한도 대비 결과를 확인하세요.'
                 : isIncomplete ? `이번 주기 금액이 없는 고정 항목이 ${summary.missingAmountCount}건 있습니다. 금액을 입력하기 전에는 사용 가능액을 계산하지 않습니다.`
                 : showsShortfall ? `고정지출·카드대금·저축 계획이 수입보다 ${formatKRW(summary.fundingShortfall)} 많습니다. 생활비 사용 ${formatKRW(summary.confirmedVariableExpenses)}은 별도 지표이며, 실제 통장 잔액이 아닙니다.`
-                : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.${summary.suggestedAmountCount > 0 ? ` 전 주기 제안 금액 ${summary.suggestedAmountCount}건이 포함된 예상치입니다.` : ''}`}
+                : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.${summary.suggestedAmountCount > 0 ? ` 전 주기 제안 금액 ${summary.suggestedAmountCount}건이 포함된 예상치입니다.` : ''}${summary.integrityIssueCount > 0 ? ` 기록 차이 확인 중 ${summary.integrityIssueCount}건은 연결 거래 금액으로 계산했습니다.` : ''}`}
             </p>
             {homeActions.length > 0 && (
               <ul className="mt-4 divide-y divide-slate-800/80 border-y border-slate-800/80" aria-label="확인할 일">
@@ -834,14 +834,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="truncate font-bold text-slate-100">{template?.name || '삭제된 정기 항목'}</span>
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                      <span className={`rounded border px-1.5 py-0.5 text-[11px] font-semibold ${
                         type === 'income'
                           ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                           : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
                       }`}>
                         {type === 'income' ? '정기 수입' : '고정 지출'}
                       </span>
-                      <span className="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
+                      <span className="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[11px] font-semibold text-slate-300">
                         {statusLabel}
                       </span>
                     </div>
