@@ -68,6 +68,7 @@ import { reportWriteFailed } from './syncStatus';
 import { getTransactionWindowStart } from './transactionWindow';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch, getAccountStorageKey, getSignedInAccount } from './auth';
+import { LegacyMigrationFailedError, readMigrationResponse } from './migrationStatus';
 import { getDefaultCategoryIdForType } from './categoryIntegrity';
 import { clearAllReceiptImages, deleteReceiptImage } from './receiptStorage';
 import { getRecurringAmountSuggestion } from './recurringPlans';
@@ -299,13 +300,21 @@ export async function ensureTransactionHistoryFor(yearMonth: string): Promise<vo
   }
 }
 
-/** Verifies the legacy-data migration and pushes anything queued while offline. */
+type MigrationFailureListener = (error: LegacyMigrationFailedError) => void;
+const migrationFailureListeners = new Set<MigrationFailureListener>();
+
+/**
+ * A warm boot verifies the migration after the cached view is on screen, so a
+ * verification failure there reaches the app through this subscription.
+ */
+export function subscribeToMigrationFailure(listener: MigrationFailureListener): () => void {
+  migrationFailureListeners.add(listener);
+  return () => migrationFailureListeners.delete(listener);
+}
+
+/** Verifies the legacy-data migration. Throws LegacyMigrationFailedError when the copy failed verification. */
 async function ensureServerSideMigration() {
-  const migrationResponse = await authenticatedFetch('/api/migration/ensure', { method: 'POST' });
-  if (!migrationResponse.ok) {
-    const payload = await migrationResponse.json().catch(() => ({}));
-    throw new Error(payload.message || '기존 운영 데이터 확인에 실패했습니다.');
-  }
+  await readMigrationResponse(await authenticatedFetch('/api/migration/ensure', { method: 'POST' }));
 }
 
 /**
@@ -412,6 +421,14 @@ function startWarmSession(): Promise<void> {
       notifyListeners();
     } catch (error) {
       if (sessionEnded()) return;
+      if (error instanceof LegacyMigrationFailedError) {
+        // Stop before anything else reads or writes the cloud; the cache is kept for the retry.
+        sessionGeneration += 1;
+        stopFirestoreSync();
+        storageReady = false;
+        migrationFailureListeners.forEach(listener => listener(error));
+        return;
+      }
       console.error('Background cloud reconciliation failed:', error);
       reportWriteFailed('클라우드와 동기화하지 못했습니다. 연결되면 자동으로 다시 시도합니다.');
     }

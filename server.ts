@@ -3,7 +3,7 @@ import { AccountMergeError, mergeBankAccountRecords } from './src/server/account
 import path from 'path';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { createHash, createHmac, pbkdf2Sync, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { applicationDefault, getApps as getAdminApps, initializeApp as initializeAdminApp } from 'firebase-admin/app';
@@ -13,22 +13,36 @@ import firebaseConfig from './firebase-applet-config.json';
 import { shouldTriggerVoiceFallback, sanitizeVoiceResult } from './src/utils/voice';
 import { createRealtimeSessionForm, parseRealtimeSdpBody } from './src/utils/realtimeSession';
 import { extractExplicitKrwAmount, needsAiDateResolution } from './src/utils/aiClassify';
+import { loadConfiguredAccounts } from './src/server/accounts';
+import {
+  assertProductionConfig,
+  resolveOwnerPinSecret,
+  resolvePinMinLength,
+  resolveSessionSecrets,
+} from './src/server/authConfig';
+import { createAuthRouter } from './src/server/authRoutes';
+import { applySecurityBaseline, largeJsonBody, resolveTrustProxyHops } from './src/server/httpSecurity';
+import { createMigrationHandler, ensureLegacyDataMigration } from './src/server/legacyMigration';
+import { createFirestorePinGuardStore, createMemoryPinGuardStore, createPinGuard } from './src/server/pinGuard';
+import { createSessionToken, verifySessionToken } from './src/server/session';
 
 dotenv.config();
+assertProductionConfig(process.env, { exit: code => process.exit(code), log: console.error });
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const OWNER_UID = process.env.OWNER_UID?.trim() || process.env.APP_OWNER_UID?.trim() || 'owner';
-const SESSION_SECRET = process.env.APP_SESSION_SECRET
-  || process.env.APP_PIN_HASH
-  || process.env.APP_ACCESS_KEY
-  || 'expendbreak_secret_key_2026';
+const SESSION_SECRETS = resolveSessionSecrets(process.env);
+const SESSION_SECRET = SESSION_SECRETS.current;
 const UPDATE_APK_PATH = process.env.APP_UPDATE_APK_PATH?.trim();
 const UPDATE_VERSION_CODE = Number(process.env.APP_UPDATE_VERSION_CODE);
 const UPDATE_VERSION_NAME = process.env.APP_UPDATE_VERSION_NAME?.trim();
 
-// A compressed receipt image is sent as base64 only for the authenticated OCR request.
-app.use(express.json({ limit: '12mb' }));
+// Small JSON bodies by default; only the receipt and voice routes accept 12MB (see largeJsonBody).
+applySecurityBaseline(app, {
+  production: process.env.NODE_ENV === 'production',
+  trustProxyHops: resolveTrustProxyHops(process.env),
+});
 
 const allowedNativeOrigins = new Set(
   String(process.env.NATIVE_ALLOWED_ORIGINS || 'https://localhost')
@@ -70,126 +84,10 @@ function getAdminServices() {
   return { adminDb, adminAuth: getAdminAuth(adminApp) };
 }
 
-function safeEqualText(left: string, right: string) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
+if (resolveOwnerPinSecret(process.env).usingDevDefault) console.warn('No PIN configured; the development PIN 0000 is accepted. Never deploy like this.');
 
-function checkPinAgainstSecret(pin: string, secret: string): boolean {
-  if (secret.startsWith('pbkdf2$')) {
-    const parts = secret.split('$');
-    if (parts.length === 4) {
-      const [, iterationText, saltText, digestText] = parts;
-      const iterations = Number(iterationText);
-      if (Number.isSafeInteger(iterations) && iterations >= 100_000 && saltText && digestText) {
-        try {
-          const expected = Buffer.from(digestText, 'base64');
-          const actual = pbkdf2Sync(pin, Buffer.from(saltText, 'base64'), iterations, expected.length, 'sha256');
-          return actual.length === expected.length && timingSafeEqual(actual, expected);
-        } catch {
-          // If decoding or hashing fails, fallback to safe string comparison
-        }
-      }
-    }
-  }
-  return safeEqualText(pin, secret);
-}
-
-type ConfiguredAccount = {
-  uid: string;
-  name: string;
-  pinHash: string;
-  isOwner: boolean;
-};
-
-function ownerPinSecret(): string {
-  const encodedHash = process.env.APP_PIN_HASH?.trim();
-  if (encodedHash) return encodedHash;
-
-  const legacyKey = process.env.APP_ACCESS_KEY?.trim();
-  if (legacyKey) return legacyKey;
-
-  // No PIN configured: only the local development default is accepted, and only
-  // when neither secret is set. Never accept it once a real PIN exists.
-  return '0000';
-}
-
-function loadConfiguredAccounts(): ConfiguredAccount[] {
-  const accounts: ConfiguredAccount[] = [{
-    uid: OWNER_UID,
-    name: process.env.OWNER_NAME?.trim() || '내 계정',
-    pinHash: ownerPinSecret(),
-    isOwner: true,
-  }];
-  const raw = process.env.APP_ACCOUNTS_JSON?.trim();
-  if (!raw) return accounts;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('APP_ACCOUNTS_JSON must be valid JSON.');
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error('APP_ACCOUNTS_JSON must be a JSON array.');
-  }
-
-  for (const candidate of parsed) {
-    const uid = typeof candidate?.uid === 'string' ? candidate.uid.trim() : '';
-    const name = typeof candidate?.name === 'string' ? candidate.name.trim() : '';
-    const pinHash = typeof candidate?.pinHash === 'string' ? candidate.pinHash.trim() : '';
-    if (!/^[A-Za-z0-9._-]{1,64}$/.test(uid) || !name || name.length > 40 || !pinHash) {
-      throw new Error('Each APP_ACCOUNTS_JSON entry needs a valid uid, name, and pinHash.');
-    }
-    if (accounts.some(account => account.uid === uid)) {
-      throw new Error(`Duplicate account uid in APP_ACCOUNTS_JSON: ${uid}`);
-    }
-    if (accounts.some(account => account.pinHash === pinHash)) {
-      throw new Error(`Each account must use a different PIN hash: ${uid}`);
-    }
-    accounts.push({ uid, name, pinHash, isOwner: false });
-  }
-  return accounts;
-}
-
-const CONFIGURED_ACCOUNTS = loadConfiguredAccounts();
+const CONFIGURED_ACCOUNTS = loadConfiguredAccounts(process.env, OWNER_UID);
 const CONFIGURED_ACCOUNT_UIDS = new Set(CONFIGURED_ACCOUNTS.map(account => account.uid));
-
-function verifyConfiguredPin(pin: string): ConfiguredAccount | null {
-  const matches = CONFIGURED_ACCOUNTS.filter(account => checkPinAgainstSecret(pin, account.pinHash));
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function createSessionToken(uid: string): string {
-  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days session
-  const payload = `${uid}:${expiresAt}`;
-  const hmac = createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
-  return Buffer.from(`${payload}:${hmac}`).toString('base64url');
-}
-
-function verifySessionToken(token: string): string | null {
-  try {
-    const decoded = Buffer.from(token, 'base64url').toString('utf8');
-    const parts = decoded.split(':');
-    if (parts.length !== 3) return null;
-    const [uid, expiresAtStr, hmac] = parts;
-    const expiresAt = Number(expiresAtStr);
-    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return null;
-
-    const payload = `${uid}:${expiresAtStr}`;
-    const expectedHmac = createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
-    if (hmac.length === expectedHmac.length && timingSafeEqual(Buffer.from(hmac), Buffer.from(expectedHmac))) {
-      return uid;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-type PinAttempt = { failures: number; blockedUntil: number };
-const pinAttempts = new Map<string, PinAttempt>();
 
 async function requireAccount(req: express.Request, res: express.Response, next: express.NextFunction) {
   try {
@@ -197,7 +95,7 @@ async function requireAccount(req: express.Request, res: express.Response, next:
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
-    const uid = verifySessionToken(token);
+    const uid = verifySessionToken(token, SESSION_SECRETS);
     if (!uid || !CONFIGURED_ACCOUNT_UIDS.has(uid)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
@@ -402,187 +300,39 @@ app.get('/api/auth/status', (req, res) => {
   return res.json({ isPinConfigured, accountCount: CONFIGURED_ACCOUNTS.length });
 });
 
-// PIN endpoint verifies PIN and issues session token
-app.post('/api/auth/verify-key', async (req, res) => {
-  const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
-  const clientId = req.ip || req.socket.remoteAddress || 'unknown';
-  const now = Date.now();
-
-  if (!/^\d{4,12}$/.test(key)) {
-    return res.status(400).json({ error: 'PIN은 4~12자리 숫자여야 합니다.' });
-  }
-
-  try {
-    const previousAttempt = pinAttempts.get(clientId);
-    if (previousAttempt && previousAttempt.blockedUntil > now) {
-      return res.status(429).json({
-        isValid: false,
-        retryAfterMs: previousAttempt.blockedUntil - now,
-      });
-    }
-
-    const account = verifyConfiguredPin(key);
-    if (!account) {
-      const attempt = pinAttempts.get(clientId) || { failures: 0, blockedUntil: 0 };
-      const failures = attempt.failures + 1;
-      const delayMs = failures >= 5 ? Math.min(60_000, 1_000 * (2 ** (failures - 5))) : 0;
-      pinAttempts.set(clientId, { failures, blockedUntil: now + delayMs });
-      return res.status(401).json({ isValid: false, retryAfterMs: delayMs });
-    }
-
-    pinAttempts.delete(clientId);
-    const token = createSessionToken(account.uid);
-    const { adminAuth } = getAdminServices();
-    const firebaseToken = await adminAuth.createCustomToken(account.uid);
-    return res.json({
-      isValid: true,
-      token,
-      firebaseToken,
-      account: { uid: account.uid, name: account.name, isOwner: account.isOwner },
-    });
-  } catch (error) {
-    console.error('PIN authentication error:', error instanceof Error ? error.message : error);
-    return res.status(500).json({
-      error: 'Authentication failed',
-      message: 'PIN 인증 처리 중 오류가 발생했습니다.',
-    });
-  }
+// Without Google credentials the Admin SDK leaks unhandled rejections that crash
+// the process, so local development without credentials keeps counters in memory.
+const hasAdminCredentials = process.env.NODE_ENV === 'production' || Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+if (!hasAdminCredentials) console.warn('No Google credentials in development: PIN failure counters stay in memory and the legacy migration is skipped.');
+const pinGuard = createPinGuard({
+  store: hasAdminCredentials
+    // Resolved per call so a failing Firestore call falls back to in-memory counters.
+    ? { transact: update => createFirestorePinGuardStore(getAdminServices().adminDb).transact(update) }
+    : createMemoryPinGuardStore(),
+  onGlobalLock: ({ failures, lockedUntil }) => console.error(
+    `[ALERT] PIN brute-force lock engaged: ${failures} failures in the last hour; `
+      + `all PIN checks refused until ${new Date(lockedUntil).toISOString()}.`,
+  ),
 });
 
-const LEGACY_COLLECTIONS = [
-  'appSettings',
-  'transactions',
-  'categories',
-  'budgets',
-  'recurringTemplates',
-  'recurringOccurrences',
-  'merchantRules',
-  'bankAccounts',
-  'paymentCards',
-] as const;
-
-async function ensureLegacyDataMigration(ownerUid: string) {
-  try {
-    const { adminDb } = getAdminServices();
-    const ownerRef = adminDb.collection('users').doc(ownerUid);
-    const markerRef = ownerRef.collection('migrations').doc('legacy-root-v1');
-    const existingMarker = await markerRef.get();
-    if (existingMarker.exists) return existingMarker.data();
-
-    const collectionReports: Record<string, {
-      sourceCount: number;
-      destinationCount: number;
-      sourceAmountTotal?: number;
-      destinationAmountTotal?: number;
-    }> = {};
-    const sourceDataByCollection = new Map<string, Array<Record<string, any>>>();
-
-    for (const collectionName of LEGACY_COLLECTIONS) {
-      const sourceSnapshot = await adminDb.collection(collectionName).get();
-      const sourceDocs = sourceSnapshot.docs;
-      sourceDataByCollection.set(collectionName, sourceDocs.map(document => ({ id: document.id, ...document.data() })));
-
-      for (let offset = 0; offset < sourceDocs.length; offset += 400) {
-        const batch = adminDb.batch();
-        for (const sourceDoc of sourceDocs.slice(offset, offset + 400)) {
-          const destinationRef = ownerRef.collection(collectionName).doc(sourceDoc.id);
-          const sourceData = { ...sourceDoc.data() };
-          if (collectionName === 'appSettings') {
-            delete sourceData.accessPin;
-            sourceData.aiClassificationEnabled = false;
-            sourceData.aiInsightsEnabled = false;
-            sourceData.aiConsentAt = null;
-          }
-          batch.set(destinationRef, sourceData, { merge: false });
-        }
-        await batch.commit();
-      }
-
-      const destinationSnapshot = await ownerRef.collection(collectionName).get();
-      const destinationById = new Map(destinationSnapshot.docs.map(document => [document.id, document.data()]));
-      const missingIds = sourceDocs.filter(document => !destinationById.has(document.id)).map(document => document.id);
-      if (missingIds.length > 0) {
-        throw new Error(`${collectionName} migration verification failed: ${missingIds.length} document(s) missing`);
-      }
-
-      const report: {
-        sourceCount: number;
-        destinationCount: number;
-        sourceAmountTotal?: number;
-        destinationAmountTotal?: number;
-      } = {
-        sourceCount: sourceDocs.length,
-        destinationCount: destinationSnapshot.size,
-      };
-
-      if (collectionName === 'transactions') {
-        report.sourceAmountTotal = sourceDocs.reduce((sum, document) => sum + Number(document.data().amount || 0), 0);
-        report.destinationAmountTotal = sourceDocs.reduce(
-          (sum, document) => sum + Number(destinationById.get(document.id)?.amount || 0),
-          0,
-        );
-        if (report.sourceAmountTotal !== report.destinationAmountTotal) {
-          throw new Error('transactions migration verification failed: amount totals differ');
-        }
-      }
-
-      collectionReports[collectionName] = report;
-    }
-
-    const completedAt = new Date().toISOString();
-    const categoryTypeById = new Map(
-      (sourceDataByCollection.get('categories') || []).map(category => [category.id, category.type]),
-    );
-    const invalidTransactions = (sourceDataByCollection.get('transactions') || []).filter(
-      transaction => categoryTypeById.get(transaction.categoryId) !== transaction.type,
-    );
-    const invalidTemplates = (sourceDataByCollection.get('recurringTemplates') || []).filter(
-      template => categoryTypeById.get(template.categoryId) !== template.type,
-    );
-    const report = {
-      version: 'legacy-root-v1',
-      ownerUid,
-      completedAt,
-      sourceDeleted: false,
-      collections: collectionReports,
-      classificationIssues: {
-        transactionCount: invalidTransactions.length,
-        transactionAmount: invalidTransactions.reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0),
-        recurringTemplateCount: invalidTemplates.length,
-      },
-    };
-    await markerRef.set(report);
-    return report;
-  } catch (error: any) {
-    return {
-      version: 'legacy-root-v1',
-      ownerUid,
-      completedAt: new Date().toISOString(),
-      skipped: true,
-      reason: error?.message || 'admin_db_unavailable',
-    };
-  }
-}
+app.use('/api/auth', createAuthRouter({
+  accounts: CONFIGURED_ACCOUNTS,
+  guard: pinGuard,
+  minPinLength: resolvePinMinLength(process.env),
+  issueSession: async account => ({
+    token: createSessionToken(account.uid, SESSION_SECRETS),
+    firebaseToken: await getAdminServices().adminAuth.createCustomToken(account.uid),
+  }),
+}));
 
 // Copies existing global collections into the fixed owner path. It never deletes the source data.
-app.post('/api/migration/ensure', requireAccount, async (req, res) => {
-  try {
-    if (res.locals.userUid !== OWNER_UID) {
-      return res.json({
-        ok: true,
-        report: { skipped: true, reason: 'not_owner_account', ownerUid: res.locals.userUid },
-      });
-    }
-    const report = await ensureLegacyDataMigration(res.locals.ownerUid);
-    return res.json({ ok: true, report });
-  } catch (error) {
-    console.error('Legacy data migration failed:', error);
-    return res.status(500).json({
-      error: 'Migration failed',
-      message: '기존 데이터 복사 검증에 실패했습니다. 원본 데이터는 변경되지 않았습니다.',
-    });
-  }
-});
+app.post('/api/migration/ensure', requireAccount, createMigrationHandler({
+  ownerUid: OWNER_UID,
+  run: ownerUid => ensureLegacyDataMigration(() => {
+    if (!hasAdminCredentials) throw new Error('No Google credentials in development');
+    return getAdminServices().adminDb;
+  }, ownerUid),
+}));
 
 app.post('/api/bank-accounts/merge', requireAccount, async (req, res) => {
   try {
@@ -793,7 +543,7 @@ function redactPaymentNumbers(value: unknown) {
 }
 
 // Authenticated multimodal receipt OCR. The image is not persisted by this endpoint.
-app.post('/api/ai/receipt', async (req, res) => {
+app.post('/api/ai/receipt', largeJsonBody, async (req, res) => {
   try {
     if (!consumeOcrQuota(res.locals.ownerUid)) {
       return res.status(429).json({ message: '영수증 OCR은 10분에 20회까지 사용할 수 있습니다. 잠시 후 다시 시도해 주세요.' });
@@ -949,7 +699,7 @@ function consumeVoiceQuota(ownerUid: string) {
 }
 
 // Authenticated voice input transaction analysis endpoint
-app.post('/api/ai/voice', async (req, res) => {
+app.post('/api/ai/voice', largeJsonBody, async (req, res) => {
   try {
     if (!consumeVoiceQuota(res.locals.ownerUid)) {
       return res.status(429).json({ message: '요청 제한을 초과했습니다. 잠시 후 다시 시도해주세요.' });

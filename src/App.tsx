@@ -68,6 +68,7 @@ import {
   exportTransactionsCSV,
   resetAllData,
   initializeStorageAfterLogin,
+  subscribeToMigrationFailure,
   ensureTransactionHistoryFor,
   shutdownStorage,
   shutdownStorageAndForgetCache,
@@ -88,7 +89,9 @@ import {
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
 import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, QuickEntry, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
-import { getSignedInAccount, logoutOwner, onSessionStateChanged } from './utils/auth';
+import { consumePinUpgradeNotice, getSignedInAccount, logoutOwner, onSessionStateChanged } from './utils/auth';
+import { LegacyMigrationFailedError } from './utils/migrationStatus';
+import { MigrationFailedScreen } from './components/MigrationFailedScreen';
 import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
@@ -149,7 +152,7 @@ import {
 } from './utils/smsImport';
 import { resolveRecurringAmount } from './utils/recurringAmounts';
 
-type BootState = 'checking' | 'locked' | 'loading' | 'ready';
+type BootState = 'checking' | 'locked' | 'loading' | 'ready' | 'migration-failed';
 
 const UNDO_WINDOW_MS = 10000;
 const LOCK_WARNING_MS = 60000;
@@ -234,6 +237,31 @@ export default function App() {
     applyAppTheme(userProfile.theme);
   }, [userProfile.theme]);
 
+  const handleBootFailure = async (error: unknown) => {
+    if (error instanceof LegacyMigrationFailedError) {
+      // Nothing was loaded or written yet; keep the session so the user can retry.
+      console.error('Legacy data migration verification failed:', error.failure);
+      setBootState('migration-failed');
+      return;
+    }
+    console.error('Authenticated data initialization failed:', error);
+    // A boot that failed may have left a half-written cache behind, so
+    // this path drops it rather than trusting it on the next unlock.
+    shutdownStorageAndForgetCache();
+    await logoutOwner().catch(() => undefined);
+    setBootState('locked');
+  };
+
+  const retryAfterMigrationFailure = async () => {
+    try {
+      await initializeStorageAfterLogin();
+      refreshAppData();
+      setBootState('ready');
+    } catch (error) {
+      await handleBootFailure(error);
+    }
+  };
+
   useEffect(() => {
     const unsubscribeAuth = onSessionStateChanged(isLoggedIn => {
       if (!isLoggedIn) {
@@ -247,17 +275,24 @@ export default function App() {
           refreshAppData();
           setBootState('ready');
         })
-        .catch(async error => {
-          console.error('Authenticated data initialization failed:', error);
-          // A boot that failed may have left a half-written cache behind, so
-          // this path drops it rather than trusting it on the next unlock.
-          shutdownStorageAndForgetCache();
-          await logoutOwner().catch(() => undefined);
-          setBootState('locked');
-        });
+        .catch(handleBootFailure);
     });
     return unsubscribeAuth;
   }, []);
+
+  useEffect(() => subscribeToMigrationFailure(error => {
+    console.error('Legacy data migration verification failed:', error.failure);
+    setBootState('migration-failed');
+  }), []);
+
+  useEffect(() => {
+    if (bootState !== 'ready' || !consumePinUpgradeNotice()) return;
+    showToast({
+      message: 'PIN을 6자리 이상으로 바꿔 주세요.',
+      description: '4~5자리 PIN 로그인은 곧 중단됩니다. 관리자에게 새 PIN 등록을 요청해 주세요.',
+      tone: 'info',
+    });
+  }, [bootState]);
 
   useEffect(() => {
     if (bootState !== 'ready') return;
@@ -499,7 +534,15 @@ export default function App() {
 
   const handleUnlockSuccess = async () => {
     setBootState('loading');
-    await initializeStorageAfterLogin();
+    try {
+      await initializeStorageAfterLogin();
+    } catch (error) {
+      if (error instanceof LegacyMigrationFailedError) {
+        setBootState('migration-failed');
+        return;
+      }
+      throw error;
+    }
     refreshAppData();
     setBootState('ready');
   };
@@ -1403,6 +1446,10 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  if (bootState === 'migration-failed') {
+    return <MigrationFailedScreen onRetry={retryAfterMigrationFailure} />;
   }
 
   if (bootState === 'locked') {

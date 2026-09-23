@@ -1,0 +1,27 @@
+# 2026-09-23 개선사항 PRD 인덱스
+
+- 작성일: 2026-09-23
+- 기준 커밋: `e145ddd` (main)
+- 분석 방법: 저장소 전체 정적 검토, `tsc --noEmit`(오류 0건), `vitest run`(49개 파일·362개 테스트 통과), `npm audit`, `npm outdated`, `dist` 번들 크기 확인
+- 확인된 전제: 운영 서버는 프록시(Cloud Run 등) 뒤에서 동작하며, 현재 운영 PIN은 4자리다.
+
+## 작업 목록
+
+| ID | 작업 | 우선순위 | 규모 | 선행 | 상태 |
+|---|---|---|---|---|---|
+| [T1](./PRD-T1-auth-hardening.md) | 서버 인증 기본값 제거 및 PIN 대입 방어 | P0 | 1~2일 | — | ✅ 완료 (2026-09-23) |
+| [T2](./PRD-T2-legacy-migration-safety.md) | 레거시 마이그레이션 실패 처리·덮어쓰기 방지 | P0 | 0.5~1일 | — | ✅ 완료 (2026-09-23), 수용 기준 1건 부분 충족 |
+| [T3](./PRD-T3-session-lifecycle.md) | 세션 폐기와 만료 처리 | P1 | 1일 | T1 | 대기 |
+| [T4](./PRD-T4-ci-and-rules-testing.md) | CI, 보안 규칙 테스트, 규칙 배포 자동화 | P1 | 1.5~2일 | — | 대기 |
+| [T5](./PRD-T5-sync-storage-resilience.md) | 로컬 캐시·동기화 복원력 | P1 / P2 | 1~2일 + 1~2주 | 2단계는 T8과 병행 | 대기 |
+| [T6](./PRD-T6-error-transparency.md) | 오류 경계와 실패 투명성 | P1 | 0.5~1일 | — | 대기 |
+| [T7](./PRD-T7-server-modularization.md) | 서버 모듈 분리·테스트·관찰성 | P2 | 2~3일 | T1과 병행 권장 | 대기 |
+| [T8](./PRD-T8-client-refactor-performance.md) | 클라이언트 구조 정리·성능·접근성 | P2 | 1~2주 | T4(ESLint) | 대기 |
+
+## 권장 순서
+
+1. **1주차**: T1, T2(운영 위험 제거) → T6(작고 사용자 체감 큼) → T4 R1(CI)
+2. **2주차**: T4 R2~R4(규칙 테스트·배포), T3, T5 1단계
+3. **이후**: T7 → T8, T5 2단계
+
+T7의 `createApp()` 분리를 T1 초기에 먼저 해 두면, T1·T2·T3의 서버 테스트를 supertest로 바로 작성할 수 있다.

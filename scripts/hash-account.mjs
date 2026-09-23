@@ -2,8 +2,8 @@ import { pbkdf2Sync, randomBytes } from 'node:crypto';
 
 const [uid, name, pin] = process.argv.slice(2);
 
-if (!uid || !/^[A-Za-z0-9._-]{1,64}$/.test(uid) || !name || !pin || !/^\d{4,12}$/.test(pin)) {
-  console.error('Usage: npm run account:hash -- <uid> <name> <4-12 digit PIN>');
+if (!uid || !/^[A-Za-z0-9._-]{1,64}$/.test(uid) || !name || !pin || !/^\d{6,12}$/.test(pin)) {
+  console.error('Usage: npm run account:hash -- <uid> <name> <6-12 digit PIN>');
   process.exit(1);
 }
 

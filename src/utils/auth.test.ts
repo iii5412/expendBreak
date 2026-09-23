@@ -11,7 +11,14 @@ vi.mock('firebase/auth', () => ({
 vi.mock('../lib/firebase', () => ({ auth: {} }));
 
 import { setPersistence } from 'firebase/auth';
-import { getAccountStorageKey, getSignedInAccount, isOwnerLoggedIn, loginWithPin, logoutOwner } from './auth';
+import {
+  consumePinUpgradeNotice,
+  getAccountStorageKey,
+  getSignedInAccount,
+  isOwnerLoggedIn,
+  loginWithPin,
+  logoutOwner,
+} from './auth';
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -76,5 +83,32 @@ describe('account-scoped browser storage', () => {
 
     await logoutOwner();
     expect(isOwnerLoggedIn()).toBe(false);
+  });
+
+  it('surfaces a one-time PIN upgrade notice without persisting it in the account', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      token: 'session-token',
+      firebaseToken: 'firebase-token',
+      account: { uid: 'owner', name: '내 계정', isOwner: true },
+      pinUpgradeRequired: true,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await loginWithPin('1234');
+
+    expect(sessionStorage.getItem('eb_session_account')).not.toContain('pinUpgradeRequired');
+    expect(consumePinUpgradeNotice()).toBe(true);
+    expect(consumePinUpgradeNotice()).toBe(false);
+  });
+
+  it('shows no upgrade notice after a 6-digit PIN login', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      token: 'session-token',
+      firebaseToken: 'firebase-token',
+      account: { uid: 'owner', name: '내 계정', isOwner: true },
+      pinUpgradeRequired: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await loginWithPin('123456');
+    expect(consumePinUpgradeNotice()).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import { auth } from '../lib/firebase';
 
 const SESSION_TOKEN_KEY = 'eb_session_token';
 const SESSION_ACCOUNT_KEY = 'eb_session_account';
+const PIN_UPGRADE_NOTICE_KEY = 'eb_pin_upgrade_notice';
 
 function availableStorage(kind: 'session' | 'local'): Storage | null {
   try {
@@ -33,6 +34,15 @@ function clearStoredSession() {
     storage?.removeItem(SESSION_TOKEN_KEY);
     storage?.removeItem(SESSION_ACCOUNT_KEY);
   }
+  availableStorage('session')?.removeItem(PIN_UPGRADE_NOTICE_KEY);
+}
+
+/** True once after a login with a PIN shorter than 6 digits, so the app can ask for a longer one. */
+export function consumePinUpgradeNotice(): boolean {
+  const storage = availableStorage('session');
+  if (storage?.getItem(PIN_UPGRADE_NOTICE_KEY) !== '1') return false;
+  storage.removeItem(PIN_UPGRADE_NOTICE_KEY);
+  return true;
 }
 
 export interface SignedInAccount {
@@ -129,6 +139,7 @@ export async function loginWithPin(pin: string, rememberLogin = false) {
   clearStoredSession();
   targetStorage.setItem(SESSION_TOKEN_KEY, data.token);
   targetStorage.setItem(SESSION_ACCOUNT_KEY, JSON.stringify(account));
+  if (data.pinUpgradeRequired === true) availableStorage('session')?.setItem(PIN_UPGRADE_NOTICE_KEY, '1');
   notifyAuthState();
   return account;
 }

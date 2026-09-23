@@ -2,8 +2,8 @@ import { pbkdf2Sync, randomBytes } from 'node:crypto';
 
 const pin = process.argv[2];
 
-if (!pin || !/^\d{4,12}$/.test(pin)) {
-  console.error('Usage: npm run pin:hash -- <4-12 digit PIN>');
+if (!pin || !/^\d{6,12}$/.test(pin)) {
+  console.error('Usage: npm run pin:hash -- <6-12 digit PIN>');
   process.exit(1);
 }
 

@@ -14,7 +14,7 @@
 npm run pin:hash -- 123456
 ```
 
-출력 전체를 운영 secret `APP_PIN_HASH`에 저장한다. 실제 PIN과 hash는 Git에 커밋하지 않는다.
+출력 전체를 운영 secret `APP_PIN_HASH`에 저장한다. 실제 PIN과 hash는 Git에 커밋하지 않는다. 해시 스크립트는 6~12자리 PIN만 받는다.
 
 배우자처럼 데이터를 완전히 분리할 추가 계정은 별도 PIN으로 생성한다.
 
@@ -26,11 +26,14 @@ npm run account:hash -- wife "와이프" 654321
 
 필수 환경변수:
 
-- `APP_PIN_HASH`: 위 명령으로 생성한 값
+- `APP_PIN_HASH`: 위 명령으로 생성한 값. `pbkdf2$`로 시작해야 한다
+- `APP_SESSION_SECRET`: 세션 서명 키. 32바이트 이상 임의 값(`openssl rand -base64 48`)
 - `OWNER_UID`: 기존 데이터 소유자 UID. 기본값은 `owner`
 - `OWNER_NAME`: 기존 계정에 표시할 이름. 기본값은 `내 계정`
 - `APP_ACCOUNTS_JSON`: 추가 계정의 `uid`, 표시 이름, PIN hash 배열
-- `APP_SESSION_SECRET`: 세션 서명용 긴 임의 문자열. 다중 계정 운영에서는 명시적으로 설정 권장
+- `APP_SESSION_SECRET_PREVIOUS`: 선택. 서명 키 교체 시 한 번의 배포 동안만 이전 키로 발급된 세션을 인정한다
+- `TRUST_PROXY_HOPS`: 선택. 클라이언트와 서버 사이 프록시 수. Cloud Run 기본값은 `1`이며, PIN 실패 제한이 실제 클라이언트 IP 기준으로 동작하게 한다
+- `PIN_MIN_LENGTH`: 선택. 기본값 `4`. 모든 계정의 PIN을 6자리 이상으로 교체한 뒤 `6`으로 올린다
 - `GEMINI_API_KEY`: AI 기능을 사용할 경우
 - `GEMINI_CLASSIFY_MODEL`: AI 문장 분류 모델. 기본값 `gemini-3.5-flash-lite`
 - `OPENAI_API_KEY`: GPT 라이브 음성을 사용할 경우. 브라우저 환경변수로 노출하지 않고 서버 secret으로만 등록
@@ -43,21 +46,27 @@ npm run account:hash -- wife "와이프" 654321
 
 Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 설정한다. 상세 절차는 [ANDROID.md](./ANDROID.md)를 따른다.
 
-`APP_ACCESS_KEY`는 기존 배포 호환용 임시 fallback이다. `APP_PIN_HASH` 확인 후 제거한다.
+`NODE_ENV=production`에서 `APP_SESSION_SECRET`이 없거나 32바이트 미만이거나, `APP_PIN_HASH`가 없거나 `pbkdf2$` 형식이 아니면 서버는 누락된 변수 이름을 로그에 남기고 기동하지 않는다. 평문 `APP_ACCESS_KEY`만 설정된 경우도 거부한다. `APP_ACCESS_KEY`가 남아 있으면 제거한다.
+
+**세션 서명 키 전환**: 이전 서버는 `APP_SESSION_SECRET`이 없으면 `APP_PIN_HASH`로 세션을 서명했다. 새 키를 넣으면 기존 세션이 모두 만료되므로 배포 후 재로그인을 안내한다. 재로그인을 피하려면 한 번의 배포 동안 `APP_SESSION_SECRET_PREVIOUS`에 이전 서명 값(기존 `APP_PIN_HASH`)을 넣고 다음 배포에서 제거한다.
+
+**PIN 대입 방어**: 실패 카운터는 Firestore `system/pinGuard`에 저장된다(IP는 해시로만 저장). IP마다 10분에 5회 실패하면 지수 지연(최대 15분)이 걸리고, 배포 전체에서 1시간에 30회 실패하면 15분간 모든 PIN 검증을 429로 거부한다. 전역 잠금이 걸리면 서버 로그에 `[ALERT] PIN brute-force lock engaged`가 남는다. 4~5자리 PIN으로 로그인하면 앱이 6자리 이상으로 교체하라고 안내한다.
 
 ## 2. 1차 배포 — 앱과 서버
 
 1. `storage.rules`를 운영 Storage에 배포한다. 영수증 원본은 이 규칙 없이는 저장되지 않아야 한다.
 2. 새 앱과 서버를 배포하되 Firestore rules는 아직 기존 상태로 둔다.
 3. 웹과 Android 앱에서 PIN으로 최초 로그인한다. `/api/auth/verify-key`가 API 세션 토큰과 Firebase custom token을 모두 반환해야 한다.
-4. 서버가 `/api/migration/ensure`를 실행하여 루트 컬렉션을 소유자 경로로 복사한다.
+4. 서버가 `/api/migration/ensure`를 실행하여 루트 컬렉션을 소유자 경로로 복사한다. 소유자 경로에 이미 있는 문서 ID는 덮어쓰지 않고 건너뛴다.
 5. `users/{OWNER_UID}/migrations/legacy-root-v1` 보고서가 생성됐는지 확인한다.
-6. 각 컬렉션의 `sourceCount`, `destinationCount`와 거래 `sourceAmountTotal`, `destinationAmountTotal`을 확인한다.
+6. 각 컬렉션의 `sourceCount`, `copied`, `skippedExisting`, `destinationCount`와 거래 `sourceAmountTotal`, `destinationAmountTotal`(새로 복사한 문서 기준)을 확인한다.
 7. `classificationIssues`의 거래·정기 항목 불일치 건수와 금액을 기록한다.
 8. 대시보드 월별 수입·지출, 계좌, 정기 항목을 기존 앱과 대조한다.
 9. 추가 계정 PIN으로 로그인해 빈 독립 가계부가 생성되고, 기존 소유자 데이터가 보이지 않는지 확인한다.
 
-마이그레이션은 원본을 삭제하지 않는다. 검증 실패 시 클라이언트는 데이터를 로드하지 않고 원본은 그대로 남는다.
+마이그레이션은 원본을 삭제하지 않고, 다시 실행돼도 소유자 경로의 기존 문서를 덮어쓰지 않는다.
+
+검증(누락 문서, 새로 복사한 거래의 금액 합계)에 실패하면 `/api/migration/ensure`가 500과 `failure` 상세를 반환하고, `users/{OWNER_UID}/migrations/legacy-root-v1-failed`에 원인·시각·컬렉션별 수치를 기록한다. 완료 마커 `legacy-root-v1`은 기록하지 않는다. 앱은 대시보드 대신 “기존 데이터 이전 검증에 실패했습니다” 안내와 `다시 시도` 버튼만 보여 주며, 이 상태에서는 기본 데이터를 만들거나 Firestore에 쓰지 않는다. Admin 자격 증명이 없어 마이그레이션을 실행할 수 없는 개발 환경에서는 `skipped: true`(`reason: admin_db_unavailable`)로 정상 진행한다.
 
 ## 3. 2차 배포 — Firestore rules
 
