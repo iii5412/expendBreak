@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Lock, KeyRound, ShieldCheck, AlertCircle, ArrowRight, Sparkles } from 'lucide-react';
+import { Lock, KeyRound, AlertCircle, ArrowRight, Sparkles } from 'lucide-react';
 import { loginWithPin, PinLoginError } from '../utils/auth';
+import { Modal } from './ui/Modal';
 
 interface AppLockModalProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
   onUnlockSuccess,
 }) => {
   const [enteredPin, setEnteredPin] = useState('');
+  const [rememberLogin, setRememberLogin] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
@@ -26,7 +28,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
     setErrorMsg(null);
 
     try {
-      await loginWithPin(pinToTest);
+      await loginWithPin(pinToTest, rememberLogin);
       setEnteredPin('');
       await onUnlockSuccess();
     } catch (err) {
@@ -45,8 +47,14 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-sm p-6 text-center space-y-5 shadow-2xl relative overflow-hidden">
+    <Modal
+      isOpen
+      onClose={() => undefined}
+      dismissOnBackdrop={false}
+      ariaLabel="내 가계부 계정 로그인"
+      backdropClassName="app-modal-backdrop fixed inset-0 z-50 flex justify-center bg-slate-950/90 px-4 backdrop-blur-md"
+      panelClassName="relative w-full max-w-sm space-y-5 overflow-x-hidden overflow-y-auto rounded-3xl border border-slate-800 bg-slate-900 p-6 text-center shadow-2xl"
+    >
         {/* Subtle Ambient Shield Pattern */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
 
@@ -84,6 +92,19 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
             <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2.5 text-left">
+            <input
+              type="checkbox"
+              checked={rememberLogin}
+              onChange={event => setRememberLogin(event.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500"
+            />
+            <span className="space-y-0.5">
+              <span className="block text-xs font-bold text-slate-200">이 기기에서 로그인 유지</span>
+              <span className="block text-[11px] leading-relaxed text-slate-500">최대 30일 동안 유지하며 PIN 자체는 저장하지 않습니다.</span>
+            </span>
+          </label>
+
           {errorMsg && (
             <div
               role="alert"
@@ -114,7 +135,6 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
           <Sparkles className="w-3 h-3 text-amber-400" />
           <span>계정별 PIN과 가계부 데이터는 서로 분리됩니다.</span>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };

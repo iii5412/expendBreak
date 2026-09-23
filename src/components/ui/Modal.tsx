@@ -50,8 +50,10 @@ export const Modal: React.FC<ModalProps> = ({
     if (!isOpen) return;
 
     previouslyFocused.current = document.activeElement as HTMLElement | null;
-    const { overflow } = document.body.style;
+    const bodyOverflow = document.body.style.overflow;
+    const rootOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
 
     const focusFirst = () => {
       const panel = panelRef.current;
@@ -96,7 +98,8 @@ export const Modal: React.FC<ModalProps> = ({
     return () => {
       window.clearTimeout(focusTimer);
       document.removeEventListener('keydown', handleKeyDown, true);
-      document.body.style.overflow = overflow;
+      document.body.style.overflow = bodyOverflow;
+      document.documentElement.style.overflow = rootOverflow;
       previouslyFocused.current?.focus?.();
     };
   }, [isOpen]);

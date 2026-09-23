@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('firebase/auth', () => ({
-  signInWithCustomToken: vi.fn(),
-  signOut: vi.fn(),
+  browserLocalPersistence: { type: 'LOCAL' },
+  browserSessionPersistence: { type: 'SESSION' },
+  setPersistence: vi.fn().mockResolvedValue(undefined),
+  signInWithCustomToken: vi.fn().mockResolvedValue(undefined),
+  signOut: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../lib/firebase', () => ({ auth: {} }));
 
-import { getAccountStorageKey, getSignedInAccount } from './auth';
+import { setPersistence } from 'firebase/auth';
+import { getAccountStorageKey, getSignedInAccount, isOwnerLoggedIn, loginWithPin, logoutOwner } from './auth';
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -23,6 +27,8 @@ class MemoryStorage {
 describe('account-scoped browser storage', () => {
   beforeEach(() => {
     vi.stubGlobal('sessionStorage', new MemoryStorage());
+    vi.stubGlobal('localStorage', new MemoryStorage());
+    vi.clearAllMocks();
   });
 
   it('keeps the original owner cache keys backward compatible', () => {
@@ -50,5 +56,25 @@ describe('account-scoped browser storage', () => {
     }));
 
     expect(getAccountStorageKey('brake_transactions')).toBe('brake_transactions:wife');
+  });
+
+  it('keeps a remembered session in persistent storage without saving the PIN', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      token: 'session-token',
+      firebaseToken: 'firebase-token',
+      account: { uid: 'owner', name: '내 계정', isOwner: true },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await loginWithPin('1234', true);
+
+    expect(setPersistence).toHaveBeenCalledWith({}, { type: 'LOCAL' });
+    expect(localStorage.getItem('eb_session_token')).toBe('session-token');
+    expect(localStorage.getItem('eb_session_account')).toContain('owner');
+    expect(localStorage.getItem('pin')).toBeNull();
+    expect(sessionStorage.getItem('eb_session_token')).toBeNull();
+    expect(isOwnerLoggedIn()).toBe(true);
+
+    await logoutOwner();
+    expect(isOwnerLoggedIn()).toBe(false);
   });
 });

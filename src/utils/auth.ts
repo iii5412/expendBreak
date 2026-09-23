@@ -1,9 +1,39 @@
 import { apiUrl } from './api';
-import { signInWithCustomToken, signOut } from 'firebase/auth';
+import {
+  browserLocalPersistence,
+  browserSessionPersistence,
+  setPersistence,
+  signInWithCustomToken,
+  signOut,
+} from 'firebase/auth';
 import { auth } from '../lib/firebase';
 
 const SESSION_TOKEN_KEY = 'eb_session_token';
 const SESSION_ACCOUNT_KEY = 'eb_session_account';
+
+function availableStorage(kind: 'session' | 'local'): Storage | null {
+  try {
+    if (kind === 'session') {
+      return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+    }
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredValue(key: string): string | null {
+  return availableStorage('session')?.getItem(key)
+    || availableStorage('local')?.getItem(key)
+    || null;
+}
+
+function clearStoredSession() {
+  for (const storage of [availableStorage('session'), availableStorage('local')]) {
+    storage?.removeItem(SESSION_TOKEN_KEY);
+    storage?.removeItem(SESSION_ACCOUNT_KEY);
+  }
+}
 
 export interface SignedInAccount {
   uid: string;
@@ -33,12 +63,12 @@ function notifyAuthState() {
 }
 
 export function isOwnerLoggedIn(): boolean {
-  return Boolean(sessionStorage.getItem(SESSION_TOKEN_KEY));
+  return Boolean(readStoredValue(SESSION_TOKEN_KEY));
 }
 
 export function getSignedInAccount(): SignedInAccount {
   try {
-    const raw = sessionStorage.getItem(SESSION_ACCOUNT_KEY);
+    const raw = readStoredValue(SESSION_ACCOUNT_KEY);
     if (raw) {
       const account = JSON.parse(raw) as Partial<SignedInAccount>;
       if (account.uid && /^[A-Za-z0-9._-]{1,64}$/.test(account.uid)) {
@@ -61,7 +91,7 @@ export function getAccountStorageKey(baseKey: string): string {
   return isOwner && uid === 'owner' ? baseKey : `${baseKey}:${uid}`;
 }
 
-export async function loginWithPin(pin: string) {
+export async function loginWithPin(pin: string, rememberLogin = false) {
   const response = await fetch(apiUrl('/api/auth/verify-key'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -80,6 +110,7 @@ export async function loginWithPin(pin: string) {
     throw error;
   }
 
+  await setPersistence(auth, rememberLogin ? browserLocalPersistence : browserSessionPersistence);
   await signInWithCustomToken(auth, data.firebaseToken);
   const account: SignedInAccount = {
     uid: String(data.account.uid),
@@ -90,14 +121,20 @@ export async function loginWithPin(pin: string) {
     await signOut(auth).catch(() => undefined);
     throw new Error('서버에서 올바르지 않은 계정 정보를 받았습니다.');
   }
-  sessionStorage.setItem(SESSION_TOKEN_KEY, data.token);
-  sessionStorage.setItem(SESSION_ACCOUNT_KEY, JSON.stringify(account));
+  const targetStorage = availableStorage(rememberLogin ? 'local' : 'session');
+  if (!targetStorage) {
+    await signOut(auth).catch(() => undefined);
+    throw new Error('이 기기에서 로그인 세션을 저장할 수 없습니다.');
+  }
+  clearStoredSession();
+  targetStorage.setItem(SESSION_TOKEN_KEY, data.token);
+  targetStorage.setItem(SESSION_ACCOUNT_KEY, JSON.stringify(account));
   notifyAuthState();
   return account;
 }
 
 export async function getOwnerIdToken() {
-  const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  const token = readStoredValue(SESSION_TOKEN_KEY);
   if (!token) throw new Error('PIN 로그인이 필요합니다.');
   return token;
 }
@@ -111,8 +148,7 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
 }
 
 export async function logoutOwner() {
-  sessionStorage.removeItem(SESSION_TOKEN_KEY);
-  sessionStorage.removeItem(SESSION_ACCOUNT_KEY);
+  clearStoredSession();
   await signOut(auth).catch(() => undefined);
   notifyAuthState();
 }

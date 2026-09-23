@@ -5,6 +5,7 @@ import { DashboardView } from '../components/DashboardView';
 import { HistoryView } from '../components/HistoryView';
 import { FeedbackProvider } from '../components/ui/FeedbackProvider';
 import { Modal } from '../components/ui/Modal';
+import { AppLockModal } from '../components/AppLockModal';
 import { calculateMonthSummary, getAccountingPeriod } from './calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './cardPayments';
 import type { Transaction } from '../types';
@@ -41,5 +42,12 @@ describe('audit UI rendering', () => {
   expect(html).toContain('app-modal-backdrop');
   expect(html).toContain('data-eb-modal-panel');
   expect(html).not.toContain('items-center justify-center p-4');
+ });
+ it('offers persistent login without claiming to save the PIN', () => {
+  const html=renderToStaticMarkup(<AppLockModal isOpen onUnlockSuccess={noop}/>);
+  expect(html).toContain('이 기기에서 로그인 유지');
+  expect(html).toContain('PIN 자체는 저장하지 않습니다');
+  expect(html).toContain('type="checkbox"');
+  expect(html).toContain('checked=""');
  });
 });
