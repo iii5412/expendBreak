@@ -89,7 +89,14 @@ import {
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
 import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, QuickEntry, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
-import { consumePinUpgradeNotice, getSignedInAccount, logoutOwner, onSessionStateChanged } from './utils/auth';
+import {
+  consumePinUpgradeNotice,
+  getSignedInAccount,
+  logoutOwner,
+  onSessionExpired,
+  onSessionStateChanged,
+  watchFirebaseSession,
+} from './utils/auth';
 import { LegacyMigrationFailedError } from './utils/migrationStatus';
 import { MigrationFailedScreen } from './components/MigrationFailedScreen';
 import { startNetworkWatch } from './utils/syncStatus';
@@ -168,6 +175,7 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [bootState, setBootState] = useState<BootState>('checking');
+  const [lockNotice, setLockNotice] = useState<string | null>(null);
 
   // App Reactive State
   const [currentYM, setCurrentYM] = useState<string>(getYearMonthString());
@@ -571,6 +579,16 @@ export default function App() {
     setUserProfile(INITIAL_USER_PROFILE);
     setBootState('locked');
   };
+
+  // A 401 from any API call, or a Firebase sign-out the app did not ask for,
+  // ends the session: lock like the lock button does and ask for the PIN again.
+  const handleLockRef = useRef(handleLock);
+  handleLockRef.current = handleLock;
+  useEffect(() => watchFirebaseSession(), []);
+  useEffect(() => onSessionExpired(() => {
+    setLockNotice('로그인이 만료되었거나 다른 기기에서 로그아웃되었습니다. PIN을 다시 입력한 뒤 하던 작업을 다시 시도해 주세요.');
+    void handleLockRef.current();
+  }), []);
 
   const handleEnableTransactionAi = async () => {
     if (userProfile.aiClassificationEnabled) return true;
@@ -1453,7 +1471,16 @@ export default function App() {
   }
 
   if (bootState === 'locked') {
-    return <AppLockModal isOpen onUnlockSuccess={handleUnlockSuccess} />;
+    return (
+      <AppLockModal
+        isOpen
+        notice={lockNotice}
+        onUnlockSuccess={async () => {
+          setLockNotice(null);
+          await handleUnlockSuccess();
+        }}
+      />
+    );
   }
 
   return (

@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAuthRouter } from './authRoutes';
 import { applySecurityBaseline } from './httpSecurity';
 import { createMemoryPinGuardStore, createPinGuard, PIN_GUARD_LIMITS } from './pinGuard';
+import { createRequireAccount } from './requireAccount';
+import { createSessionToken, verifySessionToken } from './session';
+import { createMemorySessionEpochStore, createSessionEpochs } from './sessionEpochs';
 import { listen } from './testServer';
 
 // Plain secrets keep these tests fast; PBKDF2 verification is covered by checkPinAgainstSecret.
@@ -17,12 +20,20 @@ afterEach(async () => {
   running = null;
 });
 
-async function start(options: { minPinLength?: number; issueSession?: any } = {}) {
+const secrets = { current: 's'.repeat(48) };
+
+type Epochs = ReturnType<typeof createSessionEpochs>;
+
+async function start(options: { minPinLength?: number; issueSession?: any; epochs?: Epochs } = {}) {
   const guard = createPinGuard({ store: createMemoryPinGuardStore() });
+  const epochs = options.epochs ?? createSessionEpochs({ store: createMemorySessionEpochStore() });
   const issueSession = options.issueSession ?? vi.fn(async (account: { uid: string }) => ({
     token: `session-${account.uid}`,
     firebaseToken: `firebase-${account.uid}`,
   }));
+  const revokeSessions = vi.fn(async (uid: string) => {
+    await epochs.revoke(uid);
+  });
   const app = express();
   applySecurityBaseline(app, { production: true, trustProxyHops: 1 });
   app.use('/api/auth', createAuthRouter({
@@ -30,14 +41,21 @@ async function start(options: { minPinLength?: number; issueSession?: any } = {}
     guard,
     minPinLength: options.minPinLength ?? 4,
     issueSession,
+    requireAccount: createRequireAccount({ secrets, accountUids: new Set(accounts.map(account => account.uid)), epochs }),
+    revokeSessions,
   }));
   running = await listen(app);
-  const login = (key: string, ip = '198.51.100.1') => fetch(running!.url('/api/auth/verify-key'), {
+  const login = (key: string, ip = '198.51.100.1', remember?: boolean) => fetch(running!.url('/api/auth/verify-key'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
-    body: JSON.stringify({ key }),
+    body: JSON.stringify({ key, remember }),
   });
-  return { login, issueSession };
+  const revokeOthers = (token: string, remember = true) => fetch(running!.url('/api/auth/revoke-others'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ remember }),
+  });
+  return { login, revokeOthers, issueSession, revokeSessions, epochs };
 }
 
 describe('POST /api/auth/verify-key', () => {
@@ -97,5 +115,48 @@ describe('POST /api/auth/verify-key', () => {
     const response = await login('654321');
     expect(response.status).toBe(500);
     expect(JSON.stringify(await response.json())).not.toContain('admin down');
+  });
+});
+
+describe('session lifetime', () => {
+  it('passes the "remember" choice to the session issuer', async () => {
+    const { login, issueSession } = await start();
+    await login('654321', '198.51.100.1', true);
+    await login('654321', '198.51.100.1');
+    expect(issueSession.mock.calls.map((call: any[]) => call[1])).toEqual([{ remember: true }, { remember: false }]);
+  });
+});
+
+describe('POST /api/auth/revoke-others', () => {
+  // Issues real tokens under the account's current epoch, like server.ts does.
+  async function startWithRealTokens() {
+    const epochs = createSessionEpochs({ store: createMemorySessionEpochStore() });
+    const issueSession = vi.fn(async (account: { uid: string }) => ({
+      token: createSessionToken(account.uid, await epochs.fresh(account.uid), secrets),
+      firebaseToken: `firebase-${account.uid}`,
+    }));
+    return start({ issueSession, epochs });
+  }
+
+  it('revokes older sessions and hands this device a new one', async () => {
+    const { revokeOthers, revokeSessions } = await startWithRealTokens();
+    const oldToken = createSessionToken('wife', 0, secrets);
+
+    const response = await revokeOthers(oldToken);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(revokeSessions).toHaveBeenCalledWith('wife');
+    expect(body.firebaseToken).toBe('firebase-wife');
+    expect(verifySessionToken(body.token, secrets)).toMatchObject({ ok: true, uid: 'wife', epoch: 1 });
+
+    const reused = await revokeOthers(oldToken);
+    expect(reused.status).toBe(401);
+    expect(await reused.json()).toEqual({ error: 'session_revoked' });
+  });
+
+  it('requires a session', async () => {
+    const { revokeOthers, revokeSessions } = await start();
+    expect((await revokeOthers('garbage')).status).toBe(401);
+    expect(revokeSessions).not.toHaveBeenCalled();
   });
 });

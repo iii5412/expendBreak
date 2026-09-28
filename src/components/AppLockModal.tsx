@@ -5,11 +5,14 @@ import { Modal } from './ui/Modal';
 
 interface AppLockModalProps {
   isOpen: boolean;
+  /** Why the app locked on its own, e.g. an expired or revoked session. */
+  notice?: string | null;
   onUnlockSuccess: () => Promise<void> | void;
 }
 
 export const AppLockModal: React.FC<AppLockModalProps> = ({
   isOpen,
+  notice,
   onUnlockSuccess,
 }) => {
   const [enteredPin, setEnteredPin] = useState('');
@@ -71,6 +74,12 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
           </p>
         </div>
 
+        {notice && (
+          <p role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-left text-xs leading-relaxed text-amber-200">
+            {notice}
+          </p>
+        )}
+
         <form onSubmit={handleVerify} className="space-y-3 pt-2">
           <div className="relative">
             <input
@@ -101,7 +110,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
             />
             <span className="space-y-0.5">
               <span className="block text-xs font-bold text-slate-200">이 기기에서 로그인 유지</span>
-              <span className="block text-[11px] leading-relaxed text-slate-500">최대 30일 동안 유지하며 PIN 자체는 저장하지 않습니다.</span>
+              <span className="block text-[11px] leading-relaxed text-slate-500">최대 30일 동안 유지합니다. 끄면 12시간 뒤 또는 앱을 닫을 때 로그아웃됩니다. PIN 자체는 저장하지 않습니다.</span>
             </span>
           </label>
 

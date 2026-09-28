@@ -110,6 +110,21 @@ Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 �
 - 다른 UID 또는 로그아웃 상태에서 영수증 Storage 경로의 읽기·쓰기·목록 조회가 거부된다.
 - 전체 초기화는 운영 백업을 확인하기 전 사용하지 않는다.
 
+- “로그인 유지”를 끄고 로그인하면 12시간 뒤, 켜면 30일 뒤 AI 요청이 401을 받고 앱이 잠금 화면으로 돌아간다.
+
+### 4-1. 세션 폐기 (2026-09-28 이후)
+
+API 세션 토큰은 `v2:uid:epoch:만료:서명` 형식이다. 계정의 현재 epoch는 Firestore `sessionEpochs/{uid}`(클라이언트 접근 불가, 기본 거부 규칙에 포함)에 있다.
+
+- 기기 분실 등으로 한 계정의 모든 세션을 끊으려면 Admin 자격 증명이 있는 곳에서 실행한다.
+  ```bash
+  npm run session:revoke -- owner
+  ```
+  epoch가 1 오르고 Firebase refresh token이 폐기된다. 서버는 epoch를 60초 캐시하므로 AI 요청은 1분 안에, Firestore 동기화는 기존 ID 토큰이 끝나는 1시간 안에 끊긴다.
+- 사용자는 관리 화면 “PIN 로그인 보안” 카드의 “다른 기기에서 모두 로그아웃”으로 같은 일을 할 수 있다. 현재 기기는 새 세션을 받아 로그인 상태를 유지한다.
+- 서버 오류 코드: 토큰 없음 `session_missing`, 서명 불일치 `session_invalid`, 만료 `session_expired`, 폐기 `session_revoked`는 모두 401이다. 계정 목록에 없는 uid만 403 `account_unknown`이다. epoch를 읽을 수 없고 캐시도 없으면 503을 반환한다.
+- 이전 형식(`uid:만료:서명`) 토큰은 이번 배포 동안만 epoch 0으로 인정한다. **다음 배포에서 `src/server/session.ts`의 legacy 분기를 제거한다.**
+
 ## 5. 롤백
 
 1. 문제가 생기면 강화된 rules와 앱을 직전 버전으로 되돌린다.

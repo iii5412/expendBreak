@@ -24,7 +24,13 @@ import { createAuthRouter } from './src/server/authRoutes';
 import { applySecurityBaseline, largeJsonBody, resolveTrustProxyHops } from './src/server/httpSecurity';
 import { createMigrationHandler, ensureLegacyDataMigration } from './src/server/legacyMigration';
 import { createFirestorePinGuardStore, createMemoryPinGuardStore, createPinGuard } from './src/server/pinGuard';
-import { createSessionToken, verifySessionToken } from './src/server/session';
+import { createRequireAccount } from './src/server/requireAccount';
+import { createSessionToken, sessionTtlMs } from './src/server/session';
+import {
+  createFirestoreSessionEpochStore,
+  createMemorySessionEpochStore,
+  createSessionEpochs,
+} from './src/server/sessionEpochs';
 
 dotenv.config();
 assertProductionConfig(process.env, { exit: code => process.exit(code), log: console.error });
@@ -89,25 +95,26 @@ if (resolveOwnerPinSecret(process.env).usingDevDefault) console.warn('No PIN con
 const CONFIGURED_ACCOUNTS = loadConfiguredAccounts(process.env, OWNER_UID);
 const CONFIGURED_ACCOUNT_UIDS = new Set(CONFIGURED_ACCOUNTS.map(account => account.uid));
 
-async function requireAccount(req: express.Request, res: express.Response, next: express.NextFunction) {
-  try {
-    const authorization = req.headers.authorization || '';
-    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+// Without Google credentials the Admin SDK leaks unhandled rejections that crash
+// the process, so local development without credentials keeps PIN counters and
+// session epochs in memory.
+const hasAdminCredentials = process.env.NODE_ENV === 'production' || Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+if (!hasAdminCredentials) console.warn('No Google credentials in development: PIN failure counters and session epochs stay in memory and the legacy migration is skipped.');
 
-    const uid = verifySessionToken(token, SESSION_SECRETS);
-    if (!uid || !CONFIGURED_ACCOUNT_UIDS.has(uid)) {
-      return res.status(403).json({ error: 'Forbidden' });
+const sessionEpochs = createSessionEpochs({
+  store: hasAdminCredentials
+    ? {
+      read: uid => createFirestoreSessionEpochStore(getAdminServices().adminDb).read(uid),
+      increment: uid => createFirestoreSessionEpochStore(getAdminServices().adminDb).increment(uid),
     }
+    : createMemorySessionEpochStore(),
+});
 
-    res.locals.userUid = uid;
-    res.locals.ownerUid = uid;
-    return next();
-  } catch (error) {
-    console.error('Owner authentication failed:', error instanceof Error ? error.message : error);
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-}
+const requireAccount = createRequireAccount({
+  secrets: SESSION_SECRETS,
+  accountUids: CONFIGURED_ACCOUNT_UIDS,
+  epochs: sessionEpochs,
+});
 
 // Gemini endpoints require an app account session, never the raw PIN.
 app.use('/api/ai/*', requireAccount);
@@ -300,10 +307,6 @@ app.get('/api/auth/status', (req, res) => {
   return res.json({ isPinConfigured, accountCount: CONFIGURED_ACCOUNTS.length });
 });
 
-// Without Google credentials the Admin SDK leaks unhandled rejections that crash
-// the process, so local development without credentials keeps counters in memory.
-const hasAdminCredentials = process.env.NODE_ENV === 'production' || Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
-if (!hasAdminCredentials) console.warn('No Google credentials in development: PIN failure counters stay in memory and the legacy migration is skipped.');
 const pinGuard = createPinGuard({
   store: hasAdminCredentials
     // Resolved per call so a failing Firestore call falls back to in-memory counters.
@@ -319,10 +322,17 @@ app.use('/api/auth', createAuthRouter({
   accounts: CONFIGURED_ACCOUNTS,
   guard: pinGuard,
   minPinLength: resolvePinMinLength(process.env),
-  issueSession: async account => ({
-    token: createSessionToken(account.uid, SESSION_SECRETS),
+  requireAccount,
+  issueSession: async (account, { remember }) => ({
+    token: createSessionToken(account.uid, await sessionEpochs.fresh(account.uid), SESSION_SECRETS, {
+      ttlMs: sessionTtlMs(remember),
+    }),
     firebaseToken: await getAdminServices().adminAuth.createCustomToken(account.uid),
   }),
+  revokeSessions: async uid => {
+    await sessionEpochs.revoke(uid);
+    if (hasAdminCredentials) await getAdminServices().adminAuth.revokeRefreshTokens(uid);
+  },
 }));
 
 // Copies existing global collections into the fixed owner path. It never deletes the source data.

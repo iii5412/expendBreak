@@ -54,7 +54,7 @@ import {
   getYearMonthForDate,
 } from '../utils/calculations';
 import { getActivePaydaySchedule, periodBoundsFor, planPaydayChange } from '../utils/paydaySchedule';
-import { authenticatedFetch } from '../utils/auth';
+import { authenticatedFetch, revokeOtherSessions } from '../utils/auth';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { Modal } from './ui/Modal';
@@ -416,6 +416,30 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     if (!accepted) return;
     onDeleteRecurringTemplate?.(id);
     showToast({ message: `'${name}' 원본 항목을 삭제했습니다.`, description: '기존 월 계획은 새로 불러오기 전까지 유지됩니다.', tone: 'info' });
+  };
+
+  const [isRevokingSessions, setIsRevokingSessions] = useState(false);
+  const handleRevokeOtherSessions = async () => {
+    const accepted = await confirm({
+      title: '다른 기기에서 모두 로그아웃할까요?',
+      description: '이 계정으로 로그인한 다른 기기는 1분 안에 AI 기능이, 1시간 안에 가계부 동기화가 끊기고 PIN을 다시 물어봅니다. 이 기기는 로그인 상태를 유지합니다.',
+      confirmLabel: '모두 로그아웃',
+      tone: 'danger',
+    });
+    if (!accepted) return;
+    setIsRevokingSessions(true);
+    try {
+      await revokeOtherSessions();
+      triggerToast('다른 기기의 로그인을 모두 해제했습니다.');
+    } catch (error) {
+      showToast({
+        message: '다른 기기 로그아웃에 실패했습니다.',
+        description: error instanceof Error ? error.message : undefined,
+        tone: 'error',
+      });
+    } finally {
+      setIsRevokingSessions(false);
+    }
   };
 
   const handleSaveBudgetLimit = async () => {
@@ -1576,6 +1600,23 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 aria-label="잠글 때 기기 데이터 삭제"
               />
             </label>
+
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <span className="min-w-0">
+                <span className="block font-bold text-slate-200">다른 기기에서 모두 로그아웃</span>
+                <span className="block text-xs text-slate-400">
+                  휴대폰을 잃어버렸거나 다른 기기의 로그인 유지를 끊고 싶을 때 사용합니다.
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleRevokeOtherSessions()}
+                disabled={isRevokingSessions}
+                className="shrink-0 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
+              >
+                {isRevokingSessions ? '처리 중...' : '모두 로그아웃'}
+              </button>
+            </div>
 
             <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 text-xs text-slate-400 space-y-1">
               <span className="font-bold text-emerald-300 block">계정 및 PIN 설정 방법</span>

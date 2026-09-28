@@ -2,6 +2,7 @@ import { apiUrl } from './api';
 import {
   browserLocalPersistence,
   browserSessionPersistence,
+  onAuthStateChanged,
   setPersistence,
   signInWithCustomToken,
   signOut,
@@ -67,6 +68,45 @@ export function onSessionStateChanged(listener: AuthStateListener): () => void {
   };
 }
 
+/**
+ * Fired when the server rejects the session (401) or Firebase signs the user
+ * out on its own, e.g. after `session:revoke`. The app answers by locking; the
+ * interrupted request is never retried automatically, so an AI call cannot run twice.
+ */
+type SessionExpiredListener = () => void;
+const expiredListeners = new Set<SessionExpiredListener>();
+let expiryReported = false;
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  expiredListeners.add(listener);
+  return () => {
+    expiredListeners.delete(listener);
+  };
+}
+
+function reportSessionExpired() {
+  // Several requests in flight can all fail at once; the app needs one signal.
+  if (expiryReported || !isOwnerLoggedIn()) return;
+  expiryReported = true;
+  expiredListeners.forEach(fn => fn());
+}
+
+/**
+ * Revoked Firebase refresh tokens stop working when the current ID token
+ * expires (at most an hour); the SDK then signs out, which also ends the
+ * Firestore listeners. A sign-out the app did not ask for means the session is over.
+ */
+export function watchFirebaseSession(): () => void {
+  let hadUser = false;
+  return onAuthStateChanged(auth, user => {
+    if (user) {
+      hadUser = true;
+      return;
+    }
+    if (hadUser) reportSessionExpired();
+  });
+}
+
 function notifyAuthState() {
   const loggedIn = isOwnerLoggedIn();
   listeners.forEach(fn => fn(loggedIn));
@@ -105,7 +145,7 @@ export async function loginWithPin(pin: string, rememberLogin = false) {
   const response = await fetch(apiUrl('/api/auth/verify-key'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key: pin }),
+    body: JSON.stringify({ key: pin, remember: rememberLogin }),
   });
   const data = await response.json().catch(() => ({}));
 
@@ -140,6 +180,7 @@ export async function loginWithPin(pin: string, rememberLogin = false) {
   targetStorage.setItem(SESSION_TOKEN_KEY, data.token);
   targetStorage.setItem(SESSION_ACCOUNT_KEY, JSON.stringify(account));
   if (data.pinUpgradeRequired === true) availableStorage('session')?.setItem(PIN_UPGRADE_NOTICE_KEY, '1');
+  expiryReported = false;
   notifyAuthState();
   return account;
 }
@@ -155,7 +196,30 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token}`);
   const target = typeof input === 'string' && input.startsWith('/') ? apiUrl(input) : input;
-  return fetch(target, { ...init, headers });
+  const response = await fetch(target, { ...init, headers });
+  // Every session problem is a 401 (session_missing/invalid/expired/revoked).
+  if (response.status === 401) reportSessionExpired();
+  return response;
+}
+
+/**
+ * Signs every other device out. The server revokes this device's tokens too,
+ * so it swaps in the fresh API and Firebase sessions it gets back, keeping the
+ * current "로그인 유지" choice.
+ */
+export async function revokeOtherSessions(): Promise<void> {
+  const remember = Boolean(availableStorage('local')?.getItem(SESSION_TOKEN_KEY));
+  const response = await authenticatedFetch('/api/auth/revoke-others', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remember }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.token || !data.firebaseToken) {
+    throw new Error(data.message || '다른 기기 로그아웃을 처리하지 못했습니다.');
+  }
+  await signInWithCustomToken(auth, data.firebaseToken);
+  availableStorage(remember ? 'local' : 'session')?.setItem(SESSION_TOKEN_KEY, data.token);
 }
 
 export async function logoutOwner() {

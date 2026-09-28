@@ -282,9 +282,6 @@ export const VoiceInputPanel: React.FC<VoiceInputPanelProps> = ({
         }),
       });
 
-      if (response.status === 401) {
-        throw new Error('인증이 만료되었습니다. 다시 로그인 해주세요.');
-      }
       if (response.status === 429) {
         throw new Error('요청 제한을 초과했습니다. 잠시 후 다시 시도해주세요.');
       }

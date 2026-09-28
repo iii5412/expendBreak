@@ -16,7 +16,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "pin:hash": "node scripts/hash-pin.mjs",
-    "account:hash": "node scripts/hash-account.mjs"
+    "account:hash": "node scripts/hash-account.mjs",
+    "session:revoke": "node scripts/revoke-session.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.0.0",
