@@ -5,7 +5,7 @@
 - 우선순위: P1
 - 예상 규모: 1일
 - 선행 작업: [T1](./PRD-T1-auth-hardening.md) (서명 키 분리)
-- 관련 문서: [개선사항 인덱스](./PRD-2026-09-23-improvements-index.md)
+- 관련 문서: [개선사항 인덱스](../PRD-2026-09-23-improvements-index.md)
 
 ## 1. 배경
 

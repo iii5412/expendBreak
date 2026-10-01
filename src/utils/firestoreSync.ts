@@ -11,7 +11,7 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
+import { db } from '../lib/firestore';
 import {
   BankAccount,
   PaymentCard,
@@ -28,210 +28,71 @@ import {
 } from '../types';
 import { AmountConflictError, isAmountConflict } from './amountOperations';
 import {
-  PendingWriteSummary,
   registerOutboxFlusher,
   reportPendingCount,
   reportWriteFailed,
   reportWriteStarted,
   reportWriteSucceeded,
-  resetSyncStatus,
 } from './syncStatus';
-import {
-  describeFirestoreWriteError,
-  sanitizeUserProfileForFirestore,
-  stripUndefined,
-} from './firestorePayload';
+import { describeFirestoreWriteError, sanitizeUserProfileForFirestore, stripUndefined } from './firestorePayload';
 import { mergeFetchedHistory, mergeTransactionWindow } from './transactionWindow';
 import { getAccountStorageKey, getSignedInAccount } from './auth';
-import { registerCacheEvictor, safeSetItem, strictSetItem } from './safeStorage';
-import { overlayDocument, overlayList, overlayMap, pendingChangesFor, type OverlayEntry } from './outboxOverlay';
+import { safeSetItem } from './safeStorage';
+import { overlayDocument, overlayList, overlayMap } from './outboxOverlay';
 import { stripReceiptBulk, toCloudTransactionWrite } from './receiptCache';
+import {
+  ACCOUNT_KEYS,
+  COLLECTION_AMOUNT_CHANGES,
+  COLLECTION_APP_SETTINGS,
+  COLLECTION_BANK_ACCOUNTS,
+  COLLECTION_BUDGETS,
+  COLLECTION_CATEGORIES,
+  COLLECTION_CYCLE_BASELINES,
+  COLLECTION_MERCHANT_RULES,
+  COLLECTION_PAYMENT_CARDS,
+  COLLECTION_QUICK_ENTRIES,
+  COLLECTION_RECURRING_OCCURRENCES,
+  COLLECTION_RECURRING_TEMPLATES,
+  COLLECTION_TRANSACTIONS,
+  DOC_GLOBAL_SETTINGS,
+  enqueueFirestoreWrite,
+  getLiveTransactionWindowStart,
+  getLoadedTransactionHistoryFloor,
+  pendingChanges,
+  readFirestoreOutbox,
+  readHistoryFloor,
+  recordFirestoreWriteError,
+  recordSyncConflict,
+  removeFirestoreWrite,
+  setLiveTransactionWindowStart,
+  writeFirestoreOutbox,
+  type ConditionalDocumentWrite,
+  type PendingFirestoreWrite,
+} from './firestoreOutbox';
+import * as writes from './firestoreWrites';
+import { normalizeBudget } from './firestoreWrites';
+import type { WriteSpec } from './firestoreWrites';
 
-const COLLECTION_APP_SETTINGS = 'appSettings';
-const DOC_GLOBAL_SETTINGS = 'global';
-const COLLECTION_TRANSACTIONS = 'transactions';
-const COLLECTION_CATEGORIES = 'categories';
-const COLLECTION_BUDGETS = 'budgets';
-const COLLECTION_RECURRING_TEMPLATES = 'recurringTemplates';
-const COLLECTION_RECURRING_OCCURRENCES = 'recurringOccurrences';
-const COLLECTION_MERCHANT_RULES = 'merchantRules';
-const COLLECTION_BANK_ACCOUNTS = 'bankAccounts';
-const COLLECTION_PAYMENT_CARDS = 'paymentCards';
-const COLLECTION_CYCLE_BASELINES = 'cycleBaselines';
-const COLLECTION_QUICK_ENTRIES = 'quickEntries';
-const COLLECTION_AMOUNT_CHANGES = 'amountChanges';
-const ACCOUNT_KEYS = {
-  get firestoreOutbox() { return getAccountStorageKey('brake_firestore_outbox'); },
-  get transactionHistoryFloor() { return getAccountStorageKey('brake_transaction_history_floor'); },
-  get syncConflicts() { return getAccountStorageKey('brake_sync_conflicts'); },
-};
-
-/** One document touched by a conditional (revision-checked) operation. */
-export interface ConditionalDocumentWrite {
-  collectionName: string;
-  documentId: string;
-  /** Omitted for a delete. */
-  data?: Record<string, unknown>;
-  /** Revision the operation was built on; 0 also means "must not exist". */
-  expectedRevision: number;
-  remove?: boolean;
-}
-
-/** An operation the server refused because a document moved underneath it. */
-export interface SyncConflict {
-  operationId: string;
-  documents: ConditionalDocumentWrite[];
-  changeRecord?: AmountChangeRecord;
-  queuedAt: string;
-  conflictedAt: string;
-  message: string;
-}
-
-interface PendingFirestoreWrite {
-  id: string;
-  operation: 'set' | 'delete' | 'conditional';
-  /** For 'conditional' this is the primary document, used for queue de-duplication. */
-  collectionName: string;
-  documentId: string;
-  data?: Record<string, unknown>;
-  merge?: boolean;
-  /** 'conditional' only: every document in the operation plus its change record. */
-  operationId?: string;
-  documents?: ConditionalDocumentWrite[];
-  changeRecord?: AmountChangeRecord;
-  queuedAt: string;
-  failedAt?: string;
-  lastError?: string;
-}
+// The offline outbox, conflicts and history floor live in firestoreOutbox.ts so they
+// work before this (lazily loaded) module has arrived; re-exported for existing callers.
+export {
+  AMOUNT_CHANGES_COLLECTION,
+  RECURRING_OCCURRENCES_COLLECTION,
+  TRANSACTIONS_COLLECTION,
+  clearFirestoreOutbox,
+  clearTransactionHistoryFloor,
+  describePendingCollection,
+  dismissSyncConflict,
+  getLoadedTransactionHistoryFloor,
+  getPendingFirestoreWrites,
+  getSyncConflicts,
+  subscribeSyncConflicts,
+  syncPendingCountFromStorage,
+  type ConditionalDocumentWrite,
+  type SyncConflict,
+} from './firestoreOutbox';
 
 let persistenceChain: Promise<void> = Promise.resolve();
-
-function readFirestoreOutbox(): PendingFirestoreWrite[] {
-  try {
-    const raw = localStorage.getItem(ACCOUNT_KEYS.firestoreOutbox);
-    return raw ? JSON.parse(raw) as PendingFirestoreWrite[] : [];
-  } catch (error) {
-    console.error('Failed to read Firestore persistence outbox:', error);
-    return [];
-  }
-}
-
-function writeFirestoreOutbox(entries: PendingFirestoreWrite[]) {
-  if (entries.length === 0) {
-    localStorage.removeItem(ACCOUNT_KEYS.firestoreOutbox);
-  } else {
-    // Throws when the device is full: an outbox entry that was not stored is a lost change.
-    strictSetItem(ACCOUNT_KEYS.firestoreOutbox, JSON.stringify(entries));
-  }
-  reportPendingCount(entries.length);
-}
-
-/** Human-readable label for the pending-changes screen. */
-const COLLECTION_LABELS: Record<string, string> = {
-  transactions: '거래',
-  categories: '카테고리',
-  budgets: '용돈 한도',
-  recurringTemplates: '정기 항목',
-  recurringOccurrences: '정기 발생 건',
-  merchantRules: '분류 규칙',
-  bankAccounts: '계좌',
-  paymentCards: '카드',
-  cycleBaselines: '주기 생활비 계획',
-  quickEntries: '퀵등록',
-  appSettings: '앱 설정',
-  amountChanges: '금액 변경 이력',
-};
-
-function readSyncConflicts(): SyncConflict[] {
-  try {
-    const raw = localStorage.getItem(ACCOUNT_KEYS.syncConflicts);
-    return raw ? JSON.parse(raw) as SyncConflict[] : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeSyncConflicts(conflicts: SyncConflict[]) {
-  if (conflicts.length === 0) localStorage.removeItem(ACCOUNT_KEYS.syncConflicts);
-  else safeSetItem(ACCOUNT_KEYS.syncConflicts, JSON.stringify(conflicts));
-  conflictListeners.forEach(listener => listener());
-}
-
-const conflictListeners = new Set<() => void>();
-
-/** Conflicts are kept for review, never retried blindly (PRD §8 "비교 후 적용"). */
-export function getSyncConflicts(): SyncConflict[] {
-  return readSyncConflicts();
-}
-
-export function dismissSyncConflict(operationId: string) {
-  writeSyncConflicts(readSyncConflicts().filter(conflict => conflict.operationId !== operationId));
-}
-
-export function subscribeSyncConflicts(listener: () => void): () => void {
-  conflictListeners.add(listener);
-  return () => { conflictListeners.delete(listener); };
-}
-
-function recordSyncConflict(entry: PendingFirestoreWrite, error: AmountConflictError) {
-  const conflict: SyncConflict = {
-    operationId: entry.operationId || entry.id,
-    documents: entry.documents || [],
-    changeRecord: entry.changeRecord,
-    queuedAt: entry.queuedAt,
-    conflictedAt: new Date().toISOString(),
-    message: error.message,
-  };
-  writeSyncConflicts([...readSyncConflicts().filter(item => item.operationId !== conflict.operationId), conflict]);
-}
-
-export function describePendingCollection(collectionName: string): string {
-  return COLLECTION_LABELS[collectionName] || collectionName;
-}
-
-export function getPendingFirestoreWrites(): PendingWriteSummary[] {
-  return readFirestoreOutbox()
-    .map(({ id, operation, collectionName, documentId, queuedAt, failedAt, lastError }) => ({
-      id,
-      operation,
-      collectionName,
-      documentId,
-      queuedAt,
-      failedAt,
-      lastError,
-    }))
-    .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt));
-}
-
-function enqueueFirestoreWrite(entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>): PendingFirestoreWrite {
-  const queued: PendingFirestoreWrite = {
-    ...stripUndefined(entry),
-    id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-    queuedAt: new Date().toISOString(),
-  };
-  // Only the latest pending plain write for one document matters. This also
-  // collapses queues produced by older clients that retried the same write.
-  // Conditional operations are never collapsed: each one is based on the
-  // revision the previous one produces, so they must all reach the server in order.
-  const pending = readFirestoreOutbox().filter(candidate => queued.operation === 'conditional'
-    || candidate.operation === 'conditional'
-    || !(candidate.collectionName === queued.collectionName && candidate.documentId === queued.documentId));
-  writeFirestoreOutbox([...pending, queued]);
-  return queued;
-}
-
-function removeFirestoreWrite(id: string) {
-  writeFirestoreOutbox(readFirestoreOutbox().filter(entry => entry.id !== id));
-}
-
-function recordFirestoreWriteError(id: string, error: unknown): string {
-  const message = describeFirestoreWriteError(error);
-  const failedAt = new Date().toISOString();
-  writeFirestoreOutbox(readFirestoreOutbox().map(entry => (
-    entry.id === id ? { ...entry, failedAt, lastError: message } : entry
-  )));
-  return message;
-}
 
 /**
  * Applies every document of one operation in a single Firestore transaction,
@@ -314,25 +175,31 @@ async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
   await setDoc(reference, stripUndefined(entry.data || {}));
 }
 
-function persistFirestoreWrite(
-  entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>,
-  errorLabel: string,
-): Promise<boolean> {
+/**
+ * Runs one write. The lazy facade queues the entry in the outbox itself (so it
+ * is safe even if this module fails to load) and passes it as `alreadyQueued`.
+ */
+export function persistFirestoreWrite(spec: WriteSpec, alreadyQueued?: PendingFirestoreWrite): Promise<boolean> {
+  const { entry, label: errorLabel } = spec;
   let queued: PendingFirestoreWrite;
   let storedInOutbox = true;
-  try {
-    queued = enqueueFirestoreWrite(entry);
-  } catch (error) {
-    // The device has no room for the outbox entry. The change is still sent
-    // straight to Firestore so it is not lost; only offline protection is gone,
-    // which the storage-full banner already tells the user about.
-    console.error(`${errorLabel}: could not queue the write locally:`, error);
-    storedInOutbox = false;
-    queued = {
-      ...stripUndefined(entry),
-      id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-      queuedAt: new Date().toISOString(),
-    };
+  if (alreadyQueued) {
+    queued = alreadyQueued;
+  } else {
+    try {
+      queued = enqueueFirestoreWrite(entry);
+    } catch (error) {
+      // The device has no room for the outbox entry. The change is still sent
+      // straight to Firestore so it is not lost; only offline protection is gone,
+      // which the storage-full banner already tells the user about.
+      console.error(`${errorLabel}: could not queue the write locally:`, error);
+      storedInOutbox = false;
+      queued = {
+        ...stripUndefined(entry),
+        id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        queuedAt: new Date().toISOString(),
+      };
+    }
   }
   const settled = queued;
   reportWriteStarted();
@@ -360,6 +227,8 @@ function persistFirestoreWrite(
   });
 }
 
+const persistAll = async (specs: WriteSpec[]) => (await Promise.all(specs.map(spec => persistFirestoreWrite(spec)))).every(Boolean);
+
 /**
  * Queues one revision-checked operation. Local state is expected to be updated
  * first; the result only says whether the cloud accepted it now. A conflict is
@@ -370,15 +239,7 @@ export function commitConditionalOperation(input: {
   documents: ConditionalDocumentWrite[];
   changeRecord?: AmountChangeRecord;
 }): Promise<boolean> {
-  const primary = input.documents[0];
-  return persistFirestoreWrite({
-    operation: 'conditional',
-    collectionName: primary.collectionName,
-    documentId: primary.documentId,
-    operationId: input.operationId,
-    documents: input.documents,
-    changeRecord: input.changeRecord,
-  }, 'Conditional amount operation failed');
+  return persistFirestoreWrite(writes.conditionalOperationWrite(input));
 }
 
 export function flushFirestoreOutbox(): Promise<boolean> {
@@ -417,27 +278,6 @@ export function flushFirestoreOutbox(): Promise<boolean> {
   });
 }
 
-registerOutboxFlusher(flushFirestoreOutbox);
-
-/** Publishes the outbox length that already exists in this browser at boot. */
-export function syncPendingCountFromStorage() {
-  reportPendingCount(readFirestoreOutbox().length);
-}
-
-export function clearTransactionHistoryFloor() {
-  localStorage.removeItem(ACCOUNT_KEYS.transactionHistoryFloor);
-  liveTransactionWindowStart = '';
-}
-
-export function clearFirestoreOutbox() {
-  localStorage.removeItem(ACCOUNT_KEYS.firestoreOutbox);
-  localStorage.removeItem(ACCOUNT_KEYS.syncConflicts);
-  resetSyncStatus();
-}
-
-export const AMOUNT_CHANGES_COLLECTION = COLLECTION_AMOUNT_CHANGES;
-export const TRANSACTIONS_COLLECTION = COLLECTION_TRANSACTIONS;
-export const RECURRING_OCCURRENCES_COLLECTION = COLLECTION_RECURRING_OCCURRENCES;
 
 const STORAGE_KEYS = {
   get TRANSACTIONS() { return getAccountStorageKey('brake_transactions'); },
@@ -479,33 +319,8 @@ function parseStoredObject<T>(key: string, fallback: T): T {
   }
 }
 
-/** What the outbox still owes the server for one collection, to be laid over a snapshot. */
-function pendingChanges(collectionName: string) {
-  return pendingChangesFor(collectionName, readFirestoreOutbox() as OverlayEntry[]);
-}
-
-/**
- * Frees what can be fetched again when the device is out of space: the AI
- * report cache, and cached transaction history older than the live window
- * (the history floor moves up so the older periods are re-fetched on demand).
- */
-registerCacheEvictor(() => {
-  localStorage.removeItem(getAccountStorageKey('brake_ai_insights'));
-  if (!liveTransactionWindowStart) return;
-  const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
-  const recent = cached.filter(transaction => transaction.localDate >= liveTransactionWindowStart);
-  if (recent.length === cached.length) return;
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(recent));
-  localStorage.setItem(ACCOUNT_KEYS.transactionHistoryFloor, liveTransactionWindowStart);
-});
-
 function snapshotError(error: unknown) {
   console.error('Firestore realtime sync error:', error);
-}
-
-function normalizeBudget(budget: Budget & { categoryLimits?: Record<string, number> }): Budget {
-  const { categoryLimits: _legacyCategoryLimits, ...normalized } = budget;
-  return normalized;
 }
 
 async function readCollection<T>(collectionName: string): Promise<T[]> {
@@ -513,21 +328,6 @@ async function readCollection<T>(collectionName: string): Promise<T[]> {
   return snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
 }
 
-/**
- * Oldest `localDate` currently present in the local transaction cache. Anything
- * before this has to be fetched before a screen can summarise it truthfully.
- */
-let liveTransactionWindowStart = '';
-
-function readHistoryFloor(fallback: string): string {
-  const stored = localStorage.getItem(ACCOUNT_KEYS.transactionHistoryFloor);
-  return stored && stored < fallback ? stored : fallback;
-}
-
-/** The earliest date the local transaction cache can be trusted to be complete from. */
-export function getLoadedTransactionHistoryFloor(): string {
-  return readHistoryFloor(liveTransactionWindowStart);
-}
 
 /**
  * Pulls transaction history older than what the live subscription covers, for
@@ -601,7 +401,7 @@ export function initFirestoreSync(
   if (isSyncInitialized) return Promise.resolve({ hasCloudData: localCacheHasAnyData() });
   requireOwnerUid();
   isSyncInitialized = true;
-  liveTransactionWindowStart = transactionWindowStart;
+  setLiveTransactionWindowStart(transactionWindowStart);
   safeSetItem(ACCOUNT_KEYS.transactionHistoryFloor, readHistoryFloor(transactionWindowStart));
 
   const pending = new Set<string>(SYNC_SOURCES);
@@ -726,14 +526,7 @@ export function stopFirestoreSync() {
 
 /* Helper functions to save / update / delete items in Firestore */
 
-export async function syncUserProfileToFirestore(profile: UserProfile) {
-  return persistFirestoreWrite({
-    operation: 'set',
-    collectionName: COLLECTION_APP_SETTINGS,
-    documentId: DOC_GLOBAL_SETTINGS,
-    data: sanitizeUserProfileForFirestore(profile),
-  }, 'Failed to sync user profile to Firestore');
-}
+export const syncUserProfileToFirestore = (profile: UserProfile) => persistFirestoreWrite(writes.userProfileWrite(profile));
 
 export async function fetchUserProfileFromFirestore(): Promise<UserProfile | null> {
   try {
@@ -748,127 +541,24 @@ export async function fetchUserProfileFromFirestore(): Promise<UserProfile | nul
   return null;
 }
 
-export async function syncTransactionToFirestore(tx: Transaction) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_TRANSACTIONS, documentId: tx.id,
-    data: tx as unknown as Record<string, unknown>,
-  }, 'Failed to sync transaction to Firestore');
-}
-
-export async function deleteTransactionFromFirestore(id: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_TRANSACTIONS, documentId: id,
-  }, 'Failed to delete transaction from Firestore');
-}
-
-export async function syncQuickEntryToFirestore(entry: QuickEntry) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_QUICK_ENTRIES, documentId: entry.id,
-    data: entry as unknown as Record<string, unknown>,
-  }, 'Failed to sync quick entry to Firestore');
-}
-
-export async function deleteQuickEntryFromFirestore(id: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_QUICK_ENTRIES, documentId: id,
-  }, 'Failed to delete quick entry from Firestore');
-}
-
-export async function syncCategoriesToFirestore(categories: Category[]) {
-  const results = await Promise.all(categories.map(category => persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_CATEGORIES, documentId: category.id,
-    data: category as unknown as Record<string, unknown>,
-  }, 'Failed to sync category to Firestore')));
-  return results.every(Boolean);
-}
-
-export async function deleteCategoryFromFirestore(id: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_CATEGORIES, documentId: id,
-  }, 'Failed to delete category from Firestore');
-}
-
-export async function syncBudgetToFirestore(budget: Budget) {
-  const normalizedBudget = normalizeBudget(budget);
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_BUDGETS, documentId: normalizedBudget.yearMonth,
-    data: normalizedBudget as unknown as Record<string, unknown>,
-  }, 'Failed to sync budget to Firestore');
-}
-
-export async function syncRecurringTemplateToFirestore(tmpl: RecurringTemplate) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_RECURRING_TEMPLATES, documentId: tmpl.id,
-    data: tmpl as unknown as Record<string, unknown>,
-  }, 'Failed to sync recurring template to Firestore');
-}
-
-export async function deleteRecurringTemplateFromFirestore(id: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_RECURRING_TEMPLATES, documentId: id,
-  }, 'Failed to delete recurring template from Firestore');
-}
-
-export async function syncRecurringOccurrencesToFirestore(occs: RecurringOccurrence[]) {
-  const results = await Promise.all(occs.map(occurrence => persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_RECURRING_OCCURRENCES, documentId: occurrence.id,
-    data: occurrence as unknown as Record<string, unknown>,
-  }, 'Failed to sync recurring occurrence to Firestore')));
-  return results.every(Boolean);
-}
-
-export async function deleteRecurringOccurrencesFromFirestore(ids: string[]) {
-  const results = await Promise.all(ids.map(id => persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_RECURRING_OCCURRENCES, documentId: id,
-  }, 'Failed to delete recurring occurrence from Firestore')));
-  return results.every(Boolean);
-}
-
-export async function syncCycleBaselineToFirestore(baseline: CycleBaseline) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_CYCLE_BASELINES, documentId: baseline.yearMonth,
-    data: baseline as unknown as Record<string, unknown>,
-  }, 'Failed to sync cycle baseline to Firestore');
-}
-
-export async function deleteCycleBaselineFromFirestore(yearMonth: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_CYCLE_BASELINES, documentId: yearMonth,
-  }, 'Failed to delete cycle baseline from Firestore');
-}
-
-export async function syncMerchantRuleToFirestore(rule: MerchantRule) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_MERCHANT_RULES, documentId: rule.id,
-    data: rule as unknown as Record<string, unknown>,
-  }, 'Failed to sync merchant rule to Firestore');
-}
-
-export async function syncBankAccountToFirestore(account: BankAccount) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_BANK_ACCOUNTS, documentId: account.id,
-    data: account as unknown as Record<string, unknown>,
-  }, 'Failed to sync bank account to Firestore');
-}
-
-export async function deleteBankAccountFromFirestore(id: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_BANK_ACCOUNTS, documentId: id,
-  }, 'Failed to delete bank account from Firestore');
-}
-
-export async function syncPaymentCardToFirestore(card: PaymentCard) {
-  return persistFirestoreWrite({
-    operation: 'set', collectionName: COLLECTION_PAYMENT_CARDS, documentId: card.id,
-    data: card as unknown as Record<string, unknown>,
-  }, 'Failed to sync payment card to Firestore');
-}
-
-export async function deletePaymentCardFromFirestore(id: string) {
-  return persistFirestoreWrite({
-    operation: 'delete', collectionName: COLLECTION_PAYMENT_CARDS, documentId: id,
-  }, 'Failed to delete payment card from Firestore');
-}
+export const syncTransactionToFirestore = (tx: Transaction) => persistFirestoreWrite(writes.transactionWrite(tx));
+export const deleteTransactionFromFirestore = (id: string) => persistFirestoreWrite(writes.transactionDelete(id));
+export const syncQuickEntryToFirestore = (entry: QuickEntry) => persistFirestoreWrite(writes.quickEntryWrite(entry));
+export const deleteQuickEntryFromFirestore = (id: string) => persistFirestoreWrite(writes.quickEntryDelete(id));
+export const syncCategoriesToFirestore = (categories: Category[]) => persistAll(writes.categoryWrites(categories));
+export const deleteCategoryFromFirestore = (id: string) => persistFirestoreWrite(writes.categoryDelete(id));
+export const syncBudgetToFirestore = (budget: Budget) => persistFirestoreWrite(writes.budgetWrite(normalizeBudget(budget)));
+export const syncRecurringTemplateToFirestore = (template: RecurringTemplate) => persistFirestoreWrite(writes.recurringTemplateWrite(template));
+export const deleteRecurringTemplateFromFirestore = (id: string) => persistFirestoreWrite(writes.recurringTemplateDelete(id));
+export const syncRecurringOccurrencesToFirestore = (occurrences: RecurringOccurrence[]) => persistAll(writes.recurringOccurrenceWrites(occurrences));
+export const deleteRecurringOccurrencesFromFirestore = (ids: string[]) => persistAll(writes.recurringOccurrenceDeletes(ids));
+export const syncCycleBaselineToFirestore = (baseline: CycleBaseline) => persistFirestoreWrite(writes.cycleBaselineWrite(baseline));
+export const deleteCycleBaselineFromFirestore = (yearMonth: string) => persistFirestoreWrite(writes.cycleBaselineDelete(yearMonth));
+export const syncMerchantRuleToFirestore = (rule: MerchantRule) => persistFirestoreWrite(writes.merchantRuleWrite(rule));
+export const syncBankAccountToFirestore = (account: BankAccount) => persistFirestoreWrite(writes.bankAccountWrite(account));
+export const deleteBankAccountFromFirestore = (id: string) => persistFirestoreWrite(writes.bankAccountDelete(id));
+export const syncPaymentCardToFirestore = (card: PaymentCard) => persistFirestoreWrite(writes.paymentCardWrite(card));
+export const deletePaymentCardFromFirestore = (id: string) => persistFirestoreWrite(writes.paymentCardDelete(id));
 
 /**
  * Deletes every document of the account. Any failure is thrown so the caller
@@ -907,3 +597,5 @@ export async function fetchTransactionReceiptText(transactionId: string): Promis
   const receipt = snapshot.exists() ? (snapshot.data() as Partial<Transaction>).receipt : null;
   return receipt?.rawText ?? null;
 }
+
+registerOutboxFlusher(flushFirestoreOutbox);

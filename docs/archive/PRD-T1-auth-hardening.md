@@ -4,7 +4,7 @@
 - 작성일: 2026-09-23
 - 우선순위: P0
 - 예상 규모: 1~2일
-- 관련 문서: [개선사항 인덱스](./PRD-2026-09-23-improvements-index.md), [DEPLOYMENT.md](./DEPLOYMENT.md)
+- 관련 문서: [개선사항 인덱스](../PRD-2026-09-23-improvements-index.md), [DEPLOYMENT.md](../DEPLOYMENT.md)
 - 전제(사용자 확인): 운영 서버는 Cloud Run 등 프록시 뒤에서 동작하며, 현재 운영 PIN은 4자리다.
 
 ## 1. 배경

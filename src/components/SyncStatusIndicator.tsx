@@ -6,7 +6,7 @@ import {
   retryPendingWrites,
   subscribeToSyncStatus,
 } from '../utils/syncStatus';
-import { describePendingCollection, getPendingFirestoreWrites, syncPendingCountFromStorage } from '../utils/firestoreSync';
+import { describePendingCollection, getPendingFirestoreWrites, syncPendingCountFromStorage } from '../utils/cloudSync';
 import { Modal } from './ui/Modal';
 
 export function useSyncState(): SyncState {

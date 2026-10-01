@@ -141,9 +141,12 @@ export default defineConfig(() => {
         output: {
           manualChunks(id) {
             if (!id.includes('node_modules')) return;
+            // Receipt images only: kept out of the first-screen chunk (see utils/receiptStorage.ts).
+            if (id.includes('firebase/storage') || id.includes('@firebase/storage')) return 'firebase-storage';
+            if (id.includes('firebase/firestore') || id.includes('@firebase/firestore')) return 'firebase-firestore';
             if (id.includes('firebase')) return 'firebase';
             if (id.includes('recharts') || id.includes('d3-')) return 'charts';
-            if (id.includes('react') || id.includes('motion')) return 'react-vendor';
+            if (id.includes('react')) return 'react-vendor';
           },
         },
       },

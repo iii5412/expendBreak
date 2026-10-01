@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { dismissSyncConflict, getSyncConflicts, subscribeSyncConflicts, SyncConflict } from '../utils/firestoreSync';
+import { dismissSyncConflict, getSyncConflicts, subscribeSyncConflicts, SyncConflict } from '../utils/cloudSync';
 import { formatKRW } from '../utils/calculations';
 
 /**

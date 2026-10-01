@@ -1,6 +1,7 @@
 import js from '@eslint/js';
 import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -35,6 +36,16 @@ export default tseslint.config(
       'no-useless-escape': 'warn',
       'no-control-regex': 'warn',
       'no-empty': ['warn', { allowEmptyCatch: true }],
+    },
+  },
+  {
+    // Accessibility (T8 R4). Warnings first; icon-only controls must have a name.
+    files: ['src/**/*.tsx'],
+    plugins: { 'jsx-a11y': jsxA11y },
+    rules: {
+      ...Object.fromEntries(Object.keys(jsxA11y.flatConfigs.recommended.rules).map(rule => [rule, 'warn'])),
+      'jsx-a11y/label-has-for': 'off', // deprecated; label-has-associated-control replaces it
+      'jsx-a11y/control-has-associated-label': ['warn', { ignoreElements: ['audio', 'canvas', 'embed', 'input', 'textarea', 'tr', 'video'], depth: 3 }],
     },
   },
   {

@@ -21,7 +21,8 @@ vi.mock('firebase/firestore', () => ({
   writeBatch: vi.fn(),
   runTransaction: vi.fn(),
 }));
-vi.mock('../lib/firebase', () => ({ auth: {}, db: {} }));
+vi.mock('../lib/firebase', () => ({ auth: {}, firebaseApp: {} }));
+vi.mock('../lib/firestore', () => ({ db: {} }));
 vi.mock('./auth', () => ({
   getAccountStorageKey: (key: string) => key,
   getSignedInAccount: () => ({ uid: 'owner', name: 'o', isOwner: true }),
@@ -195,5 +196,40 @@ describe('R4: full reset errors are not swallowed', () => {
     const { sync } = await boot();
     getDocsMock.mockRejectedValueOnce(new Error('network down'));
     await expect(sync.clearFirestoreAllData()).rejects.toThrow('network down');
+  });
+});
+
+describe('lazy Firestore chunk (cloudSync facade)', () => {
+  it('queues a write in the outbox before the Firestore code has loaded, then sends it', async () => {
+    const cloud = await import('./cloudSync');
+    const pending = cloud.syncTransactionToFirestore({ id: 'early', type: 'expense', amount: 1500 } as never);
+
+    // Synchronously after the call, before the chunk resolves: the change is already safe locally.
+    const queued = JSON.parse(localStorage.getItem('brake_firestore_outbox') || '[]') as Array<{ documentId: string }>;
+    expect(queued.map(entry => entry.documentId)).toEqual(['early']);
+
+    expect(await pending).toBe(true);
+    expect(setDocMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('brake_firestore_outbox')).toBeNull();
+  });
+
+  it('keeps the entry queued and reports a failure when the chunk cannot be loaded', async () => {
+    vi.doMock('./firestoreSync', () => { throw new Error('chunk load failed'); });
+    const cloud = await import('./cloudSync');
+    const status = await import('./syncStatus');
+
+    expect(await cloud.syncTransactionToFirestore({ id: 'offline', type: 'expense', amount: 1 } as never)).toBe(false);
+    expect(JSON.parse(localStorage.getItem('brake_firestore_outbox') || '[]')).toHaveLength(1);
+    expect(status.getSyncState().lastError).toContain('저장 모듈');
+    vi.doUnmock('./firestoreSync');
+  });
+
+  it('reads pending changes without loading the Firestore code', async () => {
+    storage.setItem('brake_firestore_outbox', JSON.stringify([
+      { id: 'w', operation: 'set', collectionName: 'transactions', documentId: 'x', queuedAt: '2026-09-28T00:00:00.000Z' },
+    ]));
+    const cloud = await import('./cloudSync');
+    expect(cloud.getPendingFirestoreWrites()).toHaveLength(1);
+    expect(cloud.describePendingCollection('transactions')).toBe('거래');
   });
 });

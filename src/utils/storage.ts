@@ -62,7 +62,7 @@ import {
   clearTransactionHistoryFloor,
   getLoadedTransactionHistoryFloor,
   loadTransactionHistoryFrom,
-} from './firestoreSync';
+} from './cloudSync';
 import { collectAccountUsage } from './accountUsage';
 import { reportWriteFailed } from './syncStatus';
 import { safeSetItem } from './safeStorage';

@@ -4,7 +4,7 @@
 - 작성일: 2026-09-23
 - 우선순위: P1
 - 예상 규모: 1.5~2일
-- 관련 문서: [개선사항 인덱스](./PRD-2026-09-23-improvements-index.md), [DEPLOYMENT.md](./DEPLOYMENT.md)
+- 관련 문서: [개선사항 인덱스](../PRD-2026-09-23-improvements-index.md), [DEPLOYMENT.md](../DEPLOYMENT.md)
 
 ## 1. 배경
 

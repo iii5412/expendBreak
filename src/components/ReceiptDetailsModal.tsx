@@ -3,7 +3,7 @@ import { ImageOff, Loader2, ReceiptText, X } from 'lucide-react';
 import { ReceiptRecord } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { loadReceiptImage } from '../utils/receiptStorage';
-import { fetchTransactionReceiptText } from '../utils/firestoreSync';
+import { fetchTransactionReceiptText } from '../utils/cloudSync';
 import { Modal } from './ui/Modal';
 
 interface ReceiptDetailsModalProps {
