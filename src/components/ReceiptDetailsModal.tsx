@@ -3,17 +3,40 @@ import { ImageOff, Loader2, ReceiptText, X } from 'lucide-react';
 import { ReceiptRecord } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { loadReceiptImage } from '../utils/receiptStorage';
+import { fetchTransactionReceiptText } from '../utils/firestoreSync';
 import { Modal } from './ui/Modal';
 
 interface ReceiptDetailsModalProps {
   receipt: ReceiptRecord;
   merchant: string;
+  /** Needed to read the OCR text, which the local cache leaves out. */
+  transactionId?: string;
   onClose: () => void;
 }
 
-export const ReceiptDetailsModal: React.FC<ReceiptDetailsModalProps> = ({ receipt, merchant, onClose }) => {
+export const ReceiptDetailsModal: React.FC<ReceiptDetailsModalProps> = ({ receipt, merchant, transactionId, onClose }) => {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [rawText, setRawText] = useState<string | null>(receipt.rawText ?? null);
+  const [rawTextState, setRawTextState] = useState<'ready' | 'loading' | 'failed'>(
+    receipt.rawTextOmitted && transactionId ? 'loading' : 'ready',
+  );
+
+  useEffect(() => {
+    if (!receipt.rawTextOmitted || !transactionId) return;
+    let cancelled = false;
+    setRawTextState('loading');
+    fetchTransactionReceiptText(transactionId).then(text => {
+      if (cancelled) return;
+      setRawText(text);
+      setRawTextState('ready');
+    }).catch(() => {
+      if (!cancelled) setRawTextState('failed');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [receipt.rawTextOmitted, transactionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,7 +92,9 @@ export const ReceiptDetailsModal: React.FC<ReceiptDetailsModalProps> = ({ receip
 
         {receipt.lineItems.length > 0 && <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs"><h4 className="mb-2 flex items-center gap-2 font-bold text-slate-200"><ReceiptText className="h-4 w-4" />구매 항목 {receipt.lineItems.length}개</h4><div className="space-y-2">{receipt.lineItems.map((item, index) => <div key={`${item.name}-${index}`} className="flex justify-between gap-3 text-slate-300"><span>{item.name}{item.quantity ? ` × ${item.quantity}` : ''}</span><span className="shrink-0">{formatKRW(item.amount)}</span></div>)}</div></div>}
 
-        {receipt.rawText && <details className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs"><summary className="cursor-pointer font-bold text-slate-300">OCR 원문 보기</summary><pre className="mt-3 whitespace-pre-wrap break-words font-sans leading-relaxed text-slate-400">{receipt.rawText}</pre></details>}
+        {rawText && <details className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs"><summary className="cursor-pointer font-bold text-slate-300">OCR 원문 보기</summary><pre className="mt-3 whitespace-pre-wrap break-words font-sans leading-relaxed text-slate-400">{rawText}</pre></details>}
+        {rawTextState === 'loading' && <p role="status" className="text-xs text-slate-400">OCR 원문을 불러오는 중...</p>}
+        {rawTextState === 'failed' && <p role="alert" className="text-xs text-amber-200">OCR 원문을 불러오지 못했습니다. 연결을 확인한 뒤 다시 열어 주세요.</p>}
         <p className="text-xs text-slate-400">인식 신뢰도 {Math.round(receipt.ocrConfidence * 100)}% · {new Date(receipt.scannedAt).toLocaleString('ko-KR')}</p>
     </Modal>
   );

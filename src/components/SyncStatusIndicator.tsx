@@ -15,6 +15,19 @@ export function useSyncState(): SyncState {
   return state;
 }
 
+export const STORAGE_FULL_MESSAGE = '기기 저장 공간이 부족해 일부 데이터를 표시하지 못합니다. 변경 내용은 서버에 저장됩니다. 브라우저 저장 공간을 비우거나 앱 데이터를 정리해 주세요.';
+
+/** Always-visible notice (not only inside the status panel) while the device is full. */
+export const StorageFullBanner: React.FC = () => {
+  const state = useSyncState();
+  if (!state.storageFull) return null;
+  return (
+    <div role="alert" className="border-b border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs text-rose-100">
+      {STORAGE_FULL_MESSAGE}
+    </div>
+  );
+};
+
 const PHASE_STYLE: Record<SyncState['phase'], { label: string; className: string; icon: React.ElementType }> = {
   synced: {
     label: '저장 완료',
@@ -111,6 +124,12 @@ export const SyncStatusIndicator: React.FC = () => {
               네트워크에 연결되어 있지 않습니다. 기록은 이 기기에 안전하게 보관되며, 연결이 복구되면 자동으로 반영됩니다.
             </span>
           </div>
+        )}
+
+        {state.storageFull && (
+          <p role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">
+            {STORAGE_FULL_MESSAGE}
+          </p>
         )}
 
         {state.lastError && (

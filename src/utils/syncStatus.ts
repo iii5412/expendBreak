@@ -25,6 +25,8 @@ export interface SyncState {
   isOnline: boolean;
   lastSyncedAt: string | null;
   lastError: string | null;
+  /** The device ran out of local storage, so some cached data is not shown. */
+  storageFull: boolean;
 }
 
 type SyncListener = (state: SyncState) => void;
@@ -36,6 +38,7 @@ let inFlightCount = 0;
 let isOnline = typeof navigator === 'undefined' ? true : navigator.onLine !== false;
 let lastSyncedAt: string | null = null;
 let lastError: string | null = null;
+let storageFull = false;
 let outboxFlusher: (() => Promise<boolean>) | null = null;
 
 function derivePhase(): SyncPhase {
@@ -52,6 +55,7 @@ export function getSyncState(): SyncState {
     isOnline,
     lastSyncedAt,
     lastError,
+    storageFull,
   };
 }
 
@@ -90,6 +94,12 @@ export function reportWriteSucceeded() {
 export function reportWriteFailed(message: string) {
   inFlightCount = Math.max(0, inFlightCount - 1);
   lastError = message;
+  notify();
+}
+
+export function reportStorageFull(full: boolean) {
+  if (storageFull === full) return;
+  storageFull = full;
   notify();
 }
 

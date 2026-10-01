@@ -885,7 +885,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         )}
       </Modal>
 
-      {viewingReceiptTx?.receipt && <ReceiptDetailsModal receipt={viewingReceiptTx.receipt} merchant={viewingReceiptTx.merchant} onClose={() => setViewingReceiptTx(null)} />}
+      {viewingReceiptTx?.receipt && <ReceiptDetailsModal receipt={viewingReceiptTx.receipt} transactionId={viewingReceiptTx.id} merchant={viewingReceiptTx.merchant} onClose={() => setViewingReceiptTx(null)} />}
     </div>
   );
 };

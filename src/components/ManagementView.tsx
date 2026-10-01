@@ -55,6 +55,7 @@ import {
 } from '../utils/calculations';
 import { getActivePaydaySchedule, periodBoundsFor, planPaydayChange } from '../utils/paydaySchedule';
 import { authenticatedFetch, revokeOtherSessions } from '../utils/auth';
+import { getStorageUsage, totalStorageKb } from '../utils/storageUsage';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { Modal } from './ui/Modal';
@@ -419,6 +420,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   };
 
   const [isRevokingSessions, setIsRevokingSessions] = useState(false);
+  const [storageUsage, setStorageUsage] = useState(() => getStorageUsage());
   const handleRevokeOtherSessions = async () => {
     const accepted = await confirm({
       title: '다른 기기에서 모두 로그아웃할까요?',
@@ -1664,6 +1666,25 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               계산 재현에 필요한 금액·날짜·내부 연결 ID를 저장합니다. 사용자 UID·이메일·PIN·계좌번호·예금주·메모·영수증·음성 데이터는 제외합니다.
             </p>
 
+            <details
+              className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300"
+              onToggle={event => { if ((event.currentTarget as HTMLDetailsElement).open) setStorageUsage(getStorageUsage()); }}
+            >
+              <summary className="cursor-pointer font-bold text-slate-200">이 기기의 저장 공간 사용량</summary>
+              {storageUsage.length === 0 ? (
+                <p className="mt-2 text-slate-400">표시할 항목이 없습니다.</p>
+              ) : (
+                <>
+                  <p className="mt-2 text-slate-400">합계 {totalStorageKb(storageUsage)}KB (브라우저 한도는 보통 약 5,000KB)</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {storageUsage.map(entry => (
+                      <li key={entry.key} className="flex justify-between gap-3"><span className="truncate">{entry.key}</span><span className="shrink-0">{entry.kb}KB</span></li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </details>
+
             <div className="flex gap-3">
               <button
                 onClick={onExportCSV}
@@ -1683,7 +1704,17 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                     requireText: '전체 초기화',
                   });
                   if (!accepted) return;
-                  await onResetData();
+                  try {
+                    await onResetData();
+                  } catch (error) {
+                    console.error(error);
+                    showToast({
+                      message: '일부 데이터가 삭제되지 않았습니다. 다시 시도해 주세요.',
+                      description: '이 기기의 데이터는 그대로 남아 있습니다. 연결을 확인한 뒤 다시 실행하면 남은 문서만 삭제합니다.',
+                      tone: 'error',
+                    });
+                    return;
+                  }
                   showToast({ message: '데이터 초기화가 완료되었습니다.', tone: 'info' });
                 }}
                 className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold px-4 py-2.5 rounded-xl transition-colors"

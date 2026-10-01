@@ -2,6 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { getSyncState } from './syncStatus';
 import { getRecordedRenderErrors } from './renderErrors';
+import { getStorageUsage } from './storageUsage';
 export async function getDiagnosticRuntime() {
   const installed = Capacitor.isNativePlatform() ? await App.getInfo().catch(() => null) : null;
   const sync = getSyncState();
@@ -12,5 +13,7 @@ export async function getDiagnosticRuntime() {
     webBuild: typeof __APP_BUILD__ === 'undefined' ? null : __APP_BUILD__,
     sync: { phase: sync.phase, pendingCount: sync.pendingCount, isOnline: sync.isOnline, lastSyncedAt: sync.lastSyncedAt },
     renderErrors: getRecordedRenderErrors(),
+    storageUsage: getStorageUsage(),
+    storageFull: sync.storageFull,
   };
 }

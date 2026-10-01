@@ -65,6 +65,7 @@ import {
 } from './firestoreSync';
 import { collectAccountUsage } from './accountUsage';
 import { reportWriteFailed } from './syncStatus';
+import { safeSetItem } from './safeStorage';
 import { getTransactionWindowStart } from './transactionWindow';
 import { BankAccount, PaymentCard, PaymentMethodType } from '../types';
 import { authenticatedFetch, getAccountStorageKey, getSignedInAccount } from './auth';
@@ -118,7 +119,7 @@ export function getAmountChanges(): AmountChangeRecord[] {
 function appendAmountChange(record: AmountChangeRecord) {
   const history = getAmountChanges().filter(item => item.id !== record.id);
   history.unshift(record);
-  localStorage.setItem(STORAGE_KEYS.AMOUNT_CHANGES, JSON.stringify(history.slice(0, AMOUNT_CHANGE_HISTORY_LIMIT)));
+  safeSetItem(STORAGE_KEYS.AMOUNT_CHANGES, JSON.stringify(history.slice(0, AMOUNT_CHANGE_HISTORY_LIMIT)));
 }
 
 /**
@@ -141,7 +142,7 @@ function commitOccurrenceRevisions(occurrences: RecurringOccurrence[], mutate: (
     changed.push(occurrence);
   });
   if (!changed.length) return;
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
+  safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
   if (storageReady) {
     void commitConditionalOperation({
       operationId,
@@ -167,7 +168,7 @@ function applyAmountOperation(operation: AmountOperation) {
   const index = occurrences.findIndex(item => item.id === operation.occurrence.id);
   if (index === -1) return false;
   occurrences[index] = operation.occurrence;
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
 
   if (operation.transaction || operation.removeTransactionId) {
     let transactions = getTransactions();
@@ -179,7 +180,7 @@ function applyAmountOperation(operation: AmountOperation) {
       if (existing >= 0) transactions[existing] = operation.transaction;
       else transactions.unshift(operation.transaction);
     }
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+    safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
   }
   appendAmountChange(operation.record);
 
@@ -331,7 +332,7 @@ async function applyPaydayPlanningMigration() {
     paydayPlanningVersion: 1,
     updatedAt: new Date().toISOString(),
   };
-  localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(migratedProfile));
+  safeSetItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(migratedProfile));
   const saved = await syncUserProfileToFirestore(migratedProfile);
   if (!saved) {
     throw new Error('급여일 10일 기준 예산 주기를 DB에 저장하지 못했습니다.');
@@ -358,16 +359,16 @@ async function startColdSession() {
     const templates = getSampleRecurringTemplates();
     const initialProfile = initialProfileForSignedInAccount();
 
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
-    localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(initialProfile));
-    localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
-    localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify({ [currentYM]: budget }));
-    localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
-    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(generateSampleTransactionsForMonth(currentYM)));
-    localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
-    localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify({}));
+    safeSetItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(categories));
+    safeSetItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(initialProfile));
+    safeSetItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(DEFAULT_MERCHANT_RULES));
+    safeSetItem(STORAGE_KEYS.BUDGETS, JSON.stringify({ [currentYM]: budget }));
+    safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+    safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify([]));
+    safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(generateSampleTransactionsForMonth(currentYM)));
+    safeSetItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify([]));
+    safeSetItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify([]));
+    safeSetItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify({}));
 
     const initializationWrites = await Promise.all([
       syncCategoriesToFirestore(categories),
@@ -586,7 +587,7 @@ function generateOccurrencesForMonth(
   }
 
   const changed = normalized.removedIds.length > 0 || changedOccurrences.length > 0;
-  if (changed) localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  if (changed) safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
   if (storageReady) {
     if (normalized.removedIds.length > 0) void deleteRecurringOccurrencesFromFirestore(normalized.removedIds);
     // Persist only documents that actually changed. Rewriting the entire
@@ -667,8 +668,8 @@ export function repairClassificationIssues() {
     repairedTemplates += 1;
   });
 
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
   notifyListeners();
   return { repairedTransactions, repairedTemplates };
 }
@@ -703,7 +704,7 @@ export function saveTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'upda
   };
 
   txs.unshift(newTx);
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
   const synced = syncTransactionToFirestore(newTx);
   notifyListeners();
   return { transaction: newTx, synced };
@@ -717,7 +718,7 @@ export function restoreTransaction(transaction: Transaction, linkedOccurrenceIds
   const txs = getTransactions().filter(existing => existing.id !== transaction.id);
   txs.unshift(transaction);
   txs.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
   syncTransactionToFirestore(transaction);
 
   if (linkedOccurrenceIds.length > 0) {
@@ -768,7 +769,7 @@ export function updateTransaction(id: string, updates: Partial<Transaction>): Tr
     updatedAt: new Date().toISOString(),
   };
 
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
   syncTransactionToFirestore(txs[idx]);
   notifyListeners();
   return txs[idx];
@@ -792,7 +793,7 @@ export function deleteTransaction(id: string): DeletedTransactionSnapshot | null
   const deletedTransaction = txs.find(transaction => transaction.id === id);
   if (!deletedTransaction) return null;
 
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs.filter(t => t.id !== id)));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs.filter(t => t.id !== id)));
   deleteTransactionFromFirestore(id);
 
   const linked = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
@@ -835,7 +836,7 @@ export function saveCategory(cat: Omit<Category, 'id'>): Category {
     id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   };
   cats.push(newCat);
-  localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
+  safeSetItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
   syncCategoriesToFirestore(cats);
   notifyListeners();
   return newCat;
@@ -846,7 +847,7 @@ export function toggleCategoryActive(id: string): boolean {
   const target = cats.find(c => c.id === id);
   if (target) {
     target.active = !target.active;
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
+    safeSetItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
     syncCategoriesToFirestore(cats);
     notifyListeners();
     return true;
@@ -872,7 +873,7 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
     }
   }
   if (modified) {
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+    safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
   }
 
   const templates = getRecurringTemplates();
@@ -884,7 +885,7 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
     syncRecurringTemplateToFirestore(template);
     templatesModified = true;
   });
-  if (templatesModified) localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
+  if (templatesModified) safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(templates));
 
   const rules = getMerchantRules();
   let rulesModified = false;
@@ -894,7 +895,7 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
     syncMerchantRuleToFirestore(rule);
     rulesModified = true;
   });
-  if (rulesModified) localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
+  if (rulesModified) safeSetItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
 
   const occurrences = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, []);
   const changedOccurrences: RecurringOccurrence[] = [];
@@ -905,13 +906,13 @@ export function mergeAndRemoveCategory(removeId: string, replaceWithId: string):
     changedOccurrences.push(occurrence);
   });
   if (changedOccurrences.length > 0) {
-    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+    safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
     syncRecurringOccurrencesToFirestore(changedOccurrences);
   }
 
   // Remove category
   const cats = getCategories().filter(c => c.id !== removeId);
-  localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
+  safeSetItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
   syncCategoriesToFirestore(cats);
   deleteCategoryFromFirestore(removeId);
   notifyListeners();
@@ -948,7 +949,7 @@ export function ensureBudget(yearMonth: string): Promise<Budget> {
     const map = readJson<Record<string, Budget>>(STORAGE_KEYS.BUDGETS, {});
     if (map[yearMonth]) return map[yearMonth];
     map[yearMonth] = budget;
-    localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
+    safeSetItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
     notifyListeners();
     if (storageReady) await syncBudgetToFirestore(budget);
     return budget;
@@ -968,7 +969,7 @@ export async function updateBudget(budget: Budget): Promise<Budget> {
     updatedAt: new Date().toISOString(),
   };
   map[budget.yearMonth] = updatedBudget;
-  localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
+  safeSetItem(STORAGE_KEYS.BUDGETS, JSON.stringify(map));
   notifyListeners();
   const saved = await syncBudgetToFirestore(updatedBudget);
   if (!saved) {
@@ -1025,7 +1026,7 @@ export async function reloadRecurringOccurrences(
   const templateMap = new Map(templates.map(template => [template.id, template]));
   const keptAmounts = confirmedAmountSnapshot(resetRows);
 
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(preserved));
+  safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(preserved));
   if (resetIds.length > 0) await deleteRecurringOccurrencesFromFirestore(resetIds);
 
   generateOccurrencesForMonth(period.startDate.slice(0, 7), templates, period.monthStartDay);
@@ -1055,7 +1056,7 @@ export async function reloadRecurringOccurrences(
     restored.push(occurrence);
   });
   if (restored.length > 0) {
-    localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(regenerated));
+    safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(regenerated));
     if (storageReady) void syncRecurringOccurrencesToFirestore(restored);
   }
 
@@ -1084,7 +1085,7 @@ export function saveRecurringTemplate(tmpl: Omit<RecurringTemplate, 'id' | 'crea
     updatedAt: now,
   };
   tmpls.push(newTmpl);
-  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
+  safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(newTmpl);
 
   notifyListeners();
@@ -1106,7 +1107,7 @@ export function updateRecurringTemplate(id: string, updates: Partial<RecurringTe
     updatedAt: new Date().toISOString(),
   };
 
-  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
+  safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(tmpls[idx]);
   notifyListeners();
   return tmpls[idx];
@@ -1137,7 +1138,7 @@ export function applyTemplateToCycle(templateId: string, yearMonth: string, mont
     changed.push(occurrence);
   });
   if (changed.length === 0) return 0;
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
+  safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(all));
   // The due-day move itself happens through normalization on the next
   // generation pass, which keeps the row and its amount (see recurringNormalization).
   if (storageReady) {
@@ -1158,7 +1159,7 @@ export function deleteRecurringTemplate(id: string): boolean {
 
   const now = new Date().toISOString();
   tmpls[index] = { ...tmpls[index], archivedAt: now, updatedAt: now };
-  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
+  safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(tmpls));
   syncRecurringTemplateToFirestore(tmpls[index]);
   notifyListeners();
   return true;
@@ -1336,7 +1337,7 @@ export function createOccurrenceForPeriod(
   };
 
   occurrences.push(created);
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
+  safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(occurrences));
   if (storageReady) syncRecurringOccurrencesToFirestore([created]);
   notifyListeners();
   return created;
@@ -1585,7 +1586,7 @@ export function setCardSettlementPaid(
   });
 
   if (!paid) {
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+    safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
     deleteTransactionFromFirestore(transactionId);
     notifyListeners();
     return null;
@@ -1613,7 +1614,7 @@ export function setCardSettlementPaid(
 
   transactions.unshift(settlement);
   transactions.sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
   syncTransactionToFirestore(settlement);
   notifyListeners();
   return settlement;
@@ -1659,7 +1660,7 @@ export async function saveCycleBaseline(
   };
 
   baselines[yearMonth] = baseline;
-  localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselines));
+  safeSetItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselines));
   notifyListeners();
 
   const saved = await syncCycleBaselineToFirestore(baseline);
@@ -1674,7 +1675,7 @@ export async function clearCycleBaseline(yearMonth: string): Promise<void> {
   const baselines = getCycleBaselines();
   if (!baselines[yearMonth]) return;
   delete baselines[yearMonth];
-  localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselines));
+  safeSetItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselines));
   notifyListeners();
   await deleteCycleBaselineFromFirestore(yearMonth);
 }
@@ -1694,7 +1695,7 @@ export function getQuickEntries(): QuickEntry[] {
 }
 
 function writeQuickEntries(entries: QuickEntry[]) {
-  localStorage.setItem(STORAGE_KEYS.QUICK_ENTRIES, JSON.stringify(entries));
+  safeSetItem(STORAGE_KEYS.QUICK_ENTRIES, JSON.stringify(entries));
   notifyListeners();
 }
 
@@ -1797,7 +1798,7 @@ export function saveMerchantRule(pattern: string, categoryId: string): MerchantR
   const existing = rules.find(r => r.pattern.toLowerCase() === pattern.toLowerCase());
   if (existing) {
     existing.categoryId = categoryId;
-    localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
+    safeSetItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
     syncMerchantRuleToFirestore(existing);
     notifyListeners();
     return existing;
@@ -1810,7 +1811,7 @@ export function saveMerchantRule(pattern: string, categoryId: string): MerchantR
     createdAt: new Date().toISOString(),
   };
   rules.unshift(newRule);
-  localStorage.setItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
+  safeSetItem(STORAGE_KEYS.MERCHANT_RULES, JSON.stringify(rules));
   syncMerchantRuleToFirestore(newRule);
   notifyListeners();
   return newRule;
@@ -1833,7 +1834,7 @@ export function updateUserProfile(updates: Partial<UserProfile>): UserProfile {
     ...safeUpdates,
     updatedAt: new Date().toISOString(),
   };
-  localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(updated));
+  safeSetItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(updated));
   syncUserProfileToFirestore(updated);
   notifyListeners();
   return updated;
@@ -1866,7 +1867,7 @@ export function saveCachedAIFeedback(periodId: string, feedback: AIFeedbackResul
   const map: Record<string, AIFeedbackResult> = readFeedbackMap();
   map[periodId] = feedback;
   if (yearMonth) map[latestFeedbackKey(yearMonth)] = feedback;
-  localStorage.setItem(STORAGE_KEYS.AI_INSIGHTS, JSON.stringify(map));
+  safeSetItem(STORAGE_KEYS.AI_INSIGHTS, JSON.stringify(map));
 }
 
 export function exportTransactionsCSV(yearMonth?: string, monthStartDay: number = 1): string {
@@ -1915,7 +1916,7 @@ export function saveBankAccount(acc: Omit<BankAccount, 'id' | 'createdAt' | 'upd
     updatedAt: now,
   };
   accounts.push(newAcc);
-  localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
+  safeSetItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
   syncBankAccountToFirestore(newAcc);
   notifyListeners();
   return newAcc;
@@ -1935,7 +1936,7 @@ export function updateBankAccount(id: string, updates: Partial<BankAccount>): Ba
     updatedAt: new Date().toISOString(),
   };
 
-  localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
+  safeSetItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
   syncBankAccountToFirestore(accounts[idx]);
   notifyListeners();
   return accounts[idx];
@@ -1970,12 +1971,12 @@ export async function mergeBankAccount(sourceId: string, targetId: string): Prom
   // Do not re-save these rows to Firestore: the server already patched them atomically.
   const remap = <T extends { updatedAt: string }>(rows: T[], field: keyof T) => rows.map(row =>
     row[field] === sourceId ? { ...row, [field]: targetId, updatedAt: result.updatedAt } : row);
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(remap(getTransactions(), 'accountId')));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(remap(getRecurringTemplates(), 'accountId')));
-  localStorage.setItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(remap(getAllRecurringOccurrences(), 'accountId')));
-  localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(remap(getPaymentCards(), 'linkedAccountId')));
-  localStorage.setItem(STORAGE_KEYS.QUICK_ENTRIES, JSON.stringify(remap(getQuickEntries(), 'accountId')));
-  localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(getBankAccounts().filter(account => account.id !== sourceId)));
+  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(remap(getTransactions(), 'accountId')));
+  safeSetItem(STORAGE_KEYS.RECURRING_TEMPLATES, JSON.stringify(remap(getRecurringTemplates(), 'accountId')));
+  safeSetItem(STORAGE_KEYS.RECURRING_OCCURRENCES, JSON.stringify(remap(getAllRecurringOccurrences(), 'accountId')));
+  safeSetItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(remap(getPaymentCards(), 'linkedAccountId')));
+  safeSetItem(STORAGE_KEYS.QUICK_ENTRIES, JSON.stringify(remap(getQuickEntries(), 'accountId')));
+  safeSetItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(getBankAccounts().filter(account => account.id !== sourceId)));
   notifyListeners();
   return result.total;
 }
@@ -1988,7 +1989,7 @@ export function deleteBankAccount(id: string): boolean {
   accounts = accounts.filter(a => a.id !== id);
 
   if (accounts.length !== initialLen) {
-    localStorage.setItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
+    safeSetItem(STORAGE_KEYS.BANK_ACCOUNTS, JSON.stringify(accounts));
     deleteBankAccountFromFirestore(id);
     notifyListeners();
     return true;
@@ -2012,7 +2013,7 @@ export function savePaymentCard(card: Omit<PaymentCard, 'id' | 'createdAt' | 'up
     updatedAt: now,
   };
   cards.push(newCard);
-  localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
+  safeSetItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
   syncPaymentCardToFirestore(newCard);
   notifyListeners();
   return newCard;
@@ -2029,7 +2030,7 @@ export function updatePaymentCard(id: string, updates: Partial<PaymentCard>): Pa
     updatedAt: new Date().toISOString(),
   };
 
-  localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
+  safeSetItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
   syncPaymentCardToFirestore(cards[idx]);
   notifyListeners();
   return cards[idx];
@@ -2045,7 +2046,7 @@ export function deletePaymentCard(id: string): boolean {
   cards = cards.filter(c => c.id !== id);
 
   if (cards.length !== initialLen) {
-    localStorage.setItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
+    safeSetItem(STORAGE_KEYS.PAYMENT_CARDS, JSON.stringify(cards));
     deletePaymentCardFromFirestore(id);
     notifyListeners();
     return true;
@@ -2053,11 +2054,31 @@ export function deletePaymentCard(id: string): boolean {
   return false;
 }
 
+export class ResetIncompleteError extends Error {
+  constructor(cause: unknown) {
+    super('일부 데이터가 삭제되지 않았습니다. 다시 시도해 주세요.');
+    this.name = 'ResetIncompleteError';
+    this.cause = cause;
+  }
+}
+
+/**
+ * Wipes the account. If the cloud deletion fails part-way the local cache is
+ * kept and sync is restarted, so the screen still matches what is left in the
+ * cloud; running the reset again deletes only the remaining documents.
+ */
 export async function resetAllData(): Promise<void> {
   stopFirestoreSync();
-  await flushFirestoreOutbox();
-  await clearAllReceiptImages();
-  await clearFirestoreAllData();
+  try {
+    await flushFirestoreOutbox();
+    await clearAllReceiptImages();
+    await clearFirestoreAllData();
+  } catch (error) {
+    console.error('Full reset did not complete:', error);
+    storageReady = false;
+    await initializeStorageAfterLogin().catch(() => undefined);
+    throw new ResetIncompleteError(error);
+  }
   clearFirestoreOutbox();
   clearLocalAppData();
   storageReady = false;

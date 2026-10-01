@@ -104,6 +104,7 @@ import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
 import { SyncConflictBanner } from './components/SyncConflictBanner';
+import { StorageFullBanner } from './components/SyncStatusIndicator';
 import { normalizePaydaySchedule, startDayForYearMonth } from './utils/paydaySchedule';
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
@@ -1497,6 +1498,7 @@ export default function App() {
         syncStatusSlot={<SyncStatusIndicator />}
       />
       <OfflineBanner />
+      <StorageFullBanner />
       <SyncConflictBanner onReview={() => handleNavigateTab('recurring_payment')} />
 
       {/* Main View Area */}

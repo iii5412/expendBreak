@@ -43,6 +43,9 @@ import {
 } from './firestorePayload';
 import { mergeFetchedHistory, mergeTransactionWindow } from './transactionWindow';
 import { getAccountStorageKey, getSignedInAccount } from './auth';
+import { registerCacheEvictor, safeSetItem, strictSetItem } from './safeStorage';
+import { overlayDocument, overlayList, overlayMap, pendingChangesFor, type OverlayEntry } from './outboxOverlay';
+import { stripReceiptBulk, toCloudTransactionWrite } from './receiptCache';
 
 const COLLECTION_APP_SETTINGS = 'appSettings';
 const DOC_GLOBAL_SETTINGS = 'global';
@@ -117,7 +120,8 @@ function writeFirestoreOutbox(entries: PendingFirestoreWrite[]) {
   if (entries.length === 0) {
     localStorage.removeItem(ACCOUNT_KEYS.firestoreOutbox);
   } else {
-    localStorage.setItem(ACCOUNT_KEYS.firestoreOutbox, JSON.stringify(entries));
+    // Throws when the device is full: an outbox entry that was not stored is a lost change.
+    strictSetItem(ACCOUNT_KEYS.firestoreOutbox, JSON.stringify(entries));
   }
   reportPendingCount(entries.length);
 }
@@ -149,7 +153,7 @@ function readSyncConflicts(): SyncConflict[] {
 
 function writeSyncConflicts(conflicts: SyncConflict[]) {
   if (conflicts.length === 0) localStorage.removeItem(ACCOUNT_KEYS.syncConflicts);
-  else localStorage.setItem(ACCOUNT_KEYS.syncConflicts, JSON.stringify(conflicts));
+  else safeSetItem(ACCOUNT_KEYS.syncConflicts, JSON.stringify(conflicts));
   conflictListeners.forEach(listener => listener());
 }
 
@@ -261,6 +265,12 @@ async function executeConditionalWrite(entry: PendingFirestoreWrite) {
         if (snapshots[index].exists()) firestoreTransaction.delete(reference);
         return;
       }
+      if (document.collectionName === COLLECTION_TRANSACTIONS) {
+        const write = toCloudTransactionWrite(document.data || {});
+        if (write.merge) firestoreTransaction.set(reference, stripUndefined(write.data), { merge: true });
+        else firestoreTransaction.set(reference, stripUndefined(write.data));
+        return;
+      }
       firestoreTransaction.set(reference, stripUndefined(document.data || {}));
     });
     if (entry.changeRecord) {
@@ -294,6 +304,13 @@ async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
     await setDoc(reference, stripUndefined(entry.data || {}), { merge: true });
     return;
   }
+  if (entry.collectionName === COLLECTION_TRANSACTIONS) {
+    // A cached copy without its OCR text must not erase the stored text.
+    const write = toCloudTransactionWrite(entry.data || {});
+    if (write.merge) await setDoc(reference, stripUndefined(write.data), { merge: true });
+    else await setDoc(reference, stripUndefined(write.data));
+    return;
+  }
   await setDoc(reference, stripUndefined(entry.data || {}));
 }
 
@@ -301,11 +318,27 @@ function persistFirestoreWrite(
   entry: Omit<PendingFirestoreWrite, 'id' | 'queuedAt'>,
   errorLabel: string,
 ): Promise<boolean> {
-  const queued = enqueueFirestoreWrite(entry);
+  let queued: PendingFirestoreWrite;
+  let storedInOutbox = true;
+  try {
+    queued = enqueueFirestoreWrite(entry);
+  } catch (error) {
+    // The device has no room for the outbox entry. The change is still sent
+    // straight to Firestore so it is not lost; only offline protection is gone,
+    // which the storage-full banner already tells the user about.
+    console.error(`${errorLabel}: could not queue the write locally:`, error);
+    storedInOutbox = false;
+    queued = {
+      ...stripUndefined(entry),
+      id: `write_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      queuedAt: new Date().toISOString(),
+    };
+  }
+  const settled = queued;
   reportWriteStarted();
   const operation = persistenceChain.then(async () => {
-    await executeFirestoreWrite(queued);
-    removeFirestoreWrite(queued.id);
+    await executeFirestoreWrite(settled);
+    if (storedInOutbox) removeFirestoreWrite(settled.id);
   });
   persistenceChain = operation.catch(() => undefined);
   return operation.then(() => {
@@ -315,12 +348,14 @@ function persistFirestoreWrite(
     console.error(`${errorLabel}:`, error);
     if (isAmountConflict(error)) {
       // Retrying cannot succeed and must not block later writes; park it for review.
-      recordSyncConflict(queued, error);
-      removeFirestoreWrite(queued.id);
+      recordSyncConflict(settled, error);
+      if (storedInOutbox) removeFirestoreWrite(settled.id);
       reportWriteFailed(error.message);
       return false;
     }
-    reportWriteFailed(recordFirestoreWriteError(queued.id, error));
+    reportWriteFailed(storedInOutbox
+      ? recordFirestoreWriteError(settled.id, error)
+      : describeFirestoreWriteError(error));
     return false;
   });
 }
@@ -444,6 +479,26 @@ function parseStoredObject<T>(key: string, fallback: T): T {
   }
 }
 
+/** What the outbox still owes the server for one collection, to be laid over a snapshot. */
+function pendingChanges(collectionName: string) {
+  return pendingChangesFor(collectionName, readFirestoreOutbox() as OverlayEntry[]);
+}
+
+/**
+ * Frees what can be fetched again when the device is out of space: the AI
+ * report cache, and cached transaction history older than the live window
+ * (the history floor moves up so the older periods are re-fetched on demand).
+ */
+registerCacheEvictor(() => {
+  localStorage.removeItem(getAccountStorageKey('brake_ai_insights'));
+  if (!liveTransactionWindowStart) return;
+  const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+  const recent = cached.filter(transaction => transaction.localDate >= liveTransactionWindowStart);
+  if (recent.length === cached.length) return;
+  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(recent));
+  localStorage.setItem(ACCOUNT_KEYS.transactionHistoryFloor, liveTransactionWindowStart);
+});
+
 function snapshotError(error: unknown) {
   console.error('Firestore realtime sync error:', error);
 }
@@ -489,11 +544,13 @@ export async function loadTransactionHistoryFrom(startDate: string, onNotify: Sy
     where('localDate', '>=', startDate),
     where('localDate', '<', floor),
   ));
-  const fetched = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as Transaction);
+  const fetched = snapshot.docs.map(document => stripReceiptBulk({ id: document.id, ...document.data() } as Transaction));
 
   const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
-  localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(mergeFetchedHistory(cached, fetched)));
-  localStorage.setItem(ACCOUNT_KEYS.transactionHistoryFloor, startDate);
+  // Lower the floor only when the history really was stored; otherwise the next
+  // visit fetches it again instead of trusting a cache that is missing it.
+  const stored = safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(mergeFetchedHistory(cached, fetched)));
+  if (stored) safeSetItem(ACCOUNT_KEYS.transactionHistoryFloor, startDate);
   onNotify();
 }
 
@@ -545,7 +602,7 @@ export function initFirestoreSync(
   requireOwnerUid();
   isSyncInitialized = true;
   liveTransactionWindowStart = transactionWindowStart;
-  localStorage.setItem(ACCOUNT_KEYS.transactionHistoryFloor, readHistoryFloor(transactionWindowStart));
+  safeSetItem(ACCOUNT_KEYS.transactionHistoryFloor, readHistoryFloor(transactionWindowStart));
 
   const pending = new Set<string>(SYNC_SOURCES);
   let settle: (() => void) | null = null;
@@ -573,22 +630,26 @@ export function initFirestoreSync(
     sort?: (values: T[]) => void,
   ) =>
     onSnapshot(scopedCollection(collectionName), snapshot => {
-      const values = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T);
+      const fromServer = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as T & { id: string });
+      const values = overlayList(fromServer, pendingChanges(collectionName)) as T[];
       sort?.(values);
-      localStorage.setItem(storageKey, JSON.stringify(values));
+      safeSetItem(storageKey, JSON.stringify(values));
       markDelivered(source);
       onNotify();
     }, markFailed);
 
   activeUnsubscribers = [
     onSnapshot(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS), snapshot => {
-      if (snapshot.exists()) {
-        const cloudProfile = snapshot.data() as UserProfile;
-        const localProfile = parseStoredObject<Partial<UserProfile>>(STORAGE_KEYS.USER_PROFILE, {});
-        localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify({ ...localProfile, ...cloudProfile }));
-      } else {
-        localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
-      }
+      const localProfile = parseStoredObject<Partial<UserProfile>>(STORAGE_KEYS.USER_PROFILE, {});
+      const cloudProfile = snapshot.exists() ? { ...localProfile, ...(snapshot.data() as UserProfile) } : null;
+      const profile = overlayDocument<Record<string, unknown>>(
+        cloudProfile as Record<string, unknown> | null,
+        pendingChanges(COLLECTION_APP_SETTINGS)
+          .filter(change => change.id === DOC_GLOBAL_SETTINGS)
+          .map(change => ({ ...change, merge: true })),
+      );
+      if (profile) safeSetItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(profile));
+      else localStorage.removeItem(STORAGE_KEYS.USER_PROFILE);
       markDelivered('profile');
       onNotify();
     }, markFailed),
@@ -599,10 +660,13 @@ export function initFirestoreSync(
     onSnapshot(
       query(scopedCollection(COLLECTION_TRANSACTIONS), where('localDate', '>=', transactionWindowStart)),
       snapshot => {
-        const live = snapshot.docs.map(document => ({ id: document.id, ...document.data() }) as Transaction);
+        const live = snapshot.docs.map(document => stripReceiptBulk({ id: document.id, ...document.data() } as Transaction));
         const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
-        const merged = mergeTransactionWindow(cached, live, transactionWindowStart);
-        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(merged));
+        const merged = overlayList(
+          mergeTransactionWindow(cached, live, transactionWindowStart),
+          pendingChanges(COLLECTION_TRANSACTIONS),
+        ).map(stripReceiptBulk);
+        safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(merged));
         markDelivered('transactions');
         onNotify();
       },
@@ -614,7 +678,12 @@ export function initFirestoreSync(
         const budget = { id: document.id, ...document.data() } as Budget & { id?: string };
         budgetMap[budget.yearMonth || document.id] = normalizeBudget(budget);
       });
-      localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgetMap));
+      safeSetItem(STORAGE_KEYS.BUDGETS, JSON.stringify(overlayMap(
+        budgetMap,
+        pendingChanges(COLLECTION_BUDGETS),
+        (id, data) => String(data?.yearMonth || id),
+        value => normalizeBudget(value as Budget),
+      )));
       markDelivered('budgets');
       onNotify();
     }, markFailed),
@@ -636,7 +705,11 @@ export function initFirestoreSync(
         const baseline = { ...document.data() } as CycleBaseline;
         baselineMap[baseline.yearMonth || document.id] = baseline;
       });
-      localStorage.setItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(baselineMap));
+      safeSetItem(STORAGE_KEYS.CYCLE_BASELINES, JSON.stringify(overlayMap(
+        baselineMap,
+        pendingChanges(COLLECTION_CYCLE_BASELINES),
+        (id, data) => String(data?.yearMonth || id),
+      )));
       markDelivered('cycleBaselines');
       onNotify();
     }, markFailed),
@@ -797,33 +870,40 @@ export async function deletePaymentCardFromFirestore(id: string) {
   }, 'Failed to delete payment card from Firestore');
 }
 
+/**
+ * Deletes every document of the account. Any failure is thrown so the caller
+ * can tell the user the reset is incomplete; running it again deletes only
+ * what is left.
+ */
 export async function clearFirestoreAllData() {
-  try {
-    const collectionsToClear = [
-      COLLECTION_TRANSACTIONS,
-      COLLECTION_CATEGORIES,
-      COLLECTION_BUDGETS,
-      COLLECTION_RECURRING_TEMPLATES,
-      COLLECTION_RECURRING_OCCURRENCES,
-      COLLECTION_MERCHANT_RULES,
-      COLLECTION_BANK_ACCOUNTS,
-      COLLECTION_PAYMENT_CARDS,
-      COLLECTION_CYCLE_BASELINES,
-      COLLECTION_QUICK_ENTRIES,
-      COLLECTION_AMOUNT_CHANGES,
-    ];
+  const collectionsToClear = [
+    COLLECTION_TRANSACTIONS,
+    COLLECTION_CATEGORIES,
+    COLLECTION_BUDGETS,
+    COLLECTION_RECURRING_TEMPLATES,
+    COLLECTION_RECURRING_OCCURRENCES,
+    COLLECTION_MERCHANT_RULES,
+    COLLECTION_BANK_ACCOUNTS,
+    COLLECTION_PAYMENT_CARDS,
+    COLLECTION_CYCLE_BASELINES,
+    COLLECTION_QUICK_ENTRIES,
+    COLLECTION_AMOUNT_CHANGES,
+  ];
 
-    for (const colName of collectionsToClear) {
-      const snap = await getDocs(scopedCollection(colName));
-      for (let offset = 0; offset < snap.docs.length; offset += 400) {
-        const batch = writeBatch(db);
-        snap.docs.slice(offset, offset + 400).forEach(docSnap => batch.delete(docSnap.ref));
-        await batch.commit();
-      }
+  for (const colName of collectionsToClear) {
+    const snap = await getDocs(scopedCollection(colName));
+    for (let offset = 0; offset < snap.docs.length; offset += 400) {
+      const batch = writeBatch(db);
+      snap.docs.slice(offset, offset + 400).forEach(docSnap => batch.delete(docSnap.ref));
+      await batch.commit();
     }
-    await deleteDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS));
-  } catch (err) {
-    console.error('Failed to clear Firestore collections:', err);
   }
+  await deleteDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS));
 }
 
+/** The receipt's OCR text, which the local cache leaves out. */
+export async function fetchTransactionReceiptText(transactionId: string): Promise<string | null> {
+  const snapshot = await getDoc(scopedDoc(COLLECTION_TRANSACTIONS, transactionId));
+  const receipt = snapshot.exists() ? (snapshot.data() as Partial<Transaction>).receipt : null;
+  return receipt?.rawText ?? null;
+}

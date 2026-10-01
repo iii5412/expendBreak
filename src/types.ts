@@ -36,6 +36,8 @@ export interface ReceiptRecord {
   cardLast4?: string | null;
   lineItems: ReceiptLineItem[];
   rawText?: string | null;
+  /** Local cache only: the OCR text exists in Firestore but was left out of this copy. */
+  rawTextOmitted?: boolean;
   ocrConfidence: number;
   scannedAt: string;
 }
