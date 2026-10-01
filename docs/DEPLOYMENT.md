@@ -95,6 +95,9 @@ Android APK 빌드 환경에는 같은 운영 origin을 `VITE_API_BASE_URL`로 �
 
 ## 4. 운영 확인
 
+- `GET /healthz`가 200 `{ ok: true, version }`을 돌려준다(Cloud Run 시작/활성 프로브에 사용할 수 있다. Firestore는 확인하지 않는다).
+- 서버 로그는 한 줄 JSON이다. 응답 헤더 `X-Request-Id`(또는 앱 진단 내보내기의 `failedRequests[].requestId`)로 Cloud Logging에서 `jsonPayload.requestId="..."`를 검색하면 그 요청의 로그가 모두 나온다.
+
 - 새 브라우저에서 PIN 전에는 금융 데이터가 나타나지 않는다.
 - PIN 성공 후 기존 데이터가 기본값으로 덮이지 않는다.
 - 같은 브라우저에서 계정을 바꿔 로그인해도 로컬 캐시, 오프라인 대기 쓰기, 작성 중 초안이 섞이지 않는다.

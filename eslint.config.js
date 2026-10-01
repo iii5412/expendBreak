@@ -38,6 +38,12 @@ export default tseslint.config(
     },
   },
   {
+    // Server code has no `any`. Test doubles of Firestore keep it.
+    files: ['src/server/**/*.ts'],
+    ignores: ['src/server/**/*.test.ts'],
+    rules: { '@typescript-eslint/no-explicit-any': 'error' },
+  },
+  {
     files: ['**/*.{js,mjs}'],
     languageOptions: { globals: { ...globals.node } },
   },

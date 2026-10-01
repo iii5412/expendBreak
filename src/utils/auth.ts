@@ -8,6 +8,7 @@ import {
   signOut,
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { recordFailedRequest } from './requestErrors';
 
 const SESSION_TOKEN_KEY = 'eb_session_token';
 const SESSION_ACCOUNT_KEY = 'eb_session_account';
@@ -197,6 +198,14 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   headers.set('Authorization', `Bearer ${token}`);
   const target = typeof input === 'string' && input.startsWith('/') ? apiUrl(input) : input;
   const response = await fetch(target, { ...init, headers });
+  if (!response.ok) {
+    recordFailedRequest({
+      method: init.method,
+      url: typeof target === 'string' ? target : target instanceof URL ? target.href : target.url,
+      status: response.status,
+      requestId: response.headers.get('X-Request-Id'),
+    });
+  }
   // Every session problem is a 401 (session_missing/invalid/expired/revoked).
   if (response.status === 401) reportSessionExpired();
   return response;

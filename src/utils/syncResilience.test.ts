@@ -114,3 +114,17 @@ describe('module wiring', () => {
     await expect(import('./safeStorage')).resolves.toBeDefined();
   });
 });
+
+describe('failed request records', () => {
+  it('keeps the latest 20, path only, with the server request id', async () => {
+    const { clearFailedRequests, getRecentFailedRequests, recordFailedRequest } = await import('./requestErrors');
+    clearFailedRequests();
+    for (let index = 0; index < 25; index += 1) {
+      recordFailedRequest({ method: 'post', url: `https://app.example.com/api/ai/feedback?month=2026-09&q=${index}`, status: 502, requestId: `id-${index}` });
+    }
+    const recent = getRecentFailedRequests();
+    expect(recent).toHaveLength(20);
+    expect(recent[19]).toMatchObject({ method: 'POST', path: '/api/ai/feedback', status: 502, requestId: 'id-24' });
+    expect(JSON.stringify(recent)).not.toContain('2026-09');
+  });
+});

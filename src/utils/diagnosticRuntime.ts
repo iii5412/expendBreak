@@ -3,6 +3,7 @@ import { App } from '@capacitor/app';
 import { getSyncState } from './syncStatus';
 import { getRecordedRenderErrors } from './renderErrors';
 import { getStorageUsage } from './storageUsage';
+import { getRecentFailedRequests } from './requestErrors';
 export async function getDiagnosticRuntime() {
   const installed = Capacitor.isNativePlatform() ? await App.getInfo().catch(() => null) : null;
   const sync = getSyncState();
@@ -14,6 +15,7 @@ export async function getDiagnosticRuntime() {
     sync: { phase: sync.phase, pendingCount: sync.pendingCount, isOnline: sync.isOnline, lastSyncedAt: sync.lastSyncedAt },
     renderErrors: getRecordedRenderErrors(),
     storageUsage: getStorageUsage(),
+    failedRequests: getRecentFailedRequests(),
     storageFull: sync.storageFull,
   };
 }

@@ -1,4 +1,5 @@
 import type express from 'express';
+import { setRequestUid } from './lib/logger';
 import { verifySessionToken } from './session';
 import type { SessionEpochs } from './sessionEpochs';
 
@@ -41,6 +42,7 @@ export function createRequireAccount({
     if (session.epoch < currentEpoch) return unauthorized(res, 'session_revoked');
 
     res.locals.userUid = session.uid;
+    setRequestUid(session.uid);
     res.locals.ownerUid = session.uid;
     res.locals.sessionEpoch = session.epoch;
     return next();

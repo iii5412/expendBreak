@@ -170,7 +170,6 @@ describe('repository hygiene', () => {
 
   it('contains no hard-coded session signing key in server or app code', () => {
     const files = [
-      path.join(root, 'server.ts'),
       path.join(root, '.env.example'),
       ...codeFiles(path.join(root, 'src')),
       ...codeFiles(path.join(root, 'scripts')),

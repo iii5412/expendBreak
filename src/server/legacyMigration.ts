@@ -42,7 +42,7 @@ export class MigrationVerificationError extends Error {
   }
 }
 
-function prepareForOwner(collectionName: string, source: Record<string, any>) {
+function prepareForOwner(collectionName: string, source: Record<string, unknown>) {
   const data = { ...source };
   if (collectionName === 'appSettings') {
     delete data.accessPin;
@@ -53,7 +53,7 @@ function prepareForOwner(collectionName: string, source: Record<string, any>) {
   return data;
 }
 
-const amountTotal = (documents: Array<Record<string, any> | undefined>) =>
+const amountTotal = (documents: Array<Record<string, unknown> | undefined>) =>
   documents.reduce((sum, document) => sum + Number(document?.amount || 0), 0);
 
 /**
@@ -86,7 +86,7 @@ export async function ensureLegacyDataMigration(
   if (existingMarker.exists) return existingMarker.data();
 
   const collectionReports: Record<string, CollectionReport> = {};
-  const sourceDataByCollection = new Map<string, Array<Record<string, any>>>();
+  const sourceDataByCollection = new Map<string, Array<Record<string, unknown>>>();
 
   const failVerification = async (message: string, failure: MigrationFailure) => {
     await ownerRef.collection('migrations').doc(FAILURE_MARKER_ID).set({

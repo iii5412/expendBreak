@@ -15,7 +15,7 @@
 | [T4](./PRD-T4-ci-and-rules-testing.md) | CI, 보안 규칙 테스트, 규칙 배포 자동화 | P1 | 1.5~2일 | — | ✅ 완료 (2026-10-01), 운영 설정 3건 남음 |
 | [T5](./PRD-T5-sync-storage-resilience.md) | 로컬 캐시·동기화 복원력 | P1 / P2 | 1~2일 + 1~2주 | 2단계는 T8과 병행 | 1단계 ✅ 완료 (2026-10-01, R2 일부 제외) · 2단계 대기 |
 | [T6](./PRD-T6-error-transparency.md) | 오류 경계와 실패 투명성 | P1 | 0.5~1일 | — | ✅ 완료 (2026-10-01), 수용 기준 일부 단위 테스트로만 확인 |
-| [T7](./PRD-T7-server-modularization.md) | 서버 모듈 분리·테스트·관찰성 | P2 | 2~3일 | T1과 병행 권장 | 대기 |
+| [T7](./PRD-T7-server-modularization.md) | 서버 모듈 분리·테스트·관찰성 | P2 | 2~3일 | T1과 병행 권장 | ✅ 완료 (2026-10-01), PRD와 다른 점 있음 |
 | [T8](./PRD-T8-client-refactor-performance.md) | 클라이언트 구조 정리·성능·접근성 | P2 | 1~2주 | T4(ESLint) | 대기 |
 
 ## 권장 순서
