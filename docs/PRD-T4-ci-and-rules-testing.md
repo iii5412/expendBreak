@@ -1,6 +1,6 @@
 # T4. CI, 보안 규칙 테스트, 규칙 배포 자동화 PRD
 
-- 문서 상태: Draft v1.0
+- 문서 상태: 구현 완료 v1.1 (2026-10-01), 운영 설정 대기
 - 작성일: 2026-09-23
 - 우선순위: P1
 - 예상 규모: 1.5~2일
@@ -76,8 +76,18 @@
 
 ## 4. 수용 기준
 
-- [ ] PR을 열면 CI가 자동 실행되고, 테스트 하나를 일부러 깨뜨리면 실패한다.
-- [ ] `npm run test:rules`가 로컬과 CI 모두에서 R2 표의 시나리오를 통과한다.
-- [ ] 규칙 파일만 바꾼 커밋이 `main`에 들어가면 운영 규칙이 자동 갱신된다.
-- [ ] 저장소에 서비스 계정 키 파일이 없다.
-- [ ] `IMPLEMENTATION-STATUS.md`의 “에뮬레이터 검증 전” 문구가 제거된다.
+- [ ] PR을 열면 CI가 자동 실행되고, 테스트 하나를 일부러 깨뜨리면 실패한다. (`.github/workflows/ci.yml` 작성. GitHub에서 실제로 돌려 보지는 않았다. 같은 명령을 로컬에서 모두 통과시켰다)
+- [x] `npm run test:rules`가 R2 표의 시나리오를 통과한다. (로컬 에뮬레이터에서 31개 통과. `amountChanges` 규칙을 일부러 약화하면 해당 테스트가 실패하는 것을 확인했다. CI 통과는 위와 같이 미확인)
+- [ ] 규칙 파일만 바꾼 커밋이 `main`에 들어가면 운영 규칙이 자동 갱신된다. (`deploy-rules.yml`, `firebase.json`, `.firebaserc` 작성. 아래 운영 설정 전에는 동작하지 않으며 배포는 시험하지 못했다)
+- [x] 저장소에 서비스 계정 키 파일이 없다. (OIDC 방식. `bun.lock`도 삭제)
+- [x] `IMPLEMENTATION-STATUS.md`의 “에뮬레이터 검증 전” 문구를 제거했다.
+
+## 5. 구현 메모와 남은 운영 설정
+
+- 규칙 테스트는 `tests/rules/`에 있고 `vitest.rules.config.ts`로 분리했다. 일반 `npm test`는 `vite.config.ts`의 `test.exclude`로 이 폴더를 건너뛴다. 에뮬레이터에는 Java 21이 필요하다(로컬 PATH의 Java 17로는 실행하지 않았다. 이 저장소의 `.jdk21`을 `JAVA_HOME`으로 지정했다). 서버 전용 컬렉션(`sessionEpochs`, `system`)이 클라이언트에 막혀 있는지도 테스트에 포함했다.
+- ESLint(R4): `eslint` + `typescript-eslint` + `react-hooks`. 첫 도입 결과 오류 0건, 경고 198건(`no-explicit-any` 143, `exhaustive-deps` 21, 미사용 변수 21 등). `no-useless-escape`, `no-control-regex`는 기존 코드에 걸려 경고로 낮췄다. 도입 중 `rules-of-hooks` 위반 1건이 나왔으나 `use`로 시작하는 일반 함수명 때문이어서 이름만 바꿨다. 사소한 `prefer-const` 2건도 고쳤다. Prettier는 설정(`.prettierrc.json`)만 추가했고 전체 재포맷은 하지 않았으며 `format:check`는 CI에 넣지 않았다.
+- **운영 설정(수동, 저장소 밖)**
+  1. 첫 배포 전에 운영 규칙과 저장소 규칙이 같은지 확인한다(`firebase firestore:rules:get` 또는 콘솔).
+  2. GCP에 Workload Identity Federation 풀·공급자와 규칙 배포용 서비스 계정을 만들고, 저장소 변수 `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`를 등록한다.
+  3. 브랜치 보호에서 CI(`verify`) 통과를 머지 조건으로 지정한다.
+- 알려진 한계: 규칙 배포는 이름 있는 데이터베이스(`firebase.json`의 `firestore[].database`)를 대상으로 한다. 배포는 시험하지 못했으므로 첫 실행 로그를 확인한다.

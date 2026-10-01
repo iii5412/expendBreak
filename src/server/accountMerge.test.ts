@@ -4,7 +4,7 @@ import { mergeBankAccountRecords } from './accountMerge';
 
 // A transactional in-memory adapter: writes become visible only on commit.
 function database(seed: Record<string, Record<string, unknown>>) {
-  let records = structuredClone(seed);
+  const records = structuredClone(seed);
   let failCommit = false;
   const ref = (path: string): any => ({ path, collection: (name: string) => ref(`${path}/${name}`), doc: (id: string) => ref(`${path}/${id}`), where: (field: string, op: string, value: string) => ({ path, field, value }) });
   const snapshot = (reference: any) => ({ ref: reference, exists: Boolean(records[reference.path]), data: () => structuredClone(records[reference.path]) });

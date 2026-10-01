@@ -324,7 +324,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
     });
   };
 
-  const useEstimatedMonthlyCardAmount = (card: PaymentCard) => {
+  const clearMonthlyCardAmountOverride = (card: PaymentCard) => {
     const monthlyPaymentAmounts = { ...(card.monthlyPaymentAmounts || {}) };
     delete monthlyPaymentAmounts[cardPaymentMonth];
     onUpdatePaymentCard(card.id, { monthlyPaymentAmounts });
@@ -743,7 +743,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                         {monthlySettlement.source === 'confirmed' && (
                           <button
                             type="button"
-                            onClick={() => useEstimatedMonthlyCardAmount(card)}
+                            onClick={() => clearMonthlyCardAmountOverride(card)}
                             className="text-xs font-semibold text-slate-400 hover:text-amber-300"
                           >
                             수동 보정값 삭제하고 카드별 지출 자동 계산 사용

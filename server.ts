@@ -945,7 +945,7 @@ function fallbackClassify(text: string, categories: any[], merchantRules: any[],
   // Check merchant rules
   let suggestedCategoryId = 'etc_expense';
   let merchant = '';
-  let memo = text;
+  const memo = text;
   let type: 'income' | 'expense' = 'expense';
 
   if (text.includes('월급') || text.includes('급여') || text.includes('들어옴') || text.includes('수입')) {

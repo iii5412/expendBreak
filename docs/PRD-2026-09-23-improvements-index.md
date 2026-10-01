@@ -12,7 +12,7 @@
 | [T1](./PRD-T1-auth-hardening.md) | 서버 인증 기본값 제거 및 PIN 대입 방어 | P0 | 1~2일 | — | ✅ 완료 (2026-09-23) |
 | [T2](./PRD-T2-legacy-migration-safety.md) | 레거시 마이그레이션 실패 처리·덮어쓰기 방지 | P0 | 0.5~1일 | — | ✅ 완료 (2026-09-23), 수용 기준 1건 부분 충족 |
 | [T3](./PRD-T3-session-lifecycle.md) | 세션 폐기와 만료 처리 | P1 | 1일 | T1 | ✅ 완료 (2026-09-28), 수용 기준 1건 운영 확인 필요 |
-| [T4](./PRD-T4-ci-and-rules-testing.md) | CI, 보안 규칙 테스트, 규칙 배포 자동화 | P1 | 1.5~2일 | — | 대기 |
+| [T4](./PRD-T4-ci-and-rules-testing.md) | CI, 보안 규칙 테스트, 규칙 배포 자동화 | P1 | 1.5~2일 | — | ✅ 완료 (2026-10-01), 운영 설정 3건 남음 |
 | [T5](./PRD-T5-sync-storage-resilience.md) | 로컬 캐시·동기화 복원력 | P1 / P2 | 1~2일 + 1~2주 | 2단계는 T8과 병행 | 대기 |
 | [T6](./PRD-T6-error-transparency.md) | 오류 경계와 실패 투명성 | P1 | 0.5~1일 | — | ✅ 완료 (2026-10-01), 수용 기준 일부 단위 테스트로만 확인 |
 | [T7](./PRD-T7-server-modularization.md) | 서버 모듈 분리·테스트·관찰성 | P2 | 2~3일 | T1과 병행 권장 | 대기 |

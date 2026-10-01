@@ -163,7 +163,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
     if (!callId || handledToolCallsRef.current.has(callId)) return;
     handledToolCallsRef.current.add(callId);
 
-    let parsed: Record<string, unknown> = {};
+    let parsed: Record<string, unknown>;
     try {
       parsed = argumentText ? JSON.parse(argumentText) : {};
     } catch {

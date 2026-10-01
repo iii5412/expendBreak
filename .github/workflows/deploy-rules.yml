@@ -1,0 +1,60 @@
+name: Deploy security rules
+
+# Deploys firestore.rules and storage.rules when they change on main, so the
+# repository stays the single source of truth for what production enforces.
+#
+# Setup (one time, outside this repo):
+#   1. Create a Workload Identity Federation pool/provider that trusts this
+#      GitHub repository, and a service account allowed to deploy rules
+#      (the "Firebase Rules Admin" role is enough for rules deployment).
+#   2. Add repository variables GCP_WORKLOAD_IDENTITY_PROVIDER and
+#      GCP_SERVICE_ACCOUNT. No service-account key is stored anywhere.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - firestore.rules
+      - storage.rules
+      - firebase.json
+      - .firebaserc
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-rules
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - run: npm ci
+
+      # Never publish rules the emulator tests reject.
+      - name: Security rules tests
+        run: npm run test:rules
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Deploy rules
+        run: npx firebase deploy --only firestore:rules,storage --non-interactive

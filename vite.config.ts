@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -126,6 +127,8 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    // Rules tests need the Firebase emulators; `npm run test:rules` runs them.
+    test: { exclude: ['**/node_modules/**', '**/dist/**', 'tests/rules/**', '.jdk21/**', '.android-sdk/**'] },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.

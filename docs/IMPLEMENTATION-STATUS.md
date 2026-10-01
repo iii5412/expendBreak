@@ -21,7 +21,7 @@
 검증 못 한 것(코드 외):
 
 - Android 실기기, TalkBack, 200% 글자 확대, 키보드·하단 버튼 겹침, 뒤로가기 동작(수용 #11). 10px 글자는 모두 11px 이상으로 올렸고 터치 영역은 44px 기준을 따랐다.
-- `firestore.rules` revision 규칙은 에뮬레이터 검증 전이며 `docs/DEPLOYMENT.md` §3-1 절차로 배포 후 확인 필요. `recurringTemplates.defaultAmount`는 0(참고 금액 없음)을 허용하도록 완화했다.
+- `firestore.rules` revision 규칙은 `npm run test:rules`(Firebase 에뮬레이터, 2026-10-01)로 검증한다. 운영 배포 후 확인 절차는 `docs/DEPLOYMENT.md` §3-1. `recurringTemplates.defaultAmount`는 0(참고 금액 없음)을 허용하도록 완화했다.
 - 성공 지표(§9)는 사용성 측정이 필요하다.
 
 ## 이번 작업에서 완료

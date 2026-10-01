@@ -1,0 +1,11 @@
+dist
+server-dist
+android
+artifacts
+coverage
+node_modules
+.jdk21
+.android-sdk
+package-lock.json
+bun.lock
+public
