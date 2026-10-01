@@ -27,11 +27,19 @@ import { FutureCommitmentSummary } from '../utils/futureCommitments';
 import { FutureCommitmentsCard } from './FutureCommitmentsCard';
 import { CashflowTimeline } from '../utils/cashflowTimeline';
 import { CashflowTimelineCard } from './CashflowTimelineCard';
-import { getCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
+import { getCachedAIFeedback, getLatestCachedAIFeedback, saveCachedAIFeedback } from '../utils/storage';
 import { authenticatedFetch } from '../utils/auth';
 import { getInstallmentCharge } from '../utils/installments';
 import { ScreenHeader } from './ui/ScreenHeader';
 import { compareCycleElapsed, reviewUncategorized } from '../utils/cycleComparison';
+
+/** "오늘" / "n일 전" label for a stored analysis. */
+function describeAge(generatedAt: string | undefined, now = Date.now()) {
+  const time = generatedAt ? Date.parse(generatedAt) : NaN;
+  if (!Number.isFinite(time)) return '이전 분석';
+  const days = Math.floor((now - time) / 86_400_000);
+  return days <= 0 ? '오늘' : `${days}일 전`;
+}
 
 interface AnalyticsViewProps {
   summary: MonthSummary;
@@ -52,6 +60,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 }) => {
   const [feedback, setFeedback] = useState<AIFeedbackResult | null>(null);
   const [isLoadingFeedback, setIsLoadingFeedback] = useState<boolean>(false);
+  const [feedbackFailed, setFeedbackFailed] = useState(false);
+  const [staleFeedback, setStaleFeedback] = useState<AIFeedbackResult | null>(null);
 
   // 1. Cash track (income, committed outflows) beside spend track (living expenses)
   const incomeVsExpenseData = [
@@ -132,6 +142,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     }
 
     setIsLoadingFeedback(true);
+    setFeedbackFailed(false);
+    setStaleFeedback(null);
     try {
       const res = await authenticatedFetch('/api/ai/feedback', {
         method: 'POST',
@@ -149,22 +161,27 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       data.generatedAt = new Date().toISOString();
 
       setFeedback(data);
-      saveCachedAIFeedback(feedbackCacheKey, data);
+      saveCachedAIFeedback(feedbackCacheKey, data, summary.yearMonth);
     } catch (e) {
       console.error(e);
+      // A failed request is shown as a failure. An older analysis of this
+      // cycle may still be shown, but only labelled with how old it is.
+      setFeedbackFailed(true);
+      setStaleFeedback(getLatestCachedAIFeedback(summary.yearMonth));
     } finally {
       setIsLoadingFeedback(false);
     }
   };
 
   useEffect(() => {
+    setFeedback(null);
     if (aiInsightsEnabled) fetchAiFeedback();
-    else setFeedback(null);
   }, [
     aiInsightsEnabled,
     feedbackCacheKey,
   ]);
 
+  const shownFeedback = feedback || (feedbackFailed ? staleFeedback : null);
   const ruleBasedConclusion = spendingConclusion(summary);
 
   // Same elapsed days against the previous cycle, and the "기타" review list
@@ -207,10 +224,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <p className="text-sm font-bold leading-relaxed text-slate-100">{ruleBasedConclusion}</p>
             <p className="mt-1 text-xs text-slate-400">AI가 꺼져 있어도 확정된 수치로 계산한 결론은 계속 제공됩니다.</p>
           </div>
-        ) : feedback ? (
+        ) : shownFeedback ? (
           <div className="space-y-3.5 text-xs">
+            {feedbackFailed && (
+              <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-200">
+                <span>AI 분석을 새로 불러오지 못했습니다. 아래는 {describeAge(shownFeedback.generatedAt)}의 분석입니다.</span>
+                <button type="button" onClick={() => fetchAiFeedback(true)} className="min-h-9 rounded border border-amber-500/40 px-3 font-bold">다시 시도</button>
+              </div>
+            )}
             <div className="border-l-2 border-amber-400 bg-slate-950/55 px-4 py-3 text-sm font-bold leading-relaxed text-slate-100">
-              {feedback.oneLiner || ruleBasedConclusion}
+              {shownFeedback.oneLiner || ruleBasedConclusion}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -219,7 +242,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                   <CheckCircle className="w-3.5 h-3.5" />
                   <span>잘하고 있는 점</span>
                 </div>
-                <p className="text-slate-300">{feedback.positivePoint}</p>
+                <p className="text-slate-300">{shownFeedback.positivePoint}</p>
               </div>
 
               <div className="bg-slate-950/60 p-3 rounded-xl border border-rose-500/30">
@@ -228,7 +251,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                   <span>위험 요인</span>
                 </div>
                 <ul className="list-disc list-inside text-slate-300 space-y-0.5">
-                  {feedback.riskFactors?.map((rf, idx) => (
+                  {shownFeedback.riskFactors?.map((rf, idx) => (
                     <li key={idx}>{rf}</li>
                   ))}
                 </ul>
@@ -241,7 +264,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                 <span>이번 주 추천 절약 행동</span>
               </div>
               <div className="space-y-1.5">
-                {feedback.weeklyActions?.map((act, idx) => (
+                {shownFeedback.weeklyActions?.map((act, idx) => (
                   <div key={idx} className="flex items-center justify-between text-slate-200">
                     <span>• {act.action}</span>
                     <span className="font-bold text-emerald-400">{act.estimatedSavings}</span>
@@ -253,9 +276,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         ) : (
           <div className="border-l-2 border-slate-600 bg-slate-950/55 px-4 py-3">
             <p className="text-sm font-bold leading-relaxed text-slate-100">{ruleBasedConclusion}</p>
-            <p className="mt-1 text-xs text-slate-400">
-              {isLoadingFeedback ? 'AI가 근거와 추천 행동을 정리하고 있습니다.' : '확정된 수치로 계산한 기본 결론입니다.'}
-            </p>
+            {feedbackFailed ? (
+              <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-200">
+                <span>AI 분석을 불러오지 못했습니다. 위 결론은 확정된 수치로 계산한 기본 결론입니다.</span>
+                <button type="button" onClick={() => fetchAiFeedback(true)} disabled={isLoadingFeedback} className="min-h-9 rounded border border-amber-500/40 px-3 font-bold disabled:opacity-50">다시 시도</button>
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">
+                {isLoadingFeedback ? 'AI가 근거와 추천 행동을 정리하고 있습니다.' : '확정된 수치로 계산한 기본 결론입니다.'}
+              </p>
+            )}
           </div>
         )}
       </section>

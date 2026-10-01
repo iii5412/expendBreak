@@ -491,10 +491,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           existingCategories: categories,
         }),
       });
+      if (!res.ok) throw new Error('Category recommendation failed');
       const data = await res.json();
       setAiCatSuggestions(data.suggestions || []);
     } catch (err) {
       console.error(err);
+      setAiCatSuggestions([]);
+      showToast({ message: 'AI 카테고리 추천을 불러오지 못했습니다.', description: '잠시 후 다시 시도해 주세요.', tone: 'error' });
     } finally {
       setIsAiCatLoading(false);
     }

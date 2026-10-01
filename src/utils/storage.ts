@@ -1839,15 +1839,33 @@ export function updateUserProfile(updates: Partial<UserProfile>): UserProfile {
   return updated;
 }
 
-export function getCachedAIFeedback(periodId: string): AIFeedbackResult | null {
+// Older servers answered a failed analysis with this fixed text. It was never
+// the user's own analysis, so a cached copy must not be shown as one.
+const LEGACY_PLACEHOLDER_FEEDBACK = new Set([
+  '데이터를 기반으로 이번 달 지출 상태를 분석했습니다.',
+  '고정비와 용돈을 분리해 이번 달 저축 여력을 관리하고 있습니다.',
+]);
+
+const latestFeedbackKey = (yearMonth: string) => `latest:${yearMonth}`;
+
+function readFeedbackMap(): Record<string, AIFeedbackResult> {
   const map = readJson<Record<string, AIFeedbackResult>>(STORAGE_KEYS.AI_INSIGHTS, {});
-  return map[periodId] || null;
+  return Object.fromEntries(Object.entries(map).filter(([, value]) => !LEGACY_PLACEHOLDER_FEEDBACK.has(value?.oneLiner)));
 }
 
-export function saveCachedAIFeedback(periodId: string, feedback: AIFeedbackResult) {
-  const raw = localStorage.getItem(STORAGE_KEYS.AI_INSIGHTS);
-  const map: Record<string, AIFeedbackResult> = raw ? JSON.parse(raw) : {};
+export function getCachedAIFeedback(periodId: string): AIFeedbackResult | null {
+  return readFeedbackMap()[periodId] || null;
+}
+
+/** The most recent successful analysis of this cycle, even if the figures have changed since. */
+export function getLatestCachedAIFeedback(yearMonth: string): AIFeedbackResult | null {
+  return readFeedbackMap()[latestFeedbackKey(yearMonth)] || null;
+}
+
+export function saveCachedAIFeedback(periodId: string, feedback: AIFeedbackResult, yearMonth?: string) {
+  const map: Record<string, AIFeedbackResult> = readFeedbackMap();
   map[periodId] = feedback;
+  if (yearMonth) map[latestFeedbackKey(yearMonth)] = feedback;
   localStorage.setItem(STORAGE_KEYS.AI_INSIGHTS, JSON.stringify(map));
 }
 

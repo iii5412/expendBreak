@@ -1071,7 +1071,7 @@ app.post('/api/ai/classify', async (req, res) => {
     if (!ai) {
       // Fallback response if API key not present
       const fallback = fallbackClassify(text, safeCategories, safeMerchantRules, todayStr);
-      return res.json({ ...fallback, isFallback: true });
+      return res.json({ ...fallback, reason: 'AI가 꺼져 있어 규칙·키워드로만 추정했습니다. 내용을 확인해 주세요.', isFallback: true });
     }
 
     const catListStr = safeCategories
@@ -1186,7 +1186,7 @@ Rules:
   } catch (error: any) {
     console.error('AI Classification Error:', error);
     const fallback = fallbackClassify(req.body.text || '', req.body.categories || [], req.body.merchantRules || [], req.body.defaultDate || new Date().toISOString().split('T')[0]);
-    return res.json({ ...fallback, isFallback: true });
+    return res.json({ ...fallback, reason: 'AI 연결에 실패해 규칙·키워드로만 추정했습니다. 내용을 확인해 주세요.', isFallback: true });
   }
 });
 
@@ -1199,14 +1199,7 @@ app.post('/api/ai/category-recommend', async (req, res) => {
     }
     const ai = getGeminiClient();
 
-    if (!ai) {
-      return res.json({
-        suggestions: [
-          { suggestedName: '학원/교육', description: '아이 학원 및 교재비' },
-          { suggestedName: '육아용품', description: '장난감 및 아동용품' },
-        ],
-      });
-    }
+    if (!ai) return res.status(503).json({ error: 'ai_disabled', message: 'AI 추천을 사용하려면 GEMINI_API_KEY를 설정해야 합니다.' });
 
     const existingNames = existingCategories.map((c: any) => c.name).join(', ');
 
@@ -1234,11 +1227,13 @@ Suggest up to 5 concise Korean category names with brief descriptions. If an exi
       },
     });
 
-    const suggestions = JSON.parse(response.text?.trim() || '[]');
+    if (!response.text) throw new Error('Empty AI response');
+    const suggestions = JSON.parse(response.text.trim());
+    if (!Array.isArray(suggestions)) throw new Error('AI suggestions were not a list');
     return res.json({ suggestions });
   } catch (error) {
-    console.error('Category recommendation error:', error);
-    return res.json({ suggestions: [] });
+    console.error('Category recommendation error:', error instanceof Error ? error.message : error);
+    return res.status(502).json({ error: 'ai_category_failed', message: 'AI 카테고리 추천을 불러오지 못했습니다.' });
   }
 });
 
@@ -1251,17 +1246,7 @@ app.post('/api/ai/feedback', async (req, res) => {
     }
     const ai = getGeminiClient();
 
-    if (!ai) {
-      return res.json({
-        oneLiner: '고정비와 용돈을 분리해 이번 달 저축 여력을 관리하고 있습니다.',
-        positivePoint: '정한 용돈 한도를 기준으로 선택 지출을 통제하고 있습니다.',
-        riskFactors: ['용돈 사용 속도가 빨라지면 저축 예정액이 줄어들 수 있습니다.'],
-        weeklyActions: [
-          { action: '주말 배달 2회를 집밥으로 변경하기', estimatedSavings: '약 30,000원 ~ 50,000원 절감' },
-          { action: '택시 이용 줄이고 대중교통 이용하기', estimatedSavings: '약 15,000원 절감' },
-        ],
-      });
-    }
+    if (!ai) return res.status(503).json({ error: 'ai_disabled', message: 'AI 분석을 사용하려면 GEMINI_API_KEY를 설정해야 합니다.' });
 
     const summaryPrompt = `Analyze these deterministic financial stats for a Korean household app.
 The app plans on a payday cycle with two separate tracks. Cash track: salary in,
@@ -1321,16 +1306,13 @@ Rules:
       },
     });
 
-    const feedback = JSON.parse(response.text?.trim() || '{}');
+    if (!response.text) throw new Error('Empty AI response');
+    const feedback = JSON.parse(response.text.trim());
+    if (typeof feedback?.oneLiner !== 'string' || !feedback.oneLiner.trim()) throw new Error('AI feedback had no conclusion');
     return res.json(feedback);
   } catch (error) {
-    console.error('Feedback AI error:', error);
-    return res.json({
-      oneLiner: '데이터를 기반으로 이번 달 지출 상태를 분석했습니다.',
-      positivePoint: '수입과 고정 지출 기록이 정상 반영되어 있습니다.',
-      riskFactors: ['일부 카테고리의 지출 속도가 빠릅니다.'],
-      weeklyActions: [{ action: '외식 및 배달 횟수 1회 줄이기', estimatedSavings: '약 25,000원 절감' }],
-    });
+    console.error('Feedback AI error:', error instanceof Error ? error.message : error);
+    return res.status(502).json({ error: 'ai_feedback_failed', message: 'AI 분석을 불러오지 못했습니다.' });
   }
 });
 

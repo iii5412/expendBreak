@@ -3,6 +3,7 @@ import { Navbar } from './components/Navbar';
 import { BottomNav, NavTab } from './components/BottomNav';
 import { DashboardView } from './components/DashboardView';
 import { AppLockModal } from './components/AppLockModal';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { CashflowModelNotice } from './components/CashflowModelNotice';
 import { CycleClosingCard } from './components/CycleClosingCard';
 
@@ -1531,6 +1532,7 @@ export default function App() {
           })}
           <button className="mt-2 min-h-10 rounded border border-amber-500/40 px-3" onClick={() => handleNavigateTab('accounts')}>청구액·이용기간 확인</button>
         </details>}
+        <ErrorBoundary scope={`tab:${activeTab}`} resetKey={activeTab}>
         <Suspense fallback={<ViewLoading />}>
         {activeTab === 'home' && (
           <DashboardView
@@ -1808,11 +1810,12 @@ export default function App() {
           />
         )}
         </Suspense>
+        </ErrorBoundary>
       </main>
 
       {/* Central Add Transaction Modal */}
       <Suspense fallback={null}>
-      {isAddModalOpen && <AddTransactionModal
+      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => setIsAddModalOpen(false)}><AddTransactionModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         categories={categories}
@@ -1839,7 +1842,7 @@ export default function App() {
           refreshAppData();
           showToast({ message: '정기 항목을 확정했습니다.', tone: 'success' });
         }}
-      />}
+      /></ErrorBoundary>}
 
       {/* One-time explanation of why the numbers moved. Only for users who
           actually have a card bill to reconcile. */}
