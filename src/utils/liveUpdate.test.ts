@@ -47,3 +47,14 @@ describe('live update decision', () => {
     expect(decideLiveUpdate(info, { ...state, bundles })).toEqual({ action: 'none', reason: 'failed-before' });
   });
 });
+
+describe('applying a ready update on return', () => {
+  it('applies only after a long break and only when something is ready', async () => {
+    const { shouldApplyOnResume, RESUME_APPLY_AFTER_MS } = await import('./liveUpdate');
+    const now = 1_000_000_000;
+    expect(shouldApplyOnResume(now - RESUME_APPLY_AFTER_MS, now, true)).toBe(true);
+    expect(shouldApplyOnResume(now - 60_000, now, true)).toBe(false);
+    expect(shouldApplyOnResume(now - RESUME_APPLY_AFTER_MS, now, false)).toBe(false);
+    expect(shouldApplyOnResume(null, now, true)).toBe(false);
+  });
+});

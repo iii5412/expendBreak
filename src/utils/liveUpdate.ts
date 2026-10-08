@@ -25,7 +25,9 @@ export type LiveUpdateDecision =
   | { action: 'stage'; bundleId: string };
 
 const PENDING_KEY = 'brake_live_update_pending';
-const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const CHECK_INTERVAL_MS = 10 * 60 * 1000;
+/** Back after this long, nothing is likely half-typed, so a ready update is applied. */
+export const RESUME_APPLY_AFTER_MS = 10 * 60 * 1000;
 const PENDING_APPLY_TIMEOUT_MS = 1500;
 
 export function currentBundleVersion(): string {
@@ -74,6 +76,22 @@ function readPending(): { id: string; version: string } | null {
   }
 }
 
+// Lets the screen show "새 버전 준비됨" as soon as a download finishes.
+let readyVersion: string | null = null;
+const readyListeners = new Set<() => void>();
+function setReady(version: string | null) {
+  if (readyVersion === version) return;
+  readyVersion = version;
+  readyListeners.forEach(listener => listener());
+}
+export const liveUpdateReady = {
+  get: () => readyVersion,
+  subscribe(listener: () => void) {
+    readyListeners.add(listener);
+    return () => { readyListeners.delete(listener); };
+  },
+};
+
 function writePending(value: { id: string; version: string } | null) {
   try {
     if (value) localStorage.setItem(PENDING_KEY, JSON.stringify(value));
@@ -81,6 +99,32 @@ function writePending(value: { id: string; version: string } | null) {
   } catch {
     // Without storage the bundle is found again through the updater's own list on the next check.
   }
+  setReady(value && value.version !== currentBundleVersion() ? value.version : null);
+}
+
+export function shouldApplyOnResume(pausedAt: number | null, now: number, hasPending: boolean): boolean {
+  return hasPending && pausedAt !== null && now - pausedAt >= RESUME_APPLY_AFTER_MS;
+}
+
+/** Switches the WebView to the downloaded bundle; resolves true when it is reloading. */
+async function switchToPending(): Promise<boolean> {
+  const pending = readPending();
+  if (!pending || pending.version === currentBundleVersion()) {
+    if (pending) writePending(null);
+    return false;
+  }
+  const { bundles } = await CapacitorUpdater.list();
+  const bundle = bundles.find(item => item.id === pending.id);
+  writePending(null);
+  if (!bundle || (bundle.status !== 'pending' && bundle.status !== 'success')) return false;
+  await CapacitorUpdater.set({ id: bundle.id });
+  return true;
+}
+
+/** "지금 적용" on the update banner. */
+export async function applyLiveUpdateNow(): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  return switchToPending().catch(() => false);
 }
 
 /**
@@ -89,19 +133,7 @@ function writePending(value: { id: string; version: string } | null) {
  */
 export async function applyPendingLiveBundle(): Promise<boolean> {
   if (!isNativeAndroid()) return false;
-  const pending = readPending();
-  if (!pending || pending.version === currentBundleVersion()) {
-    if (pending) writePending(null);
-    return false;
-  }
-  const attempt = (async () => {
-    const { bundles } = await CapacitorUpdater.list();
-    const bundle = bundles.find(item => item.id === pending.id);
-    writePending(null);
-    if (!bundle || (bundle.status !== 'pending' && bundle.status !== 'success')) return false;
-    await CapacitorUpdater.set({ id: bundle.id });
-    return true;
-  })();
+  const attempt = switchToPending();
   const timeout = new Promise<boolean>(resolve => setTimeout(() => resolve(false), PENDING_APPLY_TIMEOUT_MS));
   return Promise.race([attempt.catch(() => false), timeout]);
 }
@@ -144,15 +176,31 @@ export function startLiveUpdates(): () => void {
   if (!isNativeAndroid()) return () => undefined;
   void CapacitorUpdater.notifyAppReady().catch(() => undefined);
 
+  const pending = readPending();
+  setReady(pending && pending.version !== currentBundleVersion() ? pending.version : null);
+
   let lastCheck = 0;
+  let pausedAt: number | null = null;
   const run = () => {
     if (Date.now() - lastCheck < CHECK_INTERVAL_MS) return;
     lastCheck = Date.now();
     void checkLiveUpdate().catch(() => undefined);
   };
   run();
-  const listener = CapacitorApp.addListener('resume', run);
+  const pauseListener = CapacitorApp.addListener('pause', () => { pausedAt = Date.now(); });
+  // Android keeps the app alive, so a cold start (where updates used to apply)
+  // is rare. Coming back after a long break applies a ready update instead.
+  const resumeListener = CapacitorApp.addListener('resume', () => {
+    const away = pausedAt;
+    pausedAt = null;
+    if (shouldApplyOnResume(away, Date.now(), readyVersion !== null)) {
+      void applyLiveUpdateNow();
+      return;
+    }
+    run();
+  });
   return () => {
-    void listener.then(handle => handle.remove());
+    void pauseListener.then(handle => handle.remove());
+    void resumeListener.then(handle => handle.remove());
   };
 }
