@@ -7,7 +7,11 @@ import { FINANCE_CHAT_INSTRUCTIONS } from '../../prompts/financeChat';
 import type { RouteDeps } from '../types';
 
 function cleanFinanceChatText(value: unknown, maxLength: number) {
-  return String(value || '').replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, maxLength);
+  return String(value || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+    .trim()
+    .slice(0, maxLength);
 }
 
 function readOpenAIResponseText(payload: Loose) {
@@ -32,11 +36,11 @@ export function createFinanceChatRouter(deps: RouteDeps) {
       }
 
       const provider = req.body?.provider === 'gemini' ? 'gemini' : req.body?.provider === 'openai' ? 'openai' : null;
-      const message = cleanFinanceChatText(req.body?.message, 1_000);
+      const message = cleanFinanceChatText(req.body?.message, 64_000);
       const history = Array.isArray(req.body?.history)
         ? req.body.history.slice(-8).map((item: Loose) => ({
           role: item?.role === 'assistant' ? 'assistant' : 'user',
-          text: cleanFinanceChatText(item?.text, 1_000),
+          text: cleanFinanceChatText(item?.text, 12_000),
         })).filter((item: Loose) => item.text)
         : [];
       if (!provider || !message) return res.status(400).json({ message: '질문과 사용할 AI 모델을 확인해 주세요.' });
@@ -66,63 +70,91 @@ export function createFinanceChatRouter(deps: RouteDeps) {
       if (provider === 'gemini') {
         const ai = deps.getGeminiClient();
         if (!ai) return res.status(503).json({ message: 'Gemini 채팅을 사용하려면 GEMINI_API_KEY를 설정해야 합니다.' });
-        const model = process.env.GEMINI_CHAT_MODEL?.trim() || 'gemini-3.7-flash';
-        const response = await ai.models.generateContent({
-          model,
-          contents: inputText,
-          config: {
-            systemInstruction: FINANCE_CHAT_INSTRUCTIONS,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            maxOutputTokens: 1_200,
-          },
-        });
-        const answer = cleanFinanceChatText(response.text, 8_000);
-        if (!answer) throw new Error('Gemini returned an empty finance chat response');
-        return res.json({ answer, provider, modelUsed: model });
+        const model = process.env.GEMINI_CHAT_MODEL?.trim() || 'gemini-3.8-flash';
+        for (const maxOutputTokens of [4_000, 8_000]) {
+          const response = await ai.models.generateContent({
+            model,
+            contents: inputText,
+            config: {
+              systemInstruction: FINANCE_CHAT_INSTRUCTIONS,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
+              maxOutputTokens,
+            },
+          });
+          const answer = cleanFinanceChatText(response.text, 8_000);
+          if (answer) return res.json({ answer, provider, modelUsed: model });
+          const finishReason = response.candidates?.[0]?.finishReason;
+          logger.warn('Gemini finance chat returned no answer:', { model, finishReason, maxOutputTokens });
+          if (finishReason === 'MAX_TOKENS' && maxOutputTokens < 8_000) continue;
+          return res.status(502).json({ message: finishReason === 'MAX_TOKENS'
+            ? '답변 생성 한도에 도달했습니다. 질문을 조금 짧게 나눠 다시 보내 주세요.'
+            : 'AI가 빈 답변을 반환했습니다. 잠시 후 다시 시도해 주세요.' });
+        }
+        return res.status(502).json({ message: 'AI가 빈 답변을 반환했습니다. 잠시 후 다시 시도해 주세요.' });
       }
 
       const apiKey = process.env.OPENAI_API_KEY?.trim();
       if (!apiKey) return res.status(503).json({ message: 'GPT 채팅을 사용하려면 OPENAI_API_KEY를 설정해야 합니다.' });
-      const model = process.env.OPENAI_CHAT_MODEL?.trim() || 'gpt-5.6-luna';
+      const model = process.env.OPENAI_CHAT_MODEL?.trim() || 'gpt-6-luna';
       const safetyIdentifier = createHmac('sha256', deps.sessionSecret)
         .update(String(res.locals.ownerUid))
         .digest('hex');
-      const response = await deps.fetchImpl('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        signal: AbortSignal.timeout(55_000),
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'OpenAI-Safety-Identifier': safetyIdentifier,
-        },
-        body: JSON.stringify({
-          model,
-          instructions: FINANCE_CHAT_INSTRUCTIONS,
-          input: inputText,
-          reasoning: { effort: 'low' },
-          text: { verbosity: 'low' },
-          max_output_tokens: 1_200,
-          store: false,
-        }),
-      });
-      const raw = await response.text();
-      let payload: Loose = {};
-      try {
-        payload = raw ? JSON.parse(raw) : {};
-      } catch {
-        // A non-JSON upstream response is handled as a gateway failure below.
-      }
-      if (!response.ok) {
-        logger.error('OpenAI finance chat error:', response.status, raw.slice(0, 500));
-        return res.status(response.status === 429 ? 429 : 502).json({
-          message: response.status === 429
-            ? 'GPT 사용량이 잠시 제한되었습니다. 잠시 후 다시 시도하거나 Gemini를 선택해 주세요.'
-            : cleanFinanceChatText(isObject(payload?.error) ? payload.error.message : undefined, 300) || 'GPT 채팅 서버 연결에 실패했습니다.',
+      // A reasoning model can spend its entire output budget before producing visible text.
+      // Keep one timeout across both attempts so the browser does not give up first.
+      const signal = AbortSignal.timeout(80_000);
+      for (const maxOutputTokens of [4_000, 8_000]) {
+        const response = await deps.fetchImpl('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          signal,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'OpenAI-Safety-Identifier': safetyIdentifier,
+          },
+          body: JSON.stringify({
+            model,
+            instructions: FINANCE_CHAT_INSTRUCTIONS,
+            input: inputText,
+            reasoning: { effort: 'low' },
+            text: { verbosity: 'medium' },
+            max_output_tokens: maxOutputTokens,
+            store: false,
+          }),
         });
+        const raw = await response.text();
+        let payload: Loose = {};
+        try {
+          payload = raw ? JSON.parse(raw) : {};
+        } catch {
+          // A non-JSON upstream response is handled as a gateway failure below.
+        }
+        if (!response.ok) {
+          logger.error('OpenAI finance chat error:', response.status, raw.slice(0, 500));
+          return res.status(response.status === 429 ? 429 : 502).json({
+            message: response.status === 429
+              ? 'GPT 사용량이 잠시 제한되었습니다. 잠시 후 다시 시도하거나 Gemini를 선택해 주세요.'
+              : cleanFinanceChatText(isObject(payload?.error) ? payload.error.message : undefined, 300) || 'GPT 채팅 서버 연결에 실패했습니다.',
+          });
+        }
+
+        const incompleteReason = isObject(payload.incomplete_details) ? payload.incomplete_details.reason : undefined;
+        if (payload.status === 'incomplete' && incompleteReason === 'max_output_tokens') {
+          logger.warn('OpenAI finance chat output limit reached:', { model, maxOutputTokens });
+          if (maxOutputTokens < 8_000) continue;
+          return res.status(502).json({ message: '답변 생성 한도에 도달했습니다. 질문을 조금 짧게 나눠 다시 보내 주세요.' });
+        }
+
+        const answer = readOpenAIResponseText(payload);
+        if (answer) return res.json({ answer, provider, modelUsed: model });
+        logger.error('OpenAI finance chat returned no answer:', {
+          model,
+          status: payload.status,
+          incompleteReason,
+          errorCode: isObject(payload.error) ? payload.error.code : undefined,
+        });
+        return res.status(502).json({ message: 'AI가 빈 답변을 반환했습니다. 잠시 후 다시 시도해 주세요.' });
       }
-      const answer = readOpenAIResponseText(payload);
-      if (!answer) throw new Error('OpenAI returned an empty finance chat response');
-      return res.json({ answer, provider, modelUsed: model });
+      return res.status(502).json({ message: 'AI가 빈 답변을 반환했습니다. 잠시 후 다시 시도해 주세요.' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const timedOut = /timeout|timed out|abort/i.test(message);

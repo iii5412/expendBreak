@@ -13,6 +13,7 @@ async function start(production: boolean) {
   const app = express();
   applySecurityBaseline(app, { production, trustProxyHops: 1 });
   app.post('/api/auth/verify-key', (req, res) => res.json({ size: JSON.stringify(req.body).length }));
+  app.post('/api/ai/finance-chat', (req, res) => res.json({ size: String(req.body?.message || '').length }));
   app.post('/api/ai/receipt', largeJsonBody, (req, res) => res.json({ size: String(req.body?.image || '').length }));
   app.post('/api/ai/voice', largeJsonBody, (req, res) => res.json({ size: String(req.body?.audio || '').length }));
   app.get('/api/whoami', (req, res) => res.json({ ip: req.ip }));
@@ -38,6 +39,14 @@ describe('request body limits', () => {
     const server = await start(true);
     const response = await post(server.url('/api/auth/verify-key'), { key: '123456' });
     expect(response.status).toBe(200);
+  });
+
+  it('accepts a long finance-chat prompt without raising the default limit globally', async () => {
+    const server = await start(true);
+    const message = '가'.repeat(64_000);
+    const response = await post(server.url('/api/ai/finance-chat'), { message });
+    expect(response.status).toBe(200);
+    expect((await response.json()).size).toBe(message.length);
   });
 
   it('still accepts a 5MB receipt image and voice payload on their own routes', async () => {

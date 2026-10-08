@@ -14,7 +14,6 @@ import {
 import { authenticatedFetch } from '../utils/auth';
 import { formatKRW, getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
 import { blobToBase64, normalizeTags, prepareReceiptImage, PreparedReceiptImage } from '../utils/receipt';
-import { deleteReceiptImage, uploadReceiptImage } from '../utils/receiptStorage';
 import { normalizeInstallmentPlan } from '../utils/installments';
 
 interface ReceiptCapturePanelProps {
@@ -57,7 +56,6 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
   const [cardId, setCardId] = useState('');
   const [installmentMonths, setInstallmentMonths] = useState(1);
   const [installmentCurrentRound, setInstallmentCurrentRound] = useState(1);
-  const [saveOriginal, setSaveOriginal] = useState(true);
   const [rememberRule, setRememberRule] = useState(true);
 
   useEffect(() => () => {
@@ -181,17 +179,9 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
     setIsSaving(true);
     setError(null);
     const receiptId = `receipt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    let storagePath: string | null = null;
     try {
-      if (saveOriginal) {
-        try {
-          storagePath = await uploadReceiptImage(receiptId, prepared.blob);
-        } catch (storageErr) {
-          console.warn('Receipt image upload failed or timed out, continuing transaction save without image:', storageErr);
-          storagePath = null;
-        }
-      }
-
+      // Only the extracted text is kept. The photo is discarded once read, so
+      // no receipt image ever reaches Cloud Storage.
       onSaveTransaction({
         type: 'expense',
         amount: Math.round(amount),
@@ -212,9 +202,9 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
         tags: normalizeTags(tagsText),
         receipt: {
           id: receiptId,
-          storagePath,
-          mimeType: saveOriginal && storagePath ? prepared.mimeType : null,
-          imageSize: saveOriginal && storagePath ? prepared.blob.size : null,
+          storagePath: null,
+          mimeType: null,
+          imageSize: null,
           receiptNumber: result.receiptNumber || null,
           businessNumber: result.businessNumber || null,
           purchasedTime: result.purchasedTime || null,
@@ -239,7 +229,6 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
 
       onDone();
     } catch (nextError) {
-      if (storagePath) await deleteReceiptImage(storagePath).catch(() => undefined);
       setError(nextError instanceof Error ? nextError.message : '영수증 거래 저장에 실패했습니다.');
     } finally {
       setIsSaving(false);
@@ -372,12 +361,12 @@ export const ReceiptCapturePanel: React.FC<ReceiptCapturePanelProps> = ({
             </div>
           </details>
 
-          <label className="flex items-start gap-2 text-slate-300"><input type="checkbox" checked={saveOriginal} onChange={event => setSaveOriginal(event.target.checked)} className="mt-0.5" /><span>영수증 원본도 내 전용 Storage에 보관</span></label>
+          <p className="flex items-start gap-2 text-slate-400"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />영수증 사진은 내용만 읽고 저장하지 않습니다.</p>
           <label className="flex items-start gap-2 text-slate-300"><input type="checkbox" checked={rememberRule} onChange={event => setRememberRule(event.target.checked)} className="mt-0.5" /><span>다음에도 이 사용처를 같은 카테고리로 기억</span></label>
 
           <button type="button" disabled={isSaving} onClick={handleSave} className="flex w-full items-center justify-center gap-2 rounded-xl bg-rose-500 py-3 font-bold text-white disabled:opacity-50">
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            {isSaving ? '영수증과 지출을 저장하는 중...' : '확인한 내용으로 지출 저장'}
+            {isSaving ? '지출을 저장하는 중...' : '확인한 내용으로 지출 저장'}
           </button>
         </div>
       )}

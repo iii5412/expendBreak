@@ -66,7 +66,7 @@ export const ReceiptDetailsModal: React.FC<ReceiptDetailsModalProps> = ({ receip
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div>
             <h3 id="receipt-modal-title" className="font-bold text-white">{merchant} 영수증</h3>
-            <p className="text-xs text-slate-400">OCR 결과와 원본 보관 정보</p>
+            <p className="text-xs text-slate-400">영수증에서 읽어낸 내용</p>
           </div>
           <button
             onClick={onClose}
@@ -81,7 +81,7 @@ export const ReceiptDetailsModal: React.FC<ReceiptDetailsModalProps> = ({ receip
           imageUrl ? <img src={imageUrl} alt={`${merchant} 영수증 원본`} className="max-h-[50vh] w-full rounded-xl bg-white object-contain" />
             : imageError ? <div role="alert" className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200"><ImageOff className="h-4 w-4 shrink-0" />{imageError}</div>
               : <div role="status" aria-label="영수증 원본 불러오는 중" className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-rose-400" /></div>
-        ) : <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300"><ImageOff className="h-4 w-4" />원본을 저장하지 않고 OCR 정보만 보관한 거래입니다.</div>}
+        ) : <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300"><ImageOff className="h-4 w-4" />영수증 사진은 저장하지 않고 읽어낸 내용만 보관합니다.</div>}
 
         <dl className="grid grid-cols-2 gap-2 text-xs">
           {receipt.receiptNumber && <div className="rounded-lg bg-slate-950 p-2"><dt className="block text-slate-400">영수증 번호</dt><dd className="text-slate-200">{receipt.receiptNumber}</dd></div>}

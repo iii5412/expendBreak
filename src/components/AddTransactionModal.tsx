@@ -14,7 +14,6 @@ import {
   Zap,
   Settings2,
   LockKeyhole,
-  MessageCircle,
 } from 'lucide-react';
 import {
   Category,
@@ -23,7 +22,6 @@ import {
   VoiceAnalysisResult,
   MerchantRule,
   BankAccount,
-  Budget,
   PaymentCard,
   PaymentMethodType,
   RecurringOccurrence,
@@ -45,8 +43,6 @@ import {
 import { EntryMode, readPreferredEntryMode, savePreferredEntryMode } from '../utils/entryMode';
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
 import { VoiceInputPanel } from './VoiceInputPanel';
-import { LiveVoicePanel } from './LiveVoicePanel';
-import { FinanceChatPanel } from './FinanceChatPanel';
 import { normalizeInstallmentPlan } from '../utils/installments';
 import { RecurringMatchCandidate, findRecurringMatches } from '../utils/recurringMatch';
 import {
@@ -55,6 +51,15 @@ import {
   sanitizeSuggestedTags,
 } from '../utils/transactionEnrichment';
 
+// Conversation (GPT Live) and questions (Agent) live in the AI tab; this
+// modal is only for recording a transaction.
+const ENTRY_MODE_OPTIONS: Array<{ mode: EntryMode; label: string; icon: React.ElementType }> = [
+  { mode: 'manual', label: '직접 입력', icon: PenTool },
+  { mode: 'ai', label: 'AI 문장', icon: Sparkles },
+  { mode: 'voice', label: '음성', icon: Volume2 },
+  { mode: 'receipt', label: '영수증', icon: Camera },
+];
+
 interface AddTransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -62,8 +67,6 @@ interface AddTransactionModalProps {
   merchantRules: MerchantRule[];
   bankAccounts?: BankAccount[];
   paymentCards?: PaymentCard[];
-  transactions?: Transaction[];
-  budget: Budget;
   recurringOccurrences?: RecurringOccurrence[];
   recurringTemplates?: RecurringTemplate[];
   monthStartDay?: number;
@@ -71,6 +74,7 @@ interface AddTransactionModalProps {
   /** Enables AI for the currently signed-in account after its own consent. */
   onEnableAI?: () => Promise<boolean> | boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
+  initialVoiceDraft?: { result: VoiceAnalysisResult; durationMs: number; mimeType: string } | null;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
   quickEntries?: QuickEntry[];
   /** Runs the same one-tap path used by the home screen and widget. */
@@ -93,21 +97,20 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   merchantRules,
   bankAccounts = [],
   paymentCards = [],
-  transactions = [],
-  budget,
   recurringOccurrences = [],
   recurringTemplates = [],
   monthStartDay = 1,
   aiClassificationEnabled = true,
   onEnableAI,
   onSaveTransaction,
+  initialVoiceDraft,
   onSaveMerchantRule,
   quickEntries = [],
   onPostQuickEntry,
   onManageQuickEntries,
   onPostOccurrence,
 }) => {
-  const [activeMode, setActiveMode] = useState<EntryMode>('live');
+  const [activeMode, setActiveMode] = useState<EntryMode>('manual');
 
   // Manual Form State
   const [type, setType] = useState<'income' | 'expense'>('expense');
@@ -227,6 +230,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setSelectedCardId(current => paymentCards.some(card => card.id === current) ? current : defaultCardId);
     setConfirmCardId(current => paymentCards.some(card => card.id === current) ? current : defaultCardId);
   }, [isOpen, paymentCards]);
+
+  useEffect(() => {
+    if (!isOpen || !initialVoiceDraft) return;
+    setActiveMode('voice');
+    handleVoiceAnalysisComplete(initialVoiceDraft.result, initialVoiceDraft.durationMs, initialVoiceDraft.mimeType);
+  }, [isOpen, initialVoiceDraft]);
 
   const categoryForType = (nextType: 'income' | 'expense') =>
     categories.find((category) => category.id === (nextType === 'expense' ? 'etc_expense' : 'etc_income'))?.id
@@ -372,11 +381,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     onClose();
   };
 
-  const handleVoiceAnalysisComplete = (
+  function handleVoiceAnalysisComplete(
     result: VoiceAnalysisResult,
     durationMs: number,
     mimeType: string,
-  ) => {
+  ) {
     setVoiceResult(result);
     setVoiceDurationMs(durationMs);
     setVoiceMimeType(mimeType);
@@ -421,7 +430,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     }
     setConfirmInstallmentMonths(result.installmentMonths || 1);
     setConfirmInstallmentCurrentRound(result.installmentCurrentRound || 1);
-  };
+  }
 
   const handleConfirmVoiceSave = () => {
     if (confirmAmount <= 0) {
@@ -859,7 +868,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </section>
         )}
 
-        {/* GPT Live and Gemini recording are independent entry modes. */}
+        {/* GPT Live and Agent live in the AI tab; this modal only records transactions. */}
         {!aiClassificationEnabled && (
           <div className="flex items-start gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
             <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
@@ -867,126 +876,29 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </div>
         )}
 
-        <div className="grid gap-2 border-y border-slate-800 py-3 sm:grid-cols-[1fr_1.35fr_0.58fr]" aria-label="거래 입력 방식">
-          <div className="space-y-1.5">
-            <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">말하기</p>
-            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1">
+        <div className="grid grid-cols-4 gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1" role="tablist" aria-label="거래 입력 방식">
+          {ENTRY_MODE_OPTIONS.map(({ mode, label, icon: Icon }) => (
             <button
+              key={mode}
               type="button"
-              onClick={() => void selectProtectedMode('live')}
-              className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
-                activeMode === 'live'
-                  ? 'bg-rose-500 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Mic className="h-4 w-4 shrink-0" />
-              <span>GPT</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void selectProtectedMode('voice')}
-              className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
-                activeMode === 'voice'
-                  ? 'bg-rose-500 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Volume2 className="h-4 w-4 shrink-0" />
-              <span>Gemini</span>
-            </button>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">쓰기</p>
-            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1">
-            <button
-              type="button"
+              role="tab"
+              aria-selected={activeMode === mode}
               onClick={() => {
-                void selectProtectedMode('ai');
+                if (mode === 'manual') selectMode('manual');
+                else void selectProtectedMode(mode);
                 setVoiceResult(null);
               }}
-              className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
-                activeMode === 'ai'
+              className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[11px] font-bold transition-colors ${
+                activeMode === mode
                   ? 'bg-rose-500 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
               }`}
             >
-              <Sparkles className="h-4 w-4 shrink-0" />
-              <span>AI 문장</span>
+              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{label}</span>
             </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  void selectProtectedMode('chat');
-                  setVoiceResult(null);
-                }}
-                className={`flex min-h-11 items-center justify-center gap-1 px-1.5 text-xs font-semibold transition-colors ${
-                  activeMode === 'chat'
-                    ? 'bg-indigo-500 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <MessageCircle className="h-4 w-4 shrink-0" />
-                <span>재무챗</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  selectMode('manual');
-                  setVoiceResult(null);
-                }}
-                className={`flex min-h-11 items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
-                  activeMode === 'manual'
-                    ? 'bg-rose-500 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <PenTool className="h-4 w-4 shrink-0" />
-                <span>직접 입력</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <p className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">찍기</p>
-            <div className="bg-slate-950 p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  void selectProtectedMode('receipt');
-                  setVoiceResult(null);
-                }}
-                className={`flex min-h-11 w-full items-center justify-center gap-1.5 px-2 text-xs font-semibold transition-colors ${
-                  activeMode === 'receipt'
-                    ? 'bg-rose-500 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Camera className="h-4 w-4 shrink-0" />
-                <span>영수증</span>
-              </button>
-            </div>
-          </div>
+          ))}
         </div>
-
-        {/* Text-only Q&A uses a redacted financial snapshot and never writes transactions. */}
-        {activeMode === 'chat' && (
-          <FinanceChatPanel
-            categories={categories}
-            bankAccounts={bankAccounts}
-            paymentCards={paymentCards}
-            transactions={transactions}
-            budget={budget}
-            recurringOccurrences={recurringOccurrences}
-            recurringTemplates={recurringTemplates}
-            monthStartDay={monthStartDay}
-          />
-        )}
 
         {/* MODE 1: Receipt Capture */}
         {activeMode === 'receipt' && (
@@ -1005,24 +917,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           />
         )}
 
-        {/* GPT Live and Gemini recording share the same review form only. */}
-        {(activeMode === 'live' || activeMode === 'voice') && (
+        {/* Gemini recording and GPT Live drafts share the same review form. */}
+        {activeMode === 'voice' && (
           <div className="space-y-4">
             {!voiceResult ? (
-              activeMode === 'live' ? (
-                <LiveVoicePanel
-                  categories={categories}
-                  merchantRules={merchantRules}
-                  bankAccounts={bankAccounts}
-                  paymentCards={paymentCards}
-                  transactions={transactions}
-                  budget={budget}
-                  recurringOccurrences={recurringOccurrences}
-                  recurringTemplates={recurringTemplates}
-                  monthStartDay={monthStartDay}
-                  onDraftReady={handleVoiceAnalysisComplete}
-                />
-              ) : (
                 <VoiceInputPanel
                   categories={categories}
                   merchantRules={merchantRules}
@@ -1030,7 +928,6 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   paymentCards={paymentCards}
                   onAnalysisComplete={handleVoiceAnalysisComplete}
                 />
-              )
             ) : (
               /* Voice Confirmation Drawer / Panel */
               <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3.5 text-xs">
@@ -1258,11 +1155,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 <div className="flex items-center gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setVoiceResult(null)}
+                    onClick={() => initialVoiceDraft ? onClose() : setVoiceResult(null)}
                     className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-1.5"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>다시 녹음</span>
+                    <span>{initialVoiceDraft ? 'AI 화면으로 돌아가기' : '다시 녹음'}</span>
                   </button>
 
                   <button

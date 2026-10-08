@@ -5,9 +5,10 @@ import {
   PlusCircle,
   BarChart3,
   Receipt,
+  Sparkles,
 } from 'lucide-react';
 
-export type NavTab = 'home' | 'recurring_payment' | 'accounts' | 'history' | 'analytics' | 'management';
+export type NavTab = 'home' | 'recurring_payment' | 'accounts' | 'history' | 'analytics' | 'ai' | 'management';
 
 interface BottomNavProps {
   activeTab: NavTab;
@@ -16,7 +17,7 @@ interface BottomNavProps {
 }
 
 /**
- * Primary destinations (PRD-ui-renewal §5): 홈 / 고정지출 / 내역 / 분석 with
+ * Primary destinations: 홈 / 고정지출 / 내역 / 분석 / AI with
  * the "+ 기록" button always in the same place. Accounts and settings live
  * in the top-bar "더보기" sheet (see Navbar).
  */
@@ -25,6 +26,7 @@ const PRIMARY_TABS: Array<{ tab: NavTab; label: string; icon: React.ElementType 
   { tab: 'recurring_payment', label: '고정지출', icon: Receipt },
   { tab: 'history', label: '내역', icon: ListOrdered },
   { tab: 'analytics', label: '분석', icon: BarChart3 },
+  { tab: 'ai', label: 'AI', icon: Sparkles },
 ];
 
 export const BottomNav: React.FC<BottomNavProps> = ({

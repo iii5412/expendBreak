@@ -3,8 +3,10 @@ import type { ServerEnv } from './authConfig';
 
 /** Only these authenticated routes carry base64 images or audio. */
 export const LARGE_BODY_PATHS = ['/api/ai/receipt', '/api/ai/voice'];
+export const MEDIUM_BODY_PATHS = ['/api/ai/finance-chat', '/api/ai/card-statement/parse'];
 
 const DEFAULT_JSON_LIMIT = '100kb';
+const MEDIUM_JSON_LIMIT = '1mb';
 const LARGE_JSON_LIMIT = '12mb';
 
 // Report-only until the Firebase and realtime voice origins are confirmed in production logs.
@@ -55,5 +57,10 @@ export function applySecurityBaseline(app: Express, { production, trustProxyHops
   });
 
   const defaultJsonBody = jsonParser(DEFAULT_JSON_LIMIT);
-  app.use((req, res, next) => (LARGE_BODY_PATHS.includes(req.path) ? next() : defaultJsonBody(req, res, next)));
+  const mediumJsonBody = jsonParser(MEDIUM_JSON_LIMIT);
+  app.use((req, res, next) => {
+    if (LARGE_BODY_PATHS.includes(req.path)) return next();
+    if (MEDIUM_BODY_PATHS.includes(req.path)) return mediumJsonBody(req, res, next);
+    return defaultJsonBody(req, res, next);
+  });
 }

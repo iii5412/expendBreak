@@ -283,7 +283,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         }
         break;
       case 'error':
-        setErrorMessage(event.error?.message || 'GPT 라이브 대화 중 오류가 발생했습니다.');
+        setErrorMessage(event.error?.message || 'GPT Live 대화 중 오류가 발생했습니다.');
         setStatus('error');
         break;
       default:
@@ -402,7 +402,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
         throw new DOMException('앱 설정에서 마이크 권한을 허용한 뒤 다시 눌러주세요.', 'NotAllowedError');
       }
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
-        throw new Error('이 브라우저는 GPT 라이브 음성을 지원하지 않습니다.');
+        throw new Error('이 브라우저는 GPT Live 음성을 지원하지 않습니다.');
       }
 
       const peer = new RTCPeerConnection({
@@ -418,7 +418,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
       };
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
-          setErrorMessage('GPT 라이브 연결이 끊어졌습니다. 다시 연결해주세요.');
+          setErrorMessage('GPT Live 연결이 끊어졌습니다. 다시 연결해주세요.');
           setStatus('error');
         }
       };
@@ -453,7 +453,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
       });
       if (!response.ok) {
         const raw = await response.text();
-        let message = 'GPT 라이브 음성에 연결하지 못했습니다.';
+        let message = 'GPT Live 음성에 연결하지 못했습니다.';
         try {
           const parsed = JSON.parse(raw);
           message = parsed.message || parsed.error?.message || message;
@@ -473,7 +473,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
           ? '마이크 권한이 거부되었습니다. 앱 설정에서 허용해주세요.'
           : '마이크 권한이 거부되었습니다. 브라우저 사이트 설정에서 허용해주세요.'));
       } else {
-        setErrorMessage(error?.message || 'GPT 라이브 음성 연결에 실패했습니다.');
+        setErrorMessage(error?.message || 'GPT Live 음성 연결에 실패했습니다.');
       }
       setStatus('error');
     }
@@ -494,12 +494,12 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
   };
 
   const statusText = status === 'connecting'
-    ? 'GPT 비서 연결 중'
+    ? 'GPT Live 연결 중'
     : status === 'speaking'
       ? '비서가 답변하고 있어요'
       : status === 'listening'
         ? isMuted ? '마이크가 꺼져 있어요' : '말씀하세요. 듣고 있어요'
-        : 'GPT 라이브 금융 비서';
+        : 'GPT Live 금융 비서';
 
   return (
     <div className="space-y-4">
@@ -547,7 +547,7 @@ export const LiveVoicePanel: React.FC<LiveVoicePanelProps> = ({
                 ? 'border-cyan-300/60 bg-gradient-to-br from-cyan-400/30 to-violet-500/30 shadow-[0_0_55px_rgba(34,211,238,0.22)]'
                 : 'border-slate-700 bg-slate-900 hover:scale-105 hover:border-cyan-400/50'
             }`}
-            aria-label="GPT 라이브 음성 시작"
+            aria-label="GPT Live 음성 시작"
           >
             {(status === 'listening' || status === 'speaking') && (
               <span className="absolute inset-[-10px] animate-pulse rounded-full border border-cyan-400/20" />

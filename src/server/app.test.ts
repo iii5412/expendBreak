@@ -273,11 +273,23 @@ describe('AI routes: input validation and failure handling', () => {
   });
 
   it('finance chat checks provider and message, then answers', async () => {
-    const { call, login } = await start({ gemini: geminiReturning('이번 달 지출은 10만원입니다.') });
-    const token = await login();
-    expect((await call('POST', '/api/ai/finance-chat', { token, body: { provider: 'x', message: 'hi' } })).status).toBe(400);
-    const ok = await call('POST', '/api/ai/finance-chat', { token, body: { provider: 'gemini', message: '얼마 썼어?', context: { total: 100000 } } });
-    expect(ok).toMatchObject({ status: 200, json: { answer: '이번 달 지출은 10만원입니다.', provider: 'gemini' } });
+    const previousModel = process.env.GEMINI_CHAT_MODEL;
+    delete process.env.GEMINI_CHAT_MODEL;
+    const gemini = geminiReturning('## 한눈에 보기\n이번 달 지출은 10만원입니다.');
+    try {
+      const { call, login } = await start({ gemini });
+      const token = await login();
+      expect((await call('POST', '/api/ai/finance-chat', { token, body: { provider: 'x', message: 'hi' } })).status).toBe(400);
+      const ok = await call('POST', '/api/ai/finance-chat', { token, body: { provider: 'gemini', message: '얼마 썼어?', context: { total: 100000 } } });
+      expect(ok).toMatchObject({
+        status: 200,
+        json: { answer: '## 한눈에 보기\n이번 달 지출은 10만원입니다.', provider: 'gemini', modelUsed: 'gemini-3.8-flash' },
+      });
+      expect(gemini.models.generateContent).toHaveBeenCalledWith(expect.objectContaining({ model: 'gemini-3.8-flash' }));
+    } finally {
+      if (previousModel === undefined) delete process.env.GEMINI_CHAT_MODEL;
+      else process.env.GEMINI_CHAT_MODEL = previousModel;
+    }
   });
 
   it('finance chat limits each account to 40 requests per 10 minutes', async () => {
@@ -300,6 +312,94 @@ describe('AI routes: input validation and failure handling', () => {
     } finally {
       if (previous === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previous;
+    }
+  });
+
+  it('finance chat uses GPT-6 Luna and the richer response settings by default', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: '## 한눈에 보기\n안전합니다.' }] }],
+    }), { status: 200 }));
+    const previousKey = process.env.OPENAI_API_KEY;
+    const previousModel = process.env.OPENAI_CHAT_MODEL;
+    process.env.OPENAI_API_KEY = 'test-key';
+    delete process.env.OPENAI_CHAT_MODEL;
+    try {
+      const { call, login } = await start({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      const result = await call('POST', '/api/ai/finance-chat', { token: await login(), body: { provider: 'openai', message: '분석해 줘', context: {} } });
+      expect(result).toMatchObject({ status: 200, json: { modelUsed: 'gpt-6-luna' } });
+      const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+      expect(request).toMatchObject({
+        model: 'gpt-6-luna',
+        reasoning: { effort: 'low' },
+        text: { verbosity: 'medium' },
+        max_output_tokens: 4_000,
+      });
+    } finally {
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousKey;
+      if (previousModel === undefined) delete process.env.OPENAI_CHAT_MODEL;
+      else process.env.OPENAI_CHAT_MODEL = previousModel;
+    }
+  });
+
+  it('finance chat recovers when the second GPT turn exhausts reasoning tokens before answering', async () => {
+    const replies = [
+      { status: 'completed', output: [{ content: [{ type: 'output_text', text: '첫 답변' }] }] },
+      { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [{ type: 'reasoning' }] },
+      { status: 'completed', output: [{ content: [{ type: 'output_text', text: '후속 답변' }] }] },
+    ];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(replies.shift()), { status: 200 }));
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    try {
+      const { call, login } = await start({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      const token = await login();
+      const first = await call('POST', '/api/ai/finance-chat', { token, body: { provider: 'openai', message: '이번 달은?', context: { total: 100000 } } });
+      const second = await call('POST', '/api/ai/finance-chat', { token, body: {
+        provider: 'openai', message: '지난달과 비교해 줘', context: { total: 100000 },
+        history: [{ role: 'user', text: '이번 달은?' }, { role: 'assistant', text: '첫 답변' }],
+      } });
+      expect(first).toMatchObject({ status: 200, json: { answer: '첫 답변' } });
+      expect(second).toMatchObject({ status: 200, json: { answer: '후속 답변' } });
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      const secondRequest = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+      const retryRequest = JSON.parse(String(fetchImpl.mock.calls[2][1]?.body));
+      expect(secondRequest.input).toContain('비서: 첫 답변');
+      expect(secondRequest.max_output_tokens).toBe(4_000);
+      expect(retryRequest.max_output_tokens).toBe(8_000);
+    } finally {
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousKey;
+    }
+  });
+
+  it('extracts pasted card rows with GPT-6 Luna and rejects refunds before review', async () => {
+    const extraction = { rows: [
+      { localDate: '2026-10-08', merchant: '카페', amount: 5100, kind: 'purchase', matchedTransactionId: 'known-1', matchReason: '날짜와 금액이 같습니다.' },
+      { localDate: '2026-10-08', merchant: '카페', amount: 5100, kind: 'refund', matchedTransactionId: '', matchReason: '' },
+      { localDate: '2026-02-30', merchant: '편의점', amount: 2000, kind: 'purchase', matchedTransactionId: '', matchReason: '' },
+    ] };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify(extraction) }] }],
+    }), { status: 200 }));
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    try {
+      const { call, login } = await start({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      const text = '신한카드 카드번호 1234-5678-9012-3456\n10월 8일 카페 5,100원 승인';
+      const result = await call('POST', '/api/ai/card-statement/parse', { token: await login(), body: {
+        text, existing: [{ id: 'known-1', localDate: '2026-10-08', merchant: '커피집', amount: 5100 }],
+      } });
+      expect(result).toMatchObject({ status: 200, json: { modelUsed: 'gpt-6-luna', rows: [{ localDate: '2026-10-08', merchant: '카페', amount: 5100, suggestedTransactionId: 'known-1' }] } });
+      expect((result.json!.issues as unknown[])).toHaveLength(2);
+      const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+      expect(request.model).toBe('gpt-6-luna');
+      expect(request.text.format.type).toBe('json_schema');
+      expect(request.input).not.toContain('1234-5678-9012-3456');
+      expect(request.input).toContain('known-1');
+    } finally {
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousKey;
     }
   });
 

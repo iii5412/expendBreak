@@ -7,14 +7,13 @@
  */
 import { getAccountStorageKey } from './auth';
 
-// V2 separates the old combined voice screen into independent GPT Live and
-// Gemini recording tabs. A new key keeps the previous `voice` value from being
-// misread as the newly named Gemini-only tab.
+// Existing v2 preferences for GPT Live and chat fall back to manual now that
+// those features have their own AI destination outside the entry modal.
 const entryModeKey = () => getAccountStorageKey('brake_entry_mode_v2');
 
-export type EntryMode = 'receipt' | 'live' | 'voice' | 'chat' | 'ai' | 'manual';
+export type EntryMode = 'receipt' | 'voice' | 'ai' | 'manual';
 
-const ENTRY_MODES: EntryMode[] = ['receipt', 'live', 'voice', 'chat', 'ai', 'manual'];
+const ENTRY_MODES: EntryMode[] = ['receipt', 'voice', 'ai', 'manual'];
 
 function store(): Storage | null {
   try {
@@ -39,5 +38,5 @@ export function savePreferredEntryMode(mode: EntryMode) {
 export function readPreferredEntryMode(aiClassificationEnabled: boolean): EntryMode {
   if (!aiClassificationEnabled) return 'manual';
   const raw = store()?.getItem(entryModeKey());
-  return ENTRY_MODES.includes(raw as EntryMode) ? raw as EntryMode : 'live';
+  return ENTRY_MODES.includes(raw as EntryMode) ? raw as EntryMode : 'manual';
 }

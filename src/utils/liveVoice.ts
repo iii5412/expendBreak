@@ -171,7 +171,7 @@ export function createLiveVoiceResult(
       ? raw.tags.map(tag => cleanText(tag, 40).replace(/^#/, '')).filter(Boolean).slice(0, 10)
       : [],
     confidence: Number.isFinite(confidenceValue) ? Math.max(0, Math.min(1, confidenceValue)) : 0.8,
-    reason: cleanText(raw.reason, 300) || 'GPT 라이브 대화에서 만든 거래 초안',
+    reason: cleanText(raw.reason, 300) || 'GPT Live 대화에서 만든 거래 초안',
     multipleTransactionsDetected: false,
     needsConfirmation: true,
     modelUsed: context.modelUsed || 'gpt-realtime-2.1-mini',

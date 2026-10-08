@@ -21,7 +21,7 @@ export function createRealtimeRouter(deps: RouteDeps) {
         const apiKey = process.env.OPENAI_API_KEY?.trim();
         if (!apiKey) {
           return res.status(503).json({
-            message: 'GPT 라이브 음성이 비활성화되어 있습니다. OPENAI_API_KEY를 설정해주세요.',
+            message: 'GPT Live 음성이 비활성화되어 있습니다. OPENAI_API_KEY를 설정해주세요.',
           });
         }
 
@@ -59,7 +59,7 @@ export function createRealtimeRouter(deps: RouteDeps) {
         const responseBody = await response.text();
         if (!response.ok) {
           logger.error('OpenAI Realtime session error:', response.status, responseBody.slice(0, 500));
-          let errorDetails = 'GPT 라이브 음성 연결을 만들지 못했습니다.';
+          let errorDetails = 'GPT Live 음성 연결을 만들지 못했습니다.';
           try {
             const parsed = JSON.parse(responseBody);
             if (parsed.error?.message) {
@@ -80,7 +80,7 @@ export function createRealtimeRouter(deps: RouteDeps) {
         return res.status(201).type('application/sdp').send(responseBody);
       } catch (error) {
         logger.error('OpenAI Realtime session failure:', error instanceof Error ? error.message : error);
-        return res.status(502).json({ message: 'GPT 라이브 음성 서버 연결에 실패했습니다.' });
+        return res.status(502).json({ message: 'GPT Live 음성 서버 연결에 실패했습니다.' });
       }
     },
   );

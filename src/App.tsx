@@ -89,7 +89,7 @@ import {
 } from './utils/calculations';
 import { calculateCardPaymentSummary, calculateMonthlyCardSettlementSummary } from './utils/cardPayments';
 import { INITIAL_USER_PROFILE, getSampleBudget } from './data/initialData';
-import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, QuickEntry, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile } from './types';
+import { BankAccount, Budget, Category, CycleBaseline, MerchantRule, PaymentCard, QuickEntry, RecurringOccurrence, RecurringTemplate, Transaction, UserProfile, VoiceAnalysisResult } from './types';
 import {
   consumePinUpgradeNotice,
   getSignedInAccount,
@@ -115,6 +115,7 @@ import type { OnboardingResult } from './components/OnboardingSheet';
 
 const HistoryView = lazy(() => import('./components/HistoryView').then(module => ({ default: module.HistoryView })));
 const AnalyticsView = lazy(() => import('./components/AnalyticsView').then(module => ({ default: module.AnalyticsView })));
+const AiView = lazy(() => import('./components/AiView').then(module => ({ default: module.AiView })));
 const ManagementView = lazy(() => import('./components/ManagementView').then(module => ({ default: module.ManagementView })));
 const AccountsView = lazy(() => import('./components/AccountsView').then(module => ({ default: module.AccountsView })));
 const RecurringPaymentView = lazy(() => import('./components/RecurringPaymentView').then(module => ({ default: module.RecurringPaymentView })));
@@ -175,6 +176,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [managementSubTab, setManagementSubTab] = useState<string>('recurring');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [pendingLiveDraft, setPendingLiveDraft] = useState<{ result: VoiceAnalysisResult; durationMs: number; mimeType: string } | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [bootState, setBootState] = useState<BootState>('checking');
   const [lockNotice, setLockNotice] = useState<string | null>(null);
@@ -559,6 +561,7 @@ export default function App() {
 
   const handleLock = async () => {
     setIsAddModalOpen(false);
+    setPendingLiveDraft(null);
     if (userProfile.wipeCacheOnLock && userProfile.uid) {
       await configureSmsImport(userProfile.uid, false).catch(error => {
         console.error('Unable to pause SMS import while wiping device data:', error);
@@ -900,6 +903,7 @@ export default function App() {
   useEffect(() => {
     if (!nativeDestination || bootState !== 'ready') return;
     if (nativeDestination.kind === 'transaction/new') {
+      setPendingLiveDraft(null);
       setIsAddModalOpen(true);
     } else if (nativeDestination.kind === 'settings/widget') {
       handleNavigateTab('management', 'settings');
@@ -1548,7 +1552,7 @@ export default function App() {
             cardSettlementSummary={cardSettlementSummary}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
-            onOpenAddModal={() => setIsAddModalOpen(true)}
+            onOpenAddModal={() => { setPendingLiveDraft(null); setIsAddModalOpen(true); }}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}
             showSetupPrompt={recurringTemplates.every(template => Boolean(template.archivedAt)) && !userProfile.onboardingCompletedAt}
@@ -1755,6 +1759,33 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'ai' && (
+          <AiView
+            categories={categories}
+            merchantRules={merchantRules}
+            bankAccounts={bankAccounts}
+            paymentCards={paymentCards}
+            transactions={transactions}
+            budget={budget}
+            recurringOccurrences={recurringOccurrences}
+            recurringTemplates={recurringTemplates}
+            monthStartDay={monthStartDay}
+            aiEnabled={userProfile.aiClassificationEnabled}
+            onEnableAI={handleEnableTransactionAi}
+            getCurrentTransactions={getTransactions}
+            onSaveStatementTransaction={draft => saveTransaction(draft).transaction}
+            onUpdateStatementTransaction={(id, expectedUpdatedAt, updates) => {
+              const current = getTransactions().find(transaction => transaction.id === id);
+              if (!current || current.updatedAt !== expectedUpdatedAt) return null;
+              return updateTransaction(id, updates);
+            }}
+            onLiveDraftReady={(result, durationMs, mimeType) => {
+              setPendingLiveDraft({ result, durationMs, mimeType });
+              setIsAddModalOpen(true);
+            }}
+          />
+        )}
+
         {activeTab === 'management' && (
           <ManagementView
             onOpenRecurringPayments={() => handleNavigateTab('recurring_payment')}
@@ -1817,15 +1848,14 @@ export default function App() {
 
       {/* Central Add Transaction Modal */}
       <Suspense fallback={null}>
-      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => setIsAddModalOpen(false)}><AddTransactionModal
+      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); }}><AddTransactionModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); }}
+        initialVoiceDraft={pendingLiveDraft}
         categories={categories}
         merchantRules={merchantRules}
         bankAccounts={bankAccounts}
         paymentCards={paymentCards}
-        transactions={transactions}
-        budget={budget}
         recurringOccurrences={recurringOccurrences}
         recurringTemplates={recurringTemplates}
         monthStartDay={monthStartDay}
@@ -1837,6 +1867,7 @@ export default function App() {
         onPostQuickEntry={handlePostQuickEntry}
         onManageQuickEntries={() => {
           setIsAddModalOpen(false);
+          setPendingLiveDraft(null);
           handleNavigateTab('management', 'quick_entries');
         }}
         onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
@@ -1893,7 +1924,7 @@ export default function App() {
       <BottomNav
         activeTab={activeTab}
         onSelectTab={tab => handleNavigateTab(tab)}
-        onOpenAddModal={() => setIsAddModalOpen(true)}
+        onOpenAddModal={() => { setPendingLiveDraft(null); setIsAddModalOpen(true); }}
       />
     </div>
   );
