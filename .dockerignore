@@ -3,6 +3,7 @@
 *
 !package.json
 !package-lock.json
+!.npmrc
 !dist/**
 !server-dist/**
 !live-update/**
