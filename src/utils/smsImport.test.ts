@@ -39,6 +39,24 @@ describe('parseFinancialSms', () => {
     expect(parsed?.merchant).toBe('메가커피');
   });
 
+  it('reads one-line and long (LMS) formats that mention 한도, 누적 or 포인트', () => {
+    const at = new Date(2026, 9, 8, 12, 40).getTime();
+    const cases: Array<[string, Partial<ReturnType<typeof parseFinancialSms>>]> = [
+      ['[Web발신]\n신한카드(1234)승인 홍*동 12,000원(일시불)10/08 12:30 스타벅스 누적1,234,567원', { amount: 12000, merchant: '스타벅스', issuer: '신한카드', cardLast4: '1234' }],
+      ['[Web발신]\n삼성1234승인 홍*동\n38,500원 일시불\n10/08 12:30 교촌치킨\n잔여한도 2,345,000원', { amount: 38500, merchant: '교촌치킨', issuer: '삼성카드', cardLast4: '1234' }],
+      ['[Web발신]\n하나카드(1234) 홍*동 승인 21,400원 일시불 10/08 12:30 배달의민족 하나머니 210P 적립', { amount: 21400, merchant: '배달의민족', issuer: '하나카드', cardLast4: '1234' }],
+      ['[Web발신]\nNH카드1*2*승인 홍*동 4,500원 일시불 10/08 12:30 메가커피 총누적 512,300원', { amount: 4500, merchant: '메가커피', issuer: 'NH농협카드' }],
+      ['[Web발신]\nKB국민카드1234승인\n홍*동님\n5,800원 일시불\n10/08 12:30\n쿠팡이츠\n누적 345,000원', { amount: 5800, merchant: '쿠팡이츠', issuer: 'KB국민카드' }],
+    ];
+    for (const [body, expected] of cases) {
+      expect(parseFinancialSms(message(body, at))).toMatchObject({ kind: 'approval', localDate: '2026-10-08', ...expected });
+    }
+  });
+
+  it('drops advertising that happens to mention 승인 and an amount', () => {
+    expect(parseFinancialSms(message('(광고)[신한카드] 이벤트 응모하고 5,000원 받으세요 승인 시 적립 무료수신거부 080'))).toBeNull();
+  });
+
   it('keeps two real same-minute purchases separate when their message ids differ', () => {
     const body = '현대카드 승인\n4,500원\n09/06 09:12 메가커피';
     const first = parseFinancialSms({ ...message(body), id: 'provider-1' });

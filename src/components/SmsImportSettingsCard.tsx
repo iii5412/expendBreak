@@ -185,7 +185,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
 
       <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-400">
         <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-400" />
-        <span>문자는 기기에서만 분석하며 원문과 발신번호를 클라우드에 전송하지 않습니다.</span>
+        <span>문자는 기기에서만 분석하며 원문과 발신번호를 클라우드에 전송하지 않습니다. AI 기능을 켠 계정은 카테고리 추천을 위해 기기에서 읽어낸 가맹점 이름만 AI로 보냅니다.</span>
       </div>
 
       {enabled && !inboxConsentReady && (

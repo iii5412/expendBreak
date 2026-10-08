@@ -36,7 +36,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
   };
 
   return (
-    <section className="mb-4 overflow-hidden rounded-xl border border-sky-500/35 bg-sky-500/5" aria-label="SMS 지출 후보">
+    <section id="sms-review" className="mb-4 scroll-mt-20 overflow-hidden rounded-xl border border-sky-500/35 bg-sky-500/5" aria-label="SMS 지출 후보">
       <div className="flex items-start gap-3 border-b border-sky-500/20 px-4 py-3">
         <MessageSquareText className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
         <div>

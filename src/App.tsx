@@ -110,6 +110,8 @@ import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { QuickEntryBar } from './components/QuickEntryBar';
 import { SmsReviewCard } from './components/SmsReviewCard';
+import { SmsFoundBanner } from './components/SmsFoundBanner';
+import { fallbackExpenseCategoryId, suggestSmsCategories } from './utils/smsCategoryAi';
 import { QuickEntrySuggestion, suggestQuickEntryCandidates } from './utils/quickEntrySuggestions';
 import type { OnboardingResult } from './components/OnboardingSheet';
 
@@ -216,6 +218,8 @@ export default function App() {
   const [pendingWidgetQuickEntryId, setPendingWidgetQuickEntryId] = useState<string | null>(null);
   const [nativeDestination, setNativeDestination] = useState<NativeDestination | null>(null);
   const [smsCandidates, setSmsCandidates] = useState<SmsReviewCandidate[]>([]);
+  // The set of candidates the user closed the banner for; a new message shows it again.
+  const [smsBannerDismissedFor, setSmsBannerDismissedFor] = useState('');
   const smsImportBusy = useRef(false);
   const smsImportRerunRequested = useRef(false);
   const announcedSmsCandidateIds = useRef(new Set<string>());
@@ -356,15 +360,19 @@ export default function App() {
         await acknowledgePendingSms(userProfile.uid, prepared.ignoredMessageIds);
         if (cancelled) return;
         setSmsCandidates(prepared.candidates);
-
-        const newCandidates = prepared.candidates.filter(candidate => !announcedSmsCandidateIds.current.has(candidate.fingerprint));
         prepared.candidates.forEach(candidate => announcedSmsCandidateIds.current.add(candidate.fingerprint));
-        if (newCandidates.length) {
-          showToast({
-            message: `SMS 확인 대기 ${prepared.candidates.length}건`,
-            description: '승인하기 전에는 지출에 반영되지 않습니다.',
-            tone: 'info',
-            durationMs: 12000,
+
+        // Merchant names only, and only with this account's AI consent.
+        if (getUserProfile().aiClassificationEnabled) {
+          const categoriesNow = getCategories();
+          const fallback = fallbackExpenseCategoryId(categoriesNow);
+          void suggestSmsCategories(prepared.candidates, categoriesNow).then(suggested => {
+            if (cancelled) return;
+            const byFingerprint = new Map(suggested.map(candidate => [candidate.fingerprint, candidate.suggestedCategoryId]));
+            // A category the user already changed on the card is kept.
+            setSmsCandidates(current => current.map(candidate => candidate.suggestedCategoryId === fallback && byFingerprint.get(candidate.fingerprint)
+              ? { ...candidate, suggestedCategoryId: byFingerprint.get(candidate.fingerprint)! }
+              : candidate));
           });
         }
       } catch (error) {
@@ -1523,6 +1531,20 @@ export default function App() {
             onChange={setCurrentYM}
           />
         </div>
+
+        {(() => {
+          const key = smsCandidates.map(candidate => candidate.fingerprint).sort().join('|');
+          return smsCandidates.length > 0 && key !== smsBannerDismissedFor && (
+            <SmsFoundBanner
+              count={smsCandidates.length}
+              onReview={() => {
+                setSmsBannerDismissedFor(key);
+                document.getElementById('sms-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              onDismiss={() => setSmsBannerDismissedFor(key)}
+            />
+          );
+        })()}
 
         <SmsReviewCard
           candidates={smsCandidates}

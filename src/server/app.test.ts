@@ -513,3 +513,29 @@ describe('agent decisions', () => {
     });
   });
 });
+
+describe('SMS category suggestions', () => {
+  it('asks one choice question per merchant with the given categories', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { questions } = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        answers: questions.map(() => ({ type: 'choice', choice: 'delivery_food', confidence: 0.9, probabilities: [{ value: 'delivery_food', probability: 0.9 }] })),
+      }), { status: 200 });
+    });
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    try {
+      const { call, login } = await start({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      const result = await call('POST', '/api/ai/agent/categorize', {
+        token: await login(),
+        body: { merchants: ['땡겨요'], categories: [{ id: 'delivery_food', name: '배달' }, { id: 'etc_expense', name: '기타' }] },
+      });
+      expect(result.json).toEqual({ available: true, results: [{ merchant: '땡겨요', categoryId: 'delivery_food', confidence: 0.9 }] });
+      const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+      expect(request.questions[0]).toMatchObject({ type: 'choice', choices: [{ value: 'delivery_food', description: '배달' }, { value: 'etc_expense', description: '기타' }] });
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previous;
+    }
+  });
+});

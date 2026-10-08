@@ -164,10 +164,10 @@ export interface PreparedSmsReviewQueue {
 const ISSUERS: Array<{ name: string; pattern: RegExp }> = [
   { name: 'KB국민카드', pattern: /KB\s*국민|국민카드/i },
   { name: '신한카드', pattern: /신한카드|신한\s*체크/i },
-  { name: '삼성카드', pattern: /삼성카드/i },
+  { name: '삼성카드', pattern: /삼성카드|삼성\s*\d{4}|삼성\s*승인/i },
   { name: '현대카드', pattern: /현대카드/i },
   { name: '롯데카드', pattern: /롯데카드/i },
-  { name: 'NH농협카드', pattern: /NH\s*농협|농협카드/i },
+  { name: 'NH농협카드', pattern: /NH\s*농협|농협카드|NH\s*카드|NH\s*체크/i },
   { name: 'BC카드', pattern: /BC카드|비씨카드/i },
   { name: '하나카드', pattern: /하나카드/i },
   { name: '우리카드', pattern: /우리카드/i },
@@ -175,7 +175,10 @@ const ISSUERS: Array<{ name: string; pattern: RegExp }> = [
   { name: '토스', pattern: /토스(?:뱅크)?(?:카드)?/i },
 ];
 
-const IGNORE_TRANSACTION = /결제예정|결제일|청구(?:금액|예정)?|명세서|이용대금|납부|자동이체|한도(?:초과|안내)?|광고|이벤트|포인트|혜택|발급|배송/;
+// Must stay in step with isFinancialCandidate in SmsQueueStore.kt. Approvals
+// often mention 잔여한도, 포인트 적립 or 결제일, so only clear ads and billing
+// notices are dropped here; an approval keyword is still required below.
+const IGNORE_TRANSACTION = /\(광고\)|무료\s*수신\s*거부|수신\s*거부|결제\s*예정|청구\s*(?:금액|예정|안내)|명세서|이용\s*대금|납부\s*(?:예정|안내)|자동\s*이체/;
 const CANCELLATION = /취소|환불\s*완료/;
 const APPROVAL = /승인|결제\s*완료|카드\s*사용|체크\s*사용/;
 
@@ -225,6 +228,8 @@ function extractCardLast4(body: string): string | null {
     /(?:카드|체크|신용|법인)?\s*[*xX●ㆍ-]+\s*(\d{4})(?!\d)/,
     /(?:카드번호|카드)\s*[:：]?\s*(\d{4})(?!\d)/,
     /\((\d{4})\)\s*(?:승인|취소|사용)/,
+    // 하나카드(1234), 삼성1234승인
+    /(?:카드|삼성|국민|신한|현대|롯데|하나|우리|BC|NH)\s*\(?(\d{4})\)?(?!\d)/,
   ];
   for (const pattern of patterns) {
     const match = body.match(pattern);
@@ -255,7 +260,22 @@ function cleanMerchantLine(line: string) {
     .trim();
 }
 
+/**
+ * One-line formats ("...12,000원(일시불)10/08 12:30 스타벅스 누적1,234,567원")
+ * put the merchant right after the time, followed by totals or points.
+ */
+function merchantAfterTime(body: string): string | null {
+  const match = body.match(/\d{1,2}[.\/-]\d{1,2}\s*(?:\([^)]*\))?\s*\d{1,2}:\d{2}[ \t]+([^\n]+)/);
+  if (!match) return null;
+  const merchant = match[1]
+    .replace(/\s*(?:총\s*)?누적.*$|\s*잔여\s*한도.*$|\s*잔액.*$|\s*[가-힣A-Za-z]*\s*\d[\d,]*\s*P\s*적립.*$|\s*(?:\d{1,3}(?:,\d{3})+|\d+)\s*원.*$/, '')
+    .trim();
+  return merchant.length >= 2 && merchant.length <= 40 ? merchant : null;
+}
+
 function extractMerchant(body: string, issuer: string | null) {
+  const afterTime = merchantAfterTime(body);
+  if (afterTime) return afterTime;
   const lines = body.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const candidates = lines
     .map((line, index) => ({ raw: line, cleaned: cleanMerchantLine(line), index }))

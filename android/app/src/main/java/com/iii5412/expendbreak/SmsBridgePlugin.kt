@@ -100,7 +100,10 @@ class SmsBridgePlugin : Plugin() {
 
             SmsQueueStore.markScanStarted(context, profileKey, now)
             val overlapStart = if (state.lastSuccessAt > 0) state.lastSuccessAt - 24L * 60L * 60L * 1000L else 0L
-            val startAt = if (force) {
+            // A filter change (LMS support, narrower ad filter) re-reads everything
+            // since the feature was enabled once, so earlier misses are found.
+            val rescan = SmsQueueStore.needsFilterRescan(context, profileKey)
+            val startAt = if (force || rescan) {
                 maxOf(state.baselineAt, state.enabledAt)
             } else {
                 maxOf(state.baselineAt, state.enabledAt, overlapStart)
@@ -137,7 +140,15 @@ class SmsBridgePlugin : Plugin() {
                         }
                     }
                 }
+                // Long card messages (LMS) live in the MMS store.
+                MmsReader.readInbox(context, startAt, now).forEach { message ->
+                    scannedCount += 1
+                    if (SmsQueueStore.enqueueIfFinancialCandidate(context, profileKey, message.sender, message.body, message.receivedAt)) {
+                        candidateCount += 1
+                    }
+                }
                 SmsQueueStore.markScanSucceeded(context, profileKey, now, scannedCount, candidateCount)
+                if (rescan) SmsQueueStore.markFilterRescanned(context, profileKey)
                 if (candidateCount > 0) {
                     context.sendBroadcast(Intent(SmsQueueStore.ACTION_PENDING_SMS).setPackage(context.packageName))
                 }

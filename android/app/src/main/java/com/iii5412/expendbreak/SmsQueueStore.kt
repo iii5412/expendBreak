@@ -17,6 +17,8 @@ object SmsQueueStore {
     private const val KEY_HANDLED_IDS = "handled_message_ids"
     private const val MAX_SEEN_IDS = 5_000
     private const val MAX_HANDLED_IDS = 20_000
+    /** Bump when the candidate filter changes so the inbox is read again once. */
+    private const val FILTER_VERSION = 2
     private val lock = Any()
 
     data class ScanState(
@@ -107,6 +109,13 @@ object SmsQueueStore {
             .putInt("last_candidate_count_$suffix", candidateCount)
             .remove("last_error_$suffix")
             .apply()
+    }
+
+    fun needsFilterRescan(context: Context, profileKey: String): Boolean =
+        preferences(context).getInt("filter_version_${profileSuffix(profileKey)}", 1) < FILTER_VERSION
+
+    fun markFilterRescanned(context: Context, profileKey: String) {
+        preferences(context).edit().putInt("filter_version_${profileSuffix(profileKey)}", FILTER_VERSION).apply()
     }
 
     fun markScanFailed(context: Context, profileKey: String, errorCode: String) {
@@ -226,10 +235,13 @@ object SmsQueueStore {
     private fun messageId(sender: String, body: String, receivedAt: Long): String =
         sha256("$sender|$body|$receivedAt")
 
+    // Must stay in step with IGNORE_TRANSACTION / APPROVAL in src/utils/smsImport.ts.
+    // Approvals often mention 잔여한도, 포인트 적립 or 결제일, so only clear ads
+    // and billing notices are dropped; an approval keyword is still required.
     private fun isFinancialCandidate(body: String): Boolean {
         if (!Regex("(?:\\d{1,3}(?:,\\d{3})+|\\d+)\\s*원").containsMatchIn(body)) return false
         if (!Regex("승인|결제\\s*완료|카드\\s*사용|체크\\s*사용|승인\\s*취소|결제\\s*취소|매입\\s*취소|취소\\s*완료|환불\\s*완료").containsMatchIn(body)) return false
-        return !Regex("결제예정|결제일|청구(?:금액|예정)?|명세서|이용대금|납부|한도(?:초과|안내)?|광고|이벤트|포인트|혜택|발급|배송").containsMatchIn(body)
+        return !Regex("\\(광고\\)|무료\\s*수신\\s*거부|수신\\s*거부|결제\\s*예정|청구\\s*(?:금액|예정|안내)|명세서|이용\\s*대금|납부\\s*(?:예정|안내)|자동\\s*이체").containsMatchIn(body)
     }
 
     private fun readQueue(raw: String?): List<JSONObject> = try {
