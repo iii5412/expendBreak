@@ -119,8 +119,11 @@ self.addEventListener('fetch', event => {
 }
 
 export default defineConfig(() => {
+  const builtAt = new Date().toISOString();
+  // Deploys pass the commit; local builds get a unique id so the app still picks up the deployed bundle.
+  const bundleVersion = process.env.LIVE_BUNDLE_VERSION?.trim() || `local-${builtAt.replace(/[^0-9]/g, '').slice(0, 14)}`;
   return {
-    define: { __APP_BUILD__: JSON.stringify({ version: packageInfo.version, builtAt: new Date().toISOString() }) },
+    define: { __APP_BUILD__: JSON.stringify({ version: packageInfo.version, builtAt, bundleVersion }) },
     plugins: [react(), tailwindcss(), serviceWorkerPlugin()],
     resolve: {
       alias: {

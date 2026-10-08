@@ -1,0 +1,8 @@
+# The image is assembled from build output produced by the deploy workflow
+# (dist, server-dist, live-update); sources and local files stay out.
+*
+!package.json
+!package-lock.json
+!dist/**
+!server-dist/**
+!live-update/**

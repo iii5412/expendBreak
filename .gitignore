@@ -11,3 +11,5 @@ artifacts/
 .env*
 !.env.example
 .claude/settings.local.json
+
+live-update/

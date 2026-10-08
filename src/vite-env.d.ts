@@ -8,4 +8,4 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
-declare const __APP_BUILD__: { version: string; builtAt: string };
+declare const __APP_BUILD__: { version: string; builtAt: string; bundleVersion: string };

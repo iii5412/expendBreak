@@ -12,6 +12,23 @@ const config: CapacitorConfig = {
     allowMixedContent: false,
     webContentsDebuggingEnabled: false,
   },
+  plugins: {
+    // Self-hosted screen updates (src/utils/liveUpdate.ts). Every Capgo cloud
+    // endpoint is blanked so the app never reports to or polls a third party.
+    CapacitorUpdater: {
+      autoUpdate: false,
+      updateUrl: '',
+      statsUrl: '',
+      channelUrl: '',
+      allowModifyUrl: false,
+      // Roll back when the new bundle has not confirmed it started within 10s.
+      appReadyTimeout: 10000,
+      // A new APK ships its own screens; drop downloaded ones built for the old APK.
+      resetWhenUpdate: true,
+      autoDeleteFailed: true,
+      autoDeletePrevious: true,
+    },
+  },
 };
 
 export default config;

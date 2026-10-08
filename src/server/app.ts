@@ -21,6 +21,7 @@ import {
   createSessionEpochs,
 } from './sessionEpochs';
 import { createAppUpdateRouter } from './routes/appUpdate';
+import { createLiveUpdateRouter } from './routes/liveUpdate';
 import { createBankAccountsRouter } from './routes/bankAccounts';
 import { createCategoryRecommendRouter } from './routes/ai/categoryRecommend';
 import { createClassifyRouter } from './routes/ai/classify';
@@ -121,6 +122,7 @@ export function createApp({ env, deps = {} }: CreateAppOptions): CreatedApp {
   app.use('/api/ai/*', requireAccount);
 
   app.use('/api', createAppUpdateRouter());
+  app.use('/api', createLiveUpdateRouter());
   app.use('/api/ai', createRealtimeRouter(routeDeps));
   app.use('/api/ai', createFinanceChatRouter(routeDeps));
   app.use('/api/ai', createReceiptRouter(routeDeps));

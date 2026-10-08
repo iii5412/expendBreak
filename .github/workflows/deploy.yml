@@ -1,0 +1,115 @@
+name: Deploy app
+
+# Deploys the server, the web app and the Android screen bundle to the existing
+# Cloud Run service after CI passes on main. One image carries all three, so the
+# server API and the screens installed apps download are always the same commit.
+#
+# Safety: the new revision first receives no traffic. It goes live only after
+# its own tagged URL answers with the expected version; otherwise production
+# stays on the previous revision.
+#
+# Setup: docs/AUTO-DEPLOY-SETUP.md (repository variables GCP_WORKLOAD_IDENTITY_PROVIDER,
+# GCP_SERVICE_ACCOUNT, GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_SERVICE, VITE_API_BASE_URL).
+# Runtime secrets stay on the Cloud Run service; this workflow never sets env vars.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      REGION: ${{ vars.GCP_REGION }}
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Set version
+        run: echo "LIVE_BUNDLE_VERSION=${SHA:0:12}" >> "$GITHUB_ENV"
+
+      # CI already ran the full suite on this commit; repeat the fast checks so a
+      # manual run cannot ship an unchecked commit.
+      - name: Type check and unit tests
+        run: npm run lint && npm test
+
+      - name: Build web app and server
+        run: npm run build
+
+      - name: Build Android screen bundle
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: node scripts/build-live-bundle.mjs
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT/expendbreak/server:$LIVE_BUNDLE_VERSION"
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker build --build-arg APP_VERSION="$LIVE_BUNDLE_VERSION" -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy without traffic
+        run: |
+          gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGE" --no-traffic --tag candidate --quiet
+
+      - name: Check the new revision
+        run: |
+          BASE_URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(status.url)')
+          CANDIDATE_URL="${BASE_URL/https:\/\//https://candidate---}"
+          for attempt in 1 2 3 4 5 6; do
+            BODY=$(curl -fsS "$CANDIDATE_URL/api/live-update" || true)
+            if echo "$BODY" | grep -q "\"version\":\"$LIVE_BUNDLE_VERSION\""; then
+              curl -fsS -o /dev/null "$CANDIDATE_URL/" && curl -fsS "$CANDIDATE_URL/api/auth/status" && exit 0
+            fi
+            echo "Attempt $attempt: candidate not ready"; sleep 10
+          done
+          echo "::error::New revision did not answer with version $LIVE_BUNDLE_VERSION. Production traffic was not moved."
+          exit 1
+
+      - name: Move traffic to the new revision
+        run: |
+          gcloud run services update-traffic "$SERVICE" --project "$PROJECT" --region "$REGION" --to-latest --quiet
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed $LIVE_BUNDLE_VERSION"
+            echo "- Image: \`$IMAGE\`"
+            echo "- Installed apps (APK build $(jq .minNativeBuild live-update/manifest.json)+) pick up the new screens on the next cold start after the download."
+            echo "- Roll back: Cloud Run console → service → Revisions → send 100% to the previous revision."
+          } >> "$GITHUB_STEP_SUMMARY"
