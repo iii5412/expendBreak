@@ -19,6 +19,8 @@
 
 그러므로 main에 들어가는 모든 변경은 곧 운영에 나간다.
 
+배포·확인·롤백·APK 빌드 절차는 [docs/DEPLOY-RUNBOOK.md](docs/DEPLOY-RUNBOOK.md)를 따른다. push는 사용자가 승인한 경우에만 한다.
+
 ## 반드시 지킬 것
 
 - 작업을 끝내기 전에 `npm run lint`와 `npm test`를 통과시킨다. 서버 라우트나 규칙을 바꾸면 테스트도 추가한다.
