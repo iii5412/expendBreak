@@ -178,6 +178,8 @@ export default function App() {
   const [managementSubTab, setManagementSubTab] = useState<string>('recurring');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [pendingLiveDraft, setPendingLiveDraft] = useState<{ result: VoiceAnalysisResult; durationMs: number; mimeType: string } | null>(null);
+  // A sentence the Agent recognised as a plain entry; the modal analyses it with AI 문장.
+  const [pendingAiText, setPendingAiText] = useState<string | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [bootState, setBootState] = useState<BootState>('checking');
   const [lockNotice, setLockNotice] = useState<string | null>(null);
@@ -563,7 +565,7 @@ export default function App() {
 
   const handleLock = async () => {
     setIsAddModalOpen(false);
-    setPendingLiveDraft(null);
+    setPendingLiveDraft(null); setPendingAiText(null);
     clearAgentSession();
     if (userProfile.wipeCacheOnLock && userProfile.uid) {
       await configureSmsImport(userProfile.uid, false).catch(error => {
@@ -906,7 +908,7 @@ export default function App() {
   useEffect(() => {
     if (!nativeDestination || bootState !== 'ready') return;
     if (nativeDestination.kind === 'transaction/new') {
-      setPendingLiveDraft(null);
+      setPendingLiveDraft(null); setPendingAiText(null);
       setIsAddModalOpen(true);
     } else if (nativeDestination.kind === 'settings/widget') {
       handleNavigateTab('management', 'settings');
@@ -1555,7 +1557,7 @@ export default function App() {
             cardSettlementSummary={cardSettlementSummary}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
-            onOpenAddModal={() => { setPendingLiveDraft(null); setIsAddModalOpen(true); }}
+            onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setIsAddModalOpen(true); }}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}
             showSetupPrompt={recurringTemplates.every(template => Boolean(template.archivedAt)) && !userProfile.onboardingCompletedAt}
@@ -1792,6 +1794,11 @@ export default function App() {
               isCyclePlanSaved: () => cyclePlanState === 'saved',
             }}
             onNavigate={screen => handleNavigateTab(screen as NavTab)}
+            onQuickAdd={text => {
+              setPendingLiveDraft(null);
+              setPendingAiText(text);
+              setIsAddModalOpen(true);
+            }}
           />
         )}
 
@@ -1857,10 +1864,11 @@ export default function App() {
 
       {/* Central Add Transaction Modal */}
       <Suspense fallback={null}>
-      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); }}><AddTransactionModal
+      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); setPendingAiText(null); }}><AddTransactionModal
         isOpen={isAddModalOpen}
-        onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); }}
+        onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); setPendingAiText(null); }}
         initialVoiceDraft={pendingLiveDraft}
+        initialAiText={pendingAiText}
         categories={categories}
         merchantRules={merchantRules}
         bankAccounts={bankAccounts}
@@ -1876,7 +1884,7 @@ export default function App() {
         onPostQuickEntry={handlePostQuickEntry}
         onManageQuickEntries={() => {
           setIsAddModalOpen(false);
-          setPendingLiveDraft(null);
+          setPendingLiveDraft(null); setPendingAiText(null);
           handleNavigateTab('management', 'quick_entries');
         }}
         onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
@@ -1933,7 +1941,7 @@ export default function App() {
       <BottomNav
         activeTab={activeTab}
         onSelectTab={tab => handleNavigateTab(tab)}
-        onOpenAddModal={() => { setPendingLiveDraft(null); setIsAddModalOpen(true); }}
+        onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setIsAddModalOpen(true); }}
       />
     </div>
   );

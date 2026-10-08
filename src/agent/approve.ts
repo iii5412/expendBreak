@@ -65,6 +65,35 @@ export async function applyAgentAction(action: AgentProposalAction, deps: AgentA
       });
     }
 
+    case 'bulk_update_transactions': {
+      // Rows touched elsewhere since the card was shown are skipped, not overwritten.
+      const current = new Map(getTransactions().map(item => [item.id, item]));
+      const applied: Array<{ transactionId: string; updatedAt: string; previous: typeof action.items[number]['previous'] }> = [];
+      let skipped = 0;
+      for (const item of action.items) {
+        const latest = current.get(item.transactionId);
+        const updated = latest && latest.updatedAt === item.expectedUpdatedAt
+          ? updateTransaction(item.transactionId, item.changes)
+          : null;
+        if (updated) applied.push({ transactionId: item.transactionId, updatedAt: updated.updatedAt, previous: item.previous });
+        else skipped += 1;
+      }
+      if (applied.length === 0) return changedMeanwhile;
+      return done(
+        skipped ? `${applied.length}건을 수정했습니다. ${skipped}건은 그 사이 바뀌어 건너뛰었습니다.` : `${applied.length}건을 수정했습니다.`,
+        async () => {
+          const now = new Map(getTransactions().map(item => [item.id, item]));
+          let reverted = 0;
+          for (const item of applied) {
+            if (now.get(item.transactionId)?.updatedAt === item.updatedAt && updateTransaction(item.transactionId, item.previous)) reverted += 1;
+          }
+          return reverted
+            ? done(reverted === applied.length ? `${reverted}건을 수정 전으로 되돌렸습니다.` : `${reverted}건을 되돌렸습니다. 나머지는 그 사이 바뀌었습니다.`)
+            : changedMeanwhile;
+        },
+      );
+    }
+
     case 'delete_transaction': {
       const current = getTransactions().find(item => item.id === action.transactionId);
       if (!current || current.updatedAt !== action.expectedUpdatedAt) return changedMeanwhile;

@@ -6,6 +6,9 @@ export const AGENT_INSTRUCTIONS = `
 - 날짜가 필요하면 get_overview의 today와 currentCycle을 기준으로 삼는다. "이번 달"은 현재 급여 주기를 뜻한다.
 - 거래를 바꾸기 전에는 search_transactions로 대상 id를, get_reference_data로 카테고리·계좌·카드 id를 확인한다.
 - 대상이 여러 개 후보면 추측하지 말고 후보를 짧게 보여주고 사용자에게 고르게 한다.
+- "배달", "카페", "구독", "술"처럼 의미로 묶이는 지출은 단어 검색 대신 find_by_criterion을 쓴다. 표기가 다른 가맹점(쿠팡이츠/쿠팡잇츠)도 잡고, 합계는 거래 id 기준이라 중복이 없다.
+- find_by_criterion의 unsure는 포함 여부를 사용자에게 가맹점 이름으로 묻는다. 확인되기 전에는 합계에 넣지 않고, 따로 "애매한 항목"으로 밝힌다.
+- 같은 변경을 2건 이상에 적용할 때는 propose_bulk_update_transactions 한 번으로 제안한다. 거래마다 따로 제안하지 않는다.
 - 필요한 도구는 한 번에 여러 개 호출해도 된다. 같은 조회를 반복하지 않는다.
 
 ## 변경 작업

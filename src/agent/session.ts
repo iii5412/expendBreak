@@ -1,5 +1,8 @@
 import { authenticatedFetch } from '../utils/auth';
-import { executeAgentTool, type AgentDataContext, type AgentProposal } from './executor';
+import {
+  executeAgentTool, finishCriterionLookup, prepareCriterionLookup,
+  type AgentDataContext, type AgentProposal, type AgentToolResult,
+} from './executor';
 import { APP_NOTICE_PREFIX, type AgentItem, type AgentScreen } from './tools';
 
 export type { AgentItem };
@@ -30,6 +33,8 @@ export interface AgentSessionState {
 export interface AgentRunHooks {
   getContext(): AgentDataContext;
   navigate(screen: AgentScreen): void;
+  /** Opens the entry form with the sentence already analysed (fast path for plain entries). */
+  quickAdd?(text: string): void;
 }
 
 const MAX_STEPS = 8;
@@ -40,6 +45,7 @@ const byteLength = (value: unknown) => new TextEncoder().encode(JSON.stringify(v
 
 const TOOL_ACTIVITY: Record<string, string> = {
   get_overview: '이번 주기 현황 확인',
+  find_by_criterion: '가맹점별로 기준 판단',
   get_reference_data: '카테고리·계좌·카드 확인',
   search_transactions: '거래 찾는 중',
   summarize_transactions: '합계 계산 중',
@@ -141,11 +147,78 @@ async function requestStep(items: AgentItem[]) {
 export async function sendAgentMessage(text: string, hooks: AgentRunHooks) {
   const message = text.trim().slice(0, 4_000);
   if (!message || state.busy) return;
+  if (hooks.quickAdd && await routeToEntryForm(message, hooks.quickAdd)) return;
   set({
     items: [...state.items, { type: 'message', role: 'user', content: message }],
     entries: [...state.entries, { id: entryId(), kind: 'user', text: message }],
   });
   await runAgentLoop(hooks);
+}
+
+const QUICK_ADD_CONFIDENCE = 0.85;
+
+/**
+ * A plain entry such as "스타벅스 5800 신한카드" goes straight to the existing
+ * AI 문장 entry form: one fast analysis instead of several Agent steps. Only
+ * clear cases qualify (an amount in the text, high confidence, nothing
+ * waiting for approval); anything else, or any failure, goes to the Agent.
+ */
+async function routeToEntryForm(message: string, quickAdd: (text: string) => void): Promise<boolean> {
+  if (!/\d/.test(message)) return false;
+  if (state.entries.some(entry => entry.kind === 'proposal' && entry.status === 'pending')) return false;
+  set({ busy: true, error: null });
+  let intent: { available?: boolean; intent?: string; confidence?: number } = {};
+  try {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 4_000);
+    try {
+      const response = await authenticatedFetch('/api/ai/agent/intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({ text: message }),
+      });
+      if (response.ok) intent = await response.json();
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  } catch {
+    // Routing is an optimisation; the Agent handles the message instead.
+  } finally {
+    set({ busy: false });
+  }
+  if (!intent.available || intent.intent !== 'add' || (intent.confidence ?? 0) < QUICK_ADD_CONFIDENCE) return false;
+  set({
+    entries: [
+      ...state.entries,
+      { id: entryId(), kind: 'user', text: message },
+      { id: entryId(), kind: 'activity', text: '새 기록으로 판단해 입력 화면에서 분석했습니다' },
+    ],
+  });
+  quickAdd(message);
+  return true;
+}
+
+/** Asks the server about each distinct merchant name; only names are sent. */
+async function runCriterionTool(rawArgs: string, ctx: AgentDataContext): Promise<AgentToolResult> {
+  const lookup = prepareCriterionLookup(rawArgs, ctx);
+  if (typeof lookup === 'string') return { output: { error: lookup } };
+  const unavailable = { output: { error: '가맹점 판단 서비스를 지금 쓸 수 없습니다. search_transactions로 후보를 찾아 직접 판단하세요.' } };
+  try {
+    const response = await authenticatedFetch('/api/ai/agent/criterion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ criterion: lookup.criterion, merchants: lookup.merchants }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.available || !Array.isArray(data.results)) return unavailable;
+    const probabilities = new Map<string, number | null>(
+      (data.results as Array<{ merchant: string; probability: number | null }>).map(item => [item.merchant, item.probability]),
+    );
+    return { output: finishCriterionLookup(lookup, probabilities, ctx) };
+  } catch {
+    return unavailable;
+  }
 }
 
 /**
@@ -180,7 +253,9 @@ async function runAgentLoop(hooks: AgentRunHooks) {
       for (const call of calls) {
         let result;
         try {
-          result = executeAgentTool(call.name, call.arguments, hooks.getContext());
+          result = call.name === 'find_by_criterion'
+            ? await runCriterionTool(call.arguments, hooks.getContext())
+            : executeAgentTool(call.name, call.arguments, hooks.getContext());
         } catch (error) {
           result = { output: { error: error instanceof Error ? error.message : '도구 실행 중 오류가 발생했습니다.' } };
         }

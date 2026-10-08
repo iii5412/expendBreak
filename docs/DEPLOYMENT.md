@@ -40,6 +40,7 @@ npm run account:hash -- wife "와이프" 654321
 - `OPENAI_API_KEY`: GPT Live 음성을 사용할 경우. 브라우저 환경변수로 노출하지 않고 서버 secret으로만 등록
 - `OPENAI_CHAT_MODEL`: 재무 챗 GPT 모델. 기본값 `gpt-6-luna`
 - `OPENAI_AGENT_MODEL`: 선택. AI 탭 Agent 모델. 없으면 `OPENAI_CHAT_MODEL`을 쓴다
+- `OPENAI_DECISION_MODEL`: 선택. OpenAI Decisions API(`/v1/decisions`, 2026-10 공개 베타) 모델. 기본값 `gpt-6-luna`. Agent의 의도 판단과 가맹점 기준 판단에 쓴다. 키에 접근 권한이 없으면 서버 로그에 `Decisions API error`(status 403)가 남고, 두 기능은 기존 Agent 판단으로 대신 동작한다
 - `OPENAI_REALTIME_MODEL`: 기본값 `gpt-realtime-2.1-mini`
 - `OPENAI_REALTIME_VOICE`: 기본값 `marin`
 - `NODE_ENV=production`

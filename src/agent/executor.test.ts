@@ -151,3 +151,43 @@ describe('agent write proposals', () => {
     expect(executeAgentTool('drop_database', {}, context()).output).toEqual({ error: '알 수 없는 도구입니다: drop_database' });
   });
 });
+
+describe('bulk update and criterion lookup', () => {
+  it('proposes one card for many transactions and skips rows already matching', async () => {
+    const result = executeAgentTool('propose_bulk_update_transactions', {
+      transactionIds: ['t1', 't3', 't2'], categoryId: 'food', merchant: null, paymentMethodType: null, accountId: null, cardId: null,
+    }, context());
+    expect(result.output).toMatchObject({ status: 'awaiting_user_approval', count: 1, alreadyMatching: 2 });
+    expect(result.proposal?.action).toEqual({
+      kind: 'bulk_update_transactions',
+      items: [{ transactionId: 't2', expectedUpdatedAt: stamp, changes: { categoryId: 'food' }, previous: { categoryId: 'cafe' } }],
+    });
+  });
+
+  it('refuses a bulk change that does not fit one of the transactions', () => {
+    const result = executeAgentTool('propose_bulk_update_transactions', {
+      transactionIds: ['t1', 't2'], categoryId: 'salary', merchant: null, paymentMethodType: null, accountId: null, cardId: null,
+    }, context());
+    expect(result.proposal).toBeUndefined();
+  });
+
+  it('groups transactions by merchant probability and sums each transaction once', async () => {
+    const { prepareCriterionLookup, finishCriterionLookup } = await import('./executor');
+    const ctx = context({
+      transactions: [
+        tx('a', '2026-09-05', 20000, { merchant: '쿠팡이츠' }),
+        tx('b', '2026-09-12', 37000, { merchant: '쿠팡잇츠' }),
+        tx('c', '2026-09-13', 25500, { merchant: '교촌치킨' }),
+        tx('d', '2026-09-14', 9000, { merchant: '이마트' }),
+        tx('e', '2026-10-01', 15000, { merchant: '쿠팡이츠' }),
+      ],
+    });
+    const lookup = prepareCriterionLookup({ criterion: '음식 배달 주문', from: '2026-09-01', to: '2026-09-30', type: null, cardId: null, accountId: null }, ctx);
+    if (typeof lookup === 'string') throw new Error(lookup);
+    expect(lookup.merchants.sort()).toEqual(['교촌치킨', '이마트', '쿠팡이츠', '쿠팡잇츠']);
+    const result = finishCriterionLookup(lookup, new Map([['쿠팡이츠', 0.9], ['쿠팡잇츠', 0.9], ['교촌치킨', 0.57], ['이마트', 0.1]]), ctx);
+    expect(result.matched).toMatchObject({ count: 2, total: 57000, transactionIds: ['a', 'b'] });
+    expect(result.unsure).toMatchObject({ count: 1, total: 25500, merchants: [{ merchant: '교촌치킨', probability: 0.57 }] });
+    expect(result.excluded).toEqual({ count: 1, merchantCount: 1 });
+  });
+});

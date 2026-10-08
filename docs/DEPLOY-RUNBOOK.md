@@ -117,6 +117,7 @@ JAVA_HOME=<저장소>/.jdk21/<jdk 폴더> ./gradlew.bat assembleDebug
 | Deploy without traffic 실패 | Cloud Run 설정 문제. 로그의 `ERROR: (gcloud...)` 줄을 읽는다. 운영은 이전 리비전 유지 |
 | Check the new revision 실패 | 새 서버가 시작되지 않음(환경변수 누락 등). 트래픽은 넘어가지 않았다 |
 | 배포 후 운영에서 문제 발견 | Cloud Run 콘솔 → service → 버전(Revisions) → 이전 리비전에 트래픽 100%. 또는 `gcloud run services update-traffic service --region asia-east1 --to-revisions <이전 리비전>=100` 후 원인 커밋을 revert |
+| Agent가 "가맹점 판단 서비스를 쓸 수 없습니다"로 돌아감 | OpenAI Decisions API 실패(베타 접근 권한 없음 등). Cloud Logging에서 `Decisions API error`/`Decisions API ok` 로그로 확인. 기능은 luna 판단으로 계속 동작 |
 | 앱에서 "Failed to fetch" | 응답이 앱에 닿지 않음. 요청 크기 한도(`src/server/httpSecurity.ts`의 경로별 한도), 네트워크, 서버 오류 순으로 본다 |
 
 배포 작업용 계정(`github-deployer`)에는 로그 열람 권한이 없다. 운영 로그는 사용자가 Cloud Console의 Logging에서 `jsonPayload.requestId="<X-Request-Id>"`로 찾는다.

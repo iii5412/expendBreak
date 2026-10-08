@@ -75,6 +75,8 @@ interface AddTransactionModalProps {
   onEnableAI?: () => Promise<boolean> | boolean;
   onSaveTransaction: (tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   initialVoiceDraft?: { result: VoiceAnalysisResult; durationMs: number; mimeType: string } | null;
+  /** Opens in AI 문장 mode and analyses this sentence right away (from the Agent). */
+  initialAiText?: string | null;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
   quickEntries?: QuickEntry[];
   /** Runs the same one-tap path used by the home screen and widget. */
@@ -104,6 +106,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   onEnableAI,
   onSaveTransaction,
   initialVoiceDraft,
+  initialAiText,
   onSaveMerchantRule,
   quickEntries = [],
   onPostQuickEntry,
@@ -230,6 +233,21 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setSelectedCardId(current => paymentCards.some(card => card.id === current) ? current : defaultCardId);
     setConfirmCardId(current => paymentCards.some(card => card.id === current) ? current : defaultCardId);
   }, [isOpen, paymentCards]);
+
+  const [autoAnalyze, setAutoAnalyze] = useState(false);
+  useEffect(() => {
+    if (!isOpen || !initialAiText) return;
+    setActiveMode('ai');
+    setVoiceResult(null);
+    setAiPromptText(initialAiText);
+    setAutoAnalyze(true);
+  }, [isOpen, initialAiText]);
+  useEffect(() => {
+    // Runs on the render after the text is in state, so the analysis reads it.
+    if (!isOpen || !autoAnalyze) return;
+    setAutoAnalyze(false);
+    void handleRunAiClassify();
+  });
 
   useEffect(() => {
     if (!isOpen || !initialVoiceDraft) return;

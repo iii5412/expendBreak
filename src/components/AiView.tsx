@@ -29,13 +29,14 @@ interface AiViewProps {
   onLiveDraftReady: (result: VoiceAnalysisResult, durationMs: number, mimeType: string) => void;
   agentActionDeps: AgentActionDeps;
   onNavigate: (screen: AgentScreen) => void;
+  onQuickAdd: (text: string) => void;
 }
 
 export const AiView: React.FC<AiViewProps> = ({
   categories, merchantRules, bankAccounts, paymentCards, transactions, budget,
   recurringOccurrences, allRecurringOccurrences, recurringTemplates, monthStartDay, aiEnabled, onEnableAI,
   getCurrentTransactions, onSaveStatementTransaction, onUpdateStatementTransaction,
-  onLiveDraftReady, agentActionDeps, onNavigate,
+  onLiveDraftReady, agentActionDeps, onNavigate, onQuickAdd,
 }) => {
   const [mode, setMode] = useState<'agent' | 'live'>('agent');
 
@@ -75,6 +76,7 @@ export const AiView: React.FC<AiViewProps> = ({
           monthStartDay={monthStartDay}
           actionDeps={agentActionDeps}
           onNavigate={onNavigate}
+          onQuickAdd={onQuickAdd}
           getCurrentTransactions={getCurrentTransactions}
           onSaveStatementTransaction={onSaveStatementTransaction}
           onUpdateStatementTransaction={onUpdateStatementTransaction}

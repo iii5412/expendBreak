@@ -25,6 +25,8 @@ interface AgentPanelProps {
   monthStartDay: number;
   actionDeps: AgentActionDeps;
   onNavigate: (screen: AgentScreen) => void;
+  /** Opens the entry form with this sentence analysed by AI 문장. */
+  onQuickAdd: (text: string) => void;
   getCurrentTransactions: () => Transaction[];
   onSaveStatementTransaction: (draft: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onUpdateStatementTransaction: (id: string, expectedUpdatedAt: string, updates: Partial<Transaction>) => Transaction | null;
@@ -66,6 +68,8 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
   };
   const navigateRef = useRef(props.onNavigate);
   navigateRef.current = props.onNavigate;
+  const quickAddRef = useRef(props.onQuickAdd);
+  quickAddRef.current = props.onQuickAdd;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -74,6 +78,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
   const hooks: AgentRunHooks = {
     getContext: () => contextRef.current!,
     navigate: screen => navigateRef.current(screen),
+    quickAdd: text => quickAddRef.current(text),
   };
 
   const send = (text = input) => {

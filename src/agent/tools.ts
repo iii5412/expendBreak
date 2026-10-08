@@ -78,6 +78,19 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
     }),
   },
   {
+    name: 'find_by_criterion',
+    kind: 'read',
+    description: '"배달", "카페", "구독 서비스"처럼 의미로 묶이는 거래를 찾는다. 가맹점 이름마다 기준에 해당하는지 판단해 matched(해당), unsure(애매), excluded(아님)로 나누고 합계를 거래 id 기준으로 계산한다. 표기가 달라도(쿠팡이츠/쿠팡잇츠) 잡아낸다. 단어 검색보다 이것을 우선 쓴다. unsure는 사용자에게 포함 여부를 묻는다.',
+    parameters: object({
+      criterion: { type: 'string', description: '판단 기준. 예: "음식 배달 주문", "카페·커피 지출"' },
+      from: date('시작일, 포함'),
+      to: date('종료일, 포함'),
+      type: nullable('string', { enum: ['income', 'expense', null], description: '기본 expense' }),
+      cardId: nullable('string', { description: '특정 카드 결제만' }),
+      accountId: nullable('string', { description: '특정 계좌 결제만' }),
+    }),
+  },
+  {
     name: 'list_recurring',
     kind: 'read',
     description: '급여 주기 하나의 고정 수입·지출 일정과 금액, 처리 상태를 조회한다.',
@@ -118,6 +131,17 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
       merchant: nullable('string'),
       categoryId: nullable('string'),
       memo: nullable('string'),
+      ...paymentFields,
+    }),
+  },
+  {
+    name: 'propose_bulk_update_transactions',
+    kind: 'write',
+    description: '여러 거래의 카테고리·사용처·결제수단을 한 번에 바꾸도록 제안한다. 확인 카드 한 장으로 승인된다. 같은 변경을 2건 이상에 적용할 때는 propose_update_transaction 대신 이것을 쓴다. 최대 100건.',
+    parameters: object({
+      transactionIds: { type: 'array', items: { type: 'string' }, description: 'search_transactions나 find_by_criterion에서 받은 거래 id' },
+      categoryId: nullable('string'),
+      merchant: nullable('string', { description: '사용처 이름 통일 등' }),
       ...paymentFields,
     }),
   },

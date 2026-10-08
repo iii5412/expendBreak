@@ -461,3 +461,55 @@ describe('request size and CORS', () => {
     expect(classify.headers.get('access-control-allow-origin')).toBe('https://app.example.com');
   });
 });
+
+describe('agent decisions', () => {
+  const withKey = async (fetchImpl: ReturnType<typeof vi.fn>, run: (tools: Awaited<ReturnType<typeof start>>) => Promise<void>) => {
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    try {
+      await run(await start({ fetchImpl: fetchImpl as unknown as typeof fetch }));
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previous;
+    }
+  };
+
+  it('classifies intent through /v1/decisions', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      answers: [{ type: 'choice', name: 'intent', choice: 'add', confidence: 0.98, probabilities: [{ value: 'add', probability: 0.98 }] }],
+    }), { status: 200 }));
+    await withKey(fetchImpl, async ({ call, login }) => {
+      const result = await call('POST', '/api/ai/agent/intent', { token: await login(), body: { text: '스타벅스 5800 신한카드' } });
+      expect(result.json).toMatchObject({ available: true, intent: 'add', confidence: 0.98 });
+      expect(String(fetchImpl.mock.calls[0][0])).toBe('https://api.openai.com/v1/decisions');
+      const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+      expect(request).toMatchObject({ model: 'gpt-6-luna', questions: [{ type: 'choice', name: 'intent' }] });
+    });
+  });
+
+  it('falls back quietly when the Decisions API is not enabled for the key', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'Decision API is not enabled for this user.' } }), { status: 403 }));
+    await withKey(fetchImpl, async ({ call, login }) => {
+      const token = await login();
+      expect((await call('POST', '/api/ai/agent/intent', { token, body: { text: '점심 만원' } })).json).toEqual({ available: false });
+      expect((await call('POST', '/api/ai/agent/criterion', { token, body: { criterion: '배달', merchants: ['쿠팡이츠'] } })).json).toEqual({ available: false });
+    });
+  });
+
+  it('judges merchant names in chunks and sends only the names', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { questions } = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ answers: questions.map(() => ({ type: 'predicate', probability: 0.9 })) }), { status: 200 });
+    });
+    await withKey(fetchImpl, async ({ call, login }) => {
+      const merchants = Array.from({ length: 30 }, (_, index) => `가게${index}`);
+      const result = await call('POST', '/api/ai/agent/criterion', { token: await login(), body: { criterion: '음식 배달 주문', merchants } });
+      expect(result.json).toMatchObject({ available: true });
+      expect((result.json!.results as unknown[]).length).toBe(30);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      const body = String(fetchImpl.mock.calls[0][1]?.body);
+      expect(body).toContain('가게0');
+      expect(body).not.toMatch(/\d{3,}원/);
+    });
+  });
+});
