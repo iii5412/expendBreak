@@ -14,6 +14,7 @@ import {
   Zap,
   Settings2,
   LockKeyhole,
+  MessageSquareText,
 } from 'lucide-react';
 import {
   Category,
@@ -42,6 +43,10 @@ import {
 } from '../utils/transactionDraft';
 import { EntryMode, readPreferredEntryMode, savePreferredEntryMode } from '../utils/entryMode';
 import { ReceiptCapturePanel } from './ReceiptCapturePanel';
+import { SmsReviewCard } from './SmsReviewCard';
+import { SmsImportSettingsCard } from './SmsImportSettingsCard';
+import { isSmsImportAvailable, type SmsReviewCandidate } from '../utils/smsImport';
+import type { UserProfile } from '../types';
 import { VoiceInputPanel } from './VoiceInputPanel';
 import { normalizeInstallmentPlan } from '../utils/installments';
 import { RecurringMatchCandidate, findRecurringMatches } from '../utils/recurringMatch';
@@ -59,6 +64,17 @@ const ENTRY_MODE_OPTIONS: Array<{ mode: EntryMode; label: string; icon: React.El
   { mode: 'voice', label: '음성', icon: Volume2 },
   { mode: 'receipt', label: '영수증', icon: Camera },
 ];
+// Card messages are read on the Android device only.
+const SMS_MODE_OPTION = { mode: 'sms' as EntryMode, label: '문자', icon: MessageSquareText };
+
+export interface SmsEntryProps {
+  candidates: SmsReviewCandidate[];
+  onApprove: (candidate: SmsReviewCandidate) => Promise<void>;
+  onDismiss: (candidate: SmsReviewCandidate) => Promise<void>;
+  onUpdate: (candidate: SmsReviewCandidate) => void;
+  userProfile: UserProfile;
+  onUpdateUserProfile: (updates: Partial<UserProfile>) => void;
+}
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -77,6 +93,10 @@ interface AddTransactionModalProps {
   initialVoiceDraft?: { result: VoiceAnalysisResult; durationMs: number; mimeType: string } | null;
   /** Opens in AI 문장 mode and analyses this sentence right away (from the Agent). */
   initialAiText?: string | null;
+  /** Opens in this mode instead of the remembered one (e.g. 문자 from the found-SMS banner). */
+  initialMode?: EntryMode | null;
+  /** 문자 mode: found card messages and the SMS import switch. */
+  sms?: SmsEntryProps;
   onSaveMerchantRule: (pattern: string, categoryId: string) => void;
   quickEntries?: QuickEntry[];
   /** Runs the same one-tap path used by the home screen and widget. */
@@ -107,6 +127,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   onSaveTransaction,
   initialVoiceDraft,
   initialAiText,
+  initialMode,
+  sms,
   onSaveMerchantRule,
   quickEntries = [],
   onPostQuickEntry,
@@ -114,6 +136,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   onPostOccurrence,
 }) => {
   const [activeMode, setActiveMode] = useState<EntryMode>('manual');
+  const showSmsMode = Boolean(sms) && isSmsImportAvailable();
 
   // Manual Form State
   const [type, setType] = useState<'income' | 'expense'>('expense');
@@ -207,6 +230,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setRecoverableDraft(readTransactionDraft());
     }
   }, [isOpen, aiClassificationEnabled]);
+
+  useEffect(() => {
+    if (isOpen && initialMode) setActiveMode(initialMode);
+  }, [isOpen, initialMode]);
 
   // Persist the manual form so an auto-lock does not discard it.
   useEffect(() => {
@@ -894,15 +921,15 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-4 gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1" role="tablist" aria-label="거래 입력 방식">
-          {ENTRY_MODE_OPTIONS.map(({ mode, label, icon: Icon }) => (
+        <div className={`grid ${showSmsMode ? 'grid-cols-5' : 'grid-cols-4'} gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1`} role="tablist" aria-label="거래 입력 방식">
+          {(showSmsMode ? [...ENTRY_MODE_OPTIONS, SMS_MODE_OPTION] : ENTRY_MODE_OPTIONS).map(({ mode, label, icon: Icon }) => (
             <button
               key={mode}
               type="button"
               role="tab"
               aria-selected={activeMode === mode}
               onClick={() => {
-                if (mode === 'manual') selectMode('manual');
+                if (mode === 'manual' || mode === 'sms') selectMode(mode);
                 else void selectProtectedMode(mode);
                 setVoiceResult(null);
               }}
@@ -917,6 +944,26 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             </button>
           ))}
         </div>
+
+        {activeMode === 'sms' && sms && (
+          <div className="space-y-3">
+            {sms.candidates.length > 0 ? (
+              <SmsReviewCard
+                candidates={sms.candidates}
+                categories={categories}
+                paymentCards={paymentCards}
+                onApprove={sms.onApprove}
+                onDismiss={sms.onDismiss}
+                onUpdate={sms.onUpdate}
+              />
+            ) : (
+              <p className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+                확인할 결제 문자가 없어요. 아래 "지금 확인"으로 문자함을 다시 볼 수 있습니다.
+              </p>
+            )}
+            <SmsImportSettingsCard userProfile={sms.userProfile} onUpdateUserProfile={sms.onUpdateUserProfile} />
+          </div>
+        )}
 
         {/* MODE 1: Receipt Capture */}
         {activeMode === 'receipt' && (

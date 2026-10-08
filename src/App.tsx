@@ -112,6 +112,7 @@ import { QuickEntryBar } from './components/QuickEntryBar';
 import { SmsReviewCard } from './components/SmsReviewCard';
 import { SmsFoundBanner } from './components/SmsFoundBanner';
 import { fallbackExpenseCategoryId, suggestSmsCategories } from './utils/smsCategoryAi';
+import type { EntryMode } from './utils/entryMode';
 import { QuickEntrySuggestion, suggestQuickEntryCandidates } from './utils/quickEntrySuggestions';
 import type { OnboardingResult } from './components/OnboardingSheet';
 
@@ -182,6 +183,7 @@ export default function App() {
   const [pendingLiveDraft, setPendingLiveDraft] = useState<{ result: VoiceAnalysisResult; durationMs: number; mimeType: string } | null>(null);
   // A sentence the Agent recognised as a plain entry; the modal analyses it with AI 문장.
   const [pendingAiText, setPendingAiText] = useState<string | null>(null);
+  const [pendingEntryMode, setPendingEntryMode] = useState<EntryMode | null>(null);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [bootState, setBootState] = useState<BootState>('checking');
   const [lockNotice, setLockNotice] = useState<string | null>(null);
@@ -573,7 +575,7 @@ export default function App() {
 
   const handleLock = async () => {
     setIsAddModalOpen(false);
-    setPendingLiveDraft(null); setPendingAiText(null);
+    setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null);
     clearAgentSession();
     if (userProfile.wipeCacheOnLock && userProfile.uid) {
       await configureSmsImport(userProfile.uid, false).catch(error => {
@@ -916,7 +918,7 @@ export default function App() {
   useEffect(() => {
     if (!nativeDestination || bootState !== 'ready') return;
     if (nativeDestination.kind === 'transaction/new') {
-      setPendingLiveDraft(null); setPendingAiText(null);
+      setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null);
       setIsAddModalOpen(true);
     } else if (nativeDestination.kind === 'settings/widget') {
       handleNavigateTab('management', 'settings');
@@ -1539,7 +1541,10 @@ export default function App() {
               count={smsCandidates.length}
               onReview={() => {
                 setSmsBannerDismissedFor(key);
-                document.getElementById('sms-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setPendingLiveDraft(null);
+                setPendingAiText(null);
+                setPendingEntryMode('sms');
+                setIsAddModalOpen(true);
               }}
               onDismiss={() => setSmsBannerDismissedFor(key)}
             />
@@ -1579,7 +1584,7 @@ export default function App() {
             cardSettlementSummary={cardSettlementSummary}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
-            onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setIsAddModalOpen(true); }}
+            onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null); setIsAddModalOpen(true); }}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}
             showSetupPrompt={recurringTemplates.every(template => Boolean(template.archivedAt)) && !userProfile.onboardingCompletedAt}
@@ -1886,11 +1891,20 @@ export default function App() {
 
       {/* Central Add Transaction Modal */}
       <Suspense fallback={null}>
-      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); setPendingAiText(null); }}><AddTransactionModal
+      {isAddModalOpen && <ErrorBoundary scope="add-transaction-modal" level="modal" onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null); }}><AddTransactionModal
         isOpen={isAddModalOpen}
-        onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); setPendingAiText(null); }}
+        onClose={() => { setIsAddModalOpen(false); setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null); }}
         initialVoiceDraft={pendingLiveDraft}
         initialAiText={pendingAiText}
+        initialMode={pendingEntryMode}
+        sms={{
+          candidates: smsCandidates,
+          onApprove: handleApproveSmsCandidate,
+          onDismiss: handleDismissSmsCandidate,
+          onUpdate: handleUpdateSmsCandidate,
+          userProfile,
+          onUpdateUserProfile: updateUserProfile,
+        }}
         categories={categories}
         merchantRules={merchantRules}
         bankAccounts={bankAccounts}
@@ -1906,7 +1920,7 @@ export default function App() {
         onPostQuickEntry={handlePostQuickEntry}
         onManageQuickEntries={() => {
           setIsAddModalOpen(false);
-          setPendingLiveDraft(null); setPendingAiText(null);
+          setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null);
           handleNavigateTab('management', 'quick_entries');
         }}
         onPostOccurrence={async (occId, amount, pType, accId, cardId) => {
@@ -1963,7 +1977,7 @@ export default function App() {
       <BottomNav
         activeTab={activeTab}
         onSelectTab={tab => handleNavigateTab(tab)}
-        onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setIsAddModalOpen(true); }}
+        onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null); setIsAddModalOpen(true); }}
       />
     </div>
   );

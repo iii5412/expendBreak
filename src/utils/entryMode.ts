@@ -11,9 +11,9 @@ import { getAccountStorageKey } from './auth';
 // those features have their own AI destination outside the entry modal.
 const entryModeKey = () => getAccountStorageKey('brake_entry_mode_v2');
 
-export type EntryMode = 'receipt' | 'voice' | 'ai' | 'manual';
+export type EntryMode = 'receipt' | 'voice' | 'ai' | 'manual' | 'sms';
 
-const ENTRY_MODES: EntryMode[] = ['receipt', 'voice', 'ai', 'manual'];
+const ENTRY_MODES: EntryMode[] = ['receipt', 'voice', 'ai', 'manual', 'sms'];
 
 function store(): Storage | null {
   try {

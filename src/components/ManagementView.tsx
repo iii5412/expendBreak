@@ -66,8 +66,8 @@ import { InstallAppCard } from './InstallAppCard';
 import { AndroidAppCard } from './AndroidAppCard';
 import { normalizeAppTheme } from '../utils/theme';
 import { ScreenHeader } from './ui/ScreenHeader';
-import { SmsImportSettingsCard } from './SmsImportSettingsCard';
 import { resolveRecurringAmount } from '../utils/recurringAmounts';
+import { isSmsImportAvailable } from '../utils/smsImport';
 
 const POPULAR_KOREAN_BANKS = [
   'KB국민',
@@ -1474,7 +1474,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
           <InstallAppCard />
           <AndroidAppCard userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
-          <SmsImportSettingsCard userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
+          {isSmsImportAvailable() && (
+            <p className="eb-panel rounded-xl p-4 text-xs leading-relaxed text-slate-400">
+              <strong className="text-slate-200">문자에서 지출 찾기</strong>는 하단 <strong className="text-slate-200">+ 기록</strong>의 <strong className="text-slate-200">문자</strong> 탭으로 옮겼습니다. 켜기·지금 확인·찾은 결제 승인을 한곳에서 할 수 있습니다.
+            </p>
+          )}
 
           {/* AI Settings Toggles */}
           <div className="eb-panel space-y-3 rounded-xl p-4">
