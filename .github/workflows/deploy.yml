@@ -82,10 +82,14 @@ jobs:
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
+      # AI Studio deployed source on a managed Node base image with a shell
+      # start command. A full image needs neither, so both are replaced here.
       - name: Deploy without traffic
         run: |
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
-            --image "$IMAGE" --no-traffic --tag candidate --quiet
+            --image "$IMAGE" --clear-base-image \
+            --command node --args server-dist/server.cjs \
+            --no-traffic --tag candidate --quiet
 
       - name: Check the new revision
         run: |
