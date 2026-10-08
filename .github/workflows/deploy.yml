@@ -110,6 +110,8 @@ jobs:
                   print(f'removed annotation {key}')
                   del annotations[key]
           template = svc['spec']['template']
+          # Only valid together with the managed base image removed above.
+          template['spec'].pop('runtimeClassName', None)
           template['metadata']['name'] = os.environ['NEW_REVISION']
           container = template['spec']['containers'][0]
           container['image'] = os.environ['IMAGE']
