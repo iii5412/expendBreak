@@ -82,9 +82,53 @@ jobs:
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
-      # AI Studio deployed source on a managed Node base image with a shell
-      # start command. A full image needs neither, so both are replaced here.
+      # One time only: AI Studio deployed source code on a managed Node base
+      # image, and `gcloud run deploy --image` refuses a service that still
+      # carries those source annotations. Rewrite the service definition once
+      # with them removed. Traffic stays pinned to the serving revision, the new
+      # revision gets only the candidate tag, and env values are never printed.
+      - name: Convert AI Studio source deployment (first deploy only)
+        run: |
+          if ! gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json \
+            | jq -e '.spec.template.metadata.annotations // {} | keys | any(test("run.googleapis.com/(sources|base-images)"))' >/dev/null; then
+            echo "Service already uses image deploys."; exit 0
+          fi
+          SERVING=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(status.latestReadyRevisionName)')
+          umask 077
+          WORK=$(mktemp -d)
+          trap 'rm -rf "$WORK"' EXIT
+          gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=export > "$WORK/svc.yaml"
+          yq -o=json "$WORK/svc.yaml" > "$WORK/svc.json"
+          NEW_REVISION="$SERVICE-$LIVE_BUNDLE_VERSION-$GITHUB_RUN_ID" SERVING="$SERVING" IMAGE="$IMAGE" python3 - "$WORK/svc.json" <<'PY'
+          import json, os, re, sys
+          path = sys.argv[1]
+          svc = json.load(open(path))
+          drop = re.compile(r'run\.googleapis\.com/(sources|base-images|build-)')
+          for meta in (svc.get('metadata', {}), svc['spec']['template'].setdefault('metadata', {})):
+              annotations = meta.get('annotations') or {}
+              for key in [k for k in annotations if drop.search(k)]:
+                  print(f'removed annotation {key}')
+                  del annotations[key]
+          template = svc['spec']['template']
+          template['metadata']['name'] = os.environ['NEW_REVISION']
+          container = template['spec']['containers'][0]
+          container['image'] = os.environ['IMAGE']
+          container['command'] = ['node']
+          container['args'] = ['server-dist/server.cjs']
+          svc['spec']['traffic'] = [
+              {'revisionName': os.environ['SERVING'], 'percent': 100},
+              {'revisionName': os.environ['NEW_REVISION'], 'percent': 0, 'tag': 'candidate'},
+          ]
+          json.dump(svc, open(path, 'w'))
+          print('kept env var names:', ', '.join(sorted(e['name'] for e in container.get('env', []))))
+          PY
+          gcloud run services replace "$WORK/svc.json" --project "$PROJECT" --region "$REGION" --quiet
+          echo "CONVERTED=1" >> "$GITHUB_ENV"
+
+      # AI Studio started the app with a shell command on its base image; a
+      # full image needs neither, so both are replaced here.
       - name: Deploy without traffic
+        if: env.CONVERTED != '1'
         run: |
           gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
             --image "$IMAGE" --clear-base-image \
