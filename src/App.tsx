@@ -115,6 +115,7 @@ import type { OnboardingResult } from './components/OnboardingSheet';
 
 const HistoryView = lazy(() => import('./components/HistoryView').then(module => ({ default: module.HistoryView })));
 const AnalyticsView = lazy(() => import('./components/AnalyticsView').then(module => ({ default: module.AnalyticsView })));
+import { clearAgentSession } from './agent/session';
 const AiView = lazy(() => import('./components/AiView').then(module => ({ default: module.AiView })));
 const ManagementView = lazy(() => import('./components/ManagementView').then(module => ({ default: module.ManagementView })));
 const AccountsView = lazy(() => import('./components/AccountsView').then(module => ({ default: module.AccountsView })));
@@ -260,6 +261,7 @@ export default function App() {
     // A boot that failed may have left a half-written cache behind, so
     // this path drops it rather than trusting it on the next unlock.
     shutdownStorageAndForgetCache();
+    clearAgentSession();
     await logoutOwner().catch(() => undefined);
     setBootState('locked');
   };
@@ -562,6 +564,7 @@ export default function App() {
   const handleLock = async () => {
     setIsAddModalOpen(false);
     setPendingLiveDraft(null);
+    clearAgentSession();
     if (userProfile.wipeCacheOnLock && userProfile.uid) {
       await configureSmsImport(userProfile.uid, false).catch(error => {
         console.error('Unable to pause SMS import while wiping device data:', error);
@@ -1768,6 +1771,7 @@ export default function App() {
             transactions={transactions}
             budget={budget}
             recurringOccurrences={recurringOccurrences}
+            allRecurringOccurrences={allRecurringOccurrences}
             recurringTemplates={recurringTemplates}
             monthStartDay={monthStartDay}
             aiEnabled={userProfile.aiClassificationEnabled}
@@ -1783,6 +1787,11 @@ export default function App() {
               setPendingLiveDraft({ result, durationMs, mimeType });
               setIsAddModalOpen(true);
             }}
+            agentActionDeps={{
+              refresh: refreshAppData,
+              isCyclePlanSaved: () => cyclePlanState === 'saved',
+            }}
+            onNavigate={screen => handleNavigateTab(screen as NavTab)}
           />
         )}
 

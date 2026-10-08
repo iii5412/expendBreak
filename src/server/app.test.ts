@@ -410,3 +410,33 @@ describe('AI routes: input validation and failure handling', () => {
     expect((await call('POST', '/api/ai/realtime/session', { token })).status).toBe(503);
   });
 });
+
+describe('agent', () => {
+  it('relays one step to GPT with the tool list and never stores the conversation', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      output: [{ type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'get_overview', arguments: '{}' }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }), { status: 200 }));
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    try {
+      const { call, login } = await start({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      const token = await login();
+      expect((await call('POST', '/api/ai/agent', { body: { items: [] } })).status).toBe(401);
+      expect((await call('POST', '/api/ai/agent', { token, body: { items: [] } })).status).toBe(400);
+
+      const result = await call('POST', '/api/ai/agent', { token, body: { items: [{ type: 'message', role: 'user', content: '이번 달 현황' }] } });
+      expect(result).toMatchObject({
+        status: 200,
+        json: { output: [{ type: 'function_call', call_id: 'call_1', name: 'get_overview' }], usage: { input: 10, output: 5 } },
+      });
+      const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+      expect(request).toMatchObject({ store: false, include: ['reasoning.encrypted_content'], tool_choice: 'auto' });
+      expect(request.tools.map((tool: { name: string }) => tool.name)).toContain('propose_add_transaction');
+      expect(request.tools.every((tool: { strict: boolean }) => tool.strict)).toBe(true);
+    } finally {
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousKey;
+    }
+  });
+});

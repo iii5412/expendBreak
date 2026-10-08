@@ -4,7 +4,9 @@ import type {
   BankAccount, Budget, Category, MerchantRule, PaymentCard, RecurringOccurrence,
   RecurringTemplate, Transaction, VoiceAnalysisResult,
 } from '../types';
-import { FinanceChatPanel } from './FinanceChatPanel';
+import { AgentPanel } from './AgentPanel';
+import type { AgentActionDeps } from '../agent/approve';
+import type { AgentScreen } from '../agent/tools';
 import { LiveVoicePanel } from './LiveVoicePanel';
 import { ScreenHeader } from './ui/ScreenHeader';
 
@@ -16,6 +18,7 @@ interface AiViewProps {
   transactions: Transaction[];
   budget: Budget;
   recurringOccurrences: RecurringOccurrence[];
+  allRecurringOccurrences: RecurringOccurrence[];
   recurringTemplates: RecurringTemplate[];
   monthStartDay: number;
   aiEnabled: boolean;
@@ -24,13 +27,15 @@ interface AiViewProps {
   onSaveStatementTransaction: (draft: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
   onUpdateStatementTransaction: (id: string, expectedUpdatedAt: string, updates: Partial<Transaction>) => Transaction | null;
   onLiveDraftReady: (result: VoiceAnalysisResult, durationMs: number, mimeType: string) => void;
+  agentActionDeps: AgentActionDeps;
+  onNavigate: (screen: AgentScreen) => void;
 }
 
 export const AiView: React.FC<AiViewProps> = ({
   categories, merchantRules, bankAccounts, paymentCards, transactions, budget,
-  recurringOccurrences, recurringTemplates, monthStartDay, aiEnabled, onEnableAI,
+  recurringOccurrences, allRecurringOccurrences, recurringTemplates, monthStartDay, aiEnabled, onEnableAI,
   getCurrentTransactions, onSaveStatementTransaction, onUpdateStatementTransaction,
-  onLiveDraftReady,
+  onLiveDraftReady, agentActionDeps, onNavigate,
 }) => {
   const [mode, setMode] = useState<'agent' | 'live'>('agent');
 
@@ -58,15 +63,18 @@ export const AiView: React.FC<AiViewProps> = ({
         </button>
       </div>
       <div role="tabpanel" hidden={mode !== 'agent'}>
-        <FinanceChatPanel
+        <AgentPanel
           categories={categories}
           bankAccounts={bankAccounts}
           paymentCards={paymentCards}
           transactions={transactions}
           budget={budget}
           recurringOccurrences={recurringOccurrences}
+          allRecurringOccurrences={allRecurringOccurrences}
           recurringTemplates={recurringTemplates}
           monthStartDay={monthStartDay}
+          actionDeps={agentActionDeps}
+          onNavigate={onNavigate}
           getCurrentTransactions={getCurrentTransactions}
           onSaveStatementTransaction={onSaveStatementTransaction}
           onUpdateStatementTransaction={onUpdateStatementTransaction}

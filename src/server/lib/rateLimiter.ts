@@ -70,6 +70,8 @@ export function createAiLimiters() {
   return {
     realtime: createRateLimiter({ name: 'realtime', windowMs: TEN_MINUTES, max: 20 }),
     financeChat: createRateLimiter({ name: 'financeChat', windowMs: TEN_MINUTES, max: 40 }),
+    // Counted per model step; one request usually takes 2-4 steps.
+    agent: createRateLimiter({ name: 'agent', windowMs: TEN_MINUTES, max: 150 }),
     ocr: createRateLimiter({ name: 'ocr', windowMs: TEN_MINUTES, max: 20 }),
     voice: createRateLimiter({ name: 'voice', windowMs: TEN_MINUTES, max: 30 }),
   };

@@ -27,6 +27,7 @@ import { createCategoryRecommendRouter } from './routes/ai/categoryRecommend';
 import { createClassifyRouter } from './routes/ai/classify';
 import { createFeedbackRouter } from './routes/ai/feedback';
 import { createFinanceChatRouter } from './routes/ai/financeChat';
+import { createAgentRouter } from './routes/ai/agent';
 import { createCardStatementRouter } from './routes/ai/cardStatement';
 import { createRealtimeRouter } from './routes/ai/realtime';
 import { createReceiptRouter } from './routes/ai/receipt';
@@ -126,6 +127,7 @@ export function createApp({ env, deps = {} }: CreateAppOptions): CreatedApp {
   app.use('/api', createLiveUpdateRouter());
   app.use('/api/ai', createRealtimeRouter(routeDeps));
   app.use('/api/ai', createFinanceChatRouter(routeDeps));
+  app.use('/api/ai', createAgentRouter(routeDeps));
   app.use('/api/ai', createCardStatementRouter(routeDeps));
   app.use('/api/ai', createReceiptRouter(routeDeps));
   app.use('/api/ai', createVoiceRouter(routeDeps));

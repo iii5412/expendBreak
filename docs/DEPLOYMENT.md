@@ -39,6 +39,7 @@ npm run account:hash -- wife "와이프" 654321
 - `GEMINI_CHAT_MODEL`: 재무 챗 Gemini 모델. 기본값 `gemini-3.8-flash`
 - `OPENAI_API_KEY`: GPT Live 음성을 사용할 경우. 브라우저 환경변수로 노출하지 않고 서버 secret으로만 등록
 - `OPENAI_CHAT_MODEL`: 재무 챗 GPT 모델. 기본값 `gpt-6-luna`
+- `OPENAI_AGENT_MODEL`: 선택. AI 탭 Agent 모델. 없으면 `OPENAI_CHAT_MODEL`을 쓴다
 - `OPENAI_REALTIME_MODEL`: 기본값 `gpt-realtime-2.1-mini`
 - `OPENAI_REALTIME_VOICE`: 기본값 `marin`
 - `NODE_ENV=production`
