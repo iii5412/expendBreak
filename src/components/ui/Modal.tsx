@@ -1,4 +1,5 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -37,6 +38,7 @@ export const Modal: React.FC<ModalProps> = ({
   dismissOnBackdrop = true,
   children,
 }) => {
+  const backdropRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -45,6 +47,43 @@ export const Modal: React.FC<ModalProps> = ({
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+
+    // Android can pan or shrink the visible viewport when zoomed or when the
+    // keyboard opens. Layout viewport units alone do not cover those cases.
+    const viewport = window.visualViewport;
+    const updateViewport = () => {
+      const backdrop = backdropRef.current;
+      if (!backdrop) return;
+      // Some WebViews report an empty visual viewport while the page is still
+      // settling; keep the CSS `inset-0` box rather than a zero-sized overlay.
+      if (!viewport || !viewport.width || !viewport.height) {
+        backdrop.style.removeProperty('--eb-modal-viewport-height');
+        return;
+      }
+      const height = viewport.height;
+      Object.assign(backdrop.style, {
+        top: `${viewport.offsetTop}px`,
+        left: `${viewport.offsetLeft}px`,
+        width: `${viewport.width}px`,
+        height: `${height}px`,
+        right: 'auto',
+        bottom: 'auto',
+      });
+      backdrop.style.setProperty('--eb-modal-viewport-height', `${height}px`);
+    };
+    updateViewport();
+    viewport?.addEventListener('resize', updateViewport);
+    viewport?.addEventListener('scroll', updateViewport);
+    window.addEventListener('resize', updateViewport);
+    return () => {
+      viewport?.removeEventListener('resize', updateViewport);
+      viewport?.removeEventListener('scroll', updateViewport);
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -58,10 +97,11 @@ export const Modal: React.FC<ModalProps> = ({
     const focusFirst = () => {
       const panel = panelRef.current;
       if (!panel) return;
-      const target = (panel.querySelector('[data-autofocus]') as HTMLElement | null)
-        || (panel.querySelector(FOCUSABLE_SELECTOR) as HTMLElement | null)
-        || panel;
-      target.focus();
+      // A footer can be the first focusable control (e.g. sync status). Focusing
+      // it scrolls away the heading before the user has read the dialog.
+      panel.scrollTop = 0;
+      const target = (panel.querySelector('[data-autofocus]') as HTMLElement | null) || panel;
+      target.focus({ preventScroll: true });
     };
     const focusTimer = window.setTimeout(focusFirst, 0);
 
@@ -85,7 +125,10 @@ export const Modal: React.FC<ModalProps> = ({
 
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (document.activeElement === panel || !panel.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -100,14 +143,16 @@ export const Modal: React.FC<ModalProps> = ({
       document.removeEventListener('keydown', handleKeyDown, true);
       document.body.style.overflow = bodyOverflow;
       document.documentElement.style.overflow = rootOverflow;
-      previouslyFocused.current?.focus?.();
+      previouslyFocused.current?.focus?.({ preventScroll: true });
     };
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  return (
+  const dialog = (
     <div
+      ref={backdropRef}
+      data-eb-modal-backdrop
       className={backdropClassName}
       onMouseDown={event => {
         if (!dismissOnBackdrop) return;
@@ -128,4 +173,8 @@ export const Modal: React.FC<ModalProps> = ({
       </div>
     </div>
   );
+
+  // Blur/transform on ancestors can constrain fixed overlays and put them
+  // below sibling navigation. Mount at the body so dialogs use the viewport.
+  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body);
 };

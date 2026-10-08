@@ -99,7 +99,7 @@ export const SyncStatusIndicator: React.FC = () => {
         isOpen={isPanelOpen}
         onClose={() => setIsPanelOpen(false)}
         labelledById="sync-panel-title"
-        panelClassName="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl"
+        panelClassName="bg-slate-900 border border-slate-800 rounded-2xl w-[min(100%,28rem)] p-5 space-y-4 shadow-2xl"
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
           <div>

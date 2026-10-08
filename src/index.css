@@ -113,7 +113,7 @@ h6,
   flex: 0 0 auto;
   min-height: 0;
   max-width: calc(100vw - 2rem);
-  max-height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  max-height: min(90dvh, calc(var(--eb-modal-viewport-height, 100dvh) - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -125,7 +125,7 @@ h6,
 }
 
 .app-modal-backdrop {
-  align-items: flex-start;
+  align-items: center;
   min-height: 0;
   overflow: hidden;
   padding-top: calc(1rem + env(safe-area-inset-top, 0px));
@@ -142,11 +142,7 @@ h6,
 }
 
 @media (min-width: 640px) {
-  .app-modal-backdrop {
-    align-items: center;
-  }
   [data-eb-modal-panel] {
-    max-height: 90dvh;
     padding-bottom: 1.25rem;
   }
 }
