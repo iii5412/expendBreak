@@ -34,7 +34,9 @@ export interface AgentRunHooks {
 
 const MAX_STEPS = 8;
 const REQUEST_TIMEOUT_MS = 70_000;
-const MAX_REQUEST_CHARS = 450_000;
+// UTF-8 bytes; the server accepts up to 1mb on this path, so leave headroom.
+const MAX_REQUEST_BYTES = 800_000;
+const byteLength = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
 
 const TOOL_ACTIVITY: Record<string, string> = {
   get_overview: '이번 주기 현황 확인',
@@ -104,7 +106,7 @@ export function itemsForRequest(items: AgentItem[]): AgentItem[] {
     .filter((item, offset) => item.type !== 'reasoning' || from + offset > lastUser);
   for (const start of userStarts) {
     const candidate = slim(start);
-    if (candidate.length <= 150 && JSON.stringify(candidate).length <= MAX_REQUEST_CHARS) return candidate;
+    if (candidate.length <= 150 && byteLength(candidate) <= MAX_REQUEST_BYTES) return candidate;
   }
   return slim(lastUser);
 }
@@ -124,7 +126,11 @@ async function requestStep(items: AgentItem[]) {
     return Array.isArray(data.output) ? data.output as AgentItem[] : [];
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('응답이 늦어 중단했습니다. 잠시 후 다시 시도해 주세요.', { cause: error });
+      throw new Error('응답이 늦어 중단했습니다. 다시 시도해 주세요.', { cause: error });
+    }
+    // fetch rejects with a TypeError only when no response arrived at all.
+    if (error instanceof TypeError) {
+      throw new Error('서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.', { cause: error });
     }
     throw error;
   } finally {
@@ -135,15 +141,27 @@ async function requestStep(items: AgentItem[]) {
 export async function sendAgentMessage(text: string, hooks: AgentRunHooks) {
   const message = text.trim().slice(0, 4_000);
   if (!message || state.busy) return;
-  const run = generation;
-  const alive = () => run === generation;
-
   set({
-    busy: true,
-    error: null,
     items: [...state.items, { type: 'message', role: 'user', content: message }],
     entries: [...state.entries, { id: entryId(), kind: 'user', text: message }],
   });
+  await runAgentLoop(hooks);
+}
+
+/**
+ * Picks up where a failed step stopped. The conversation always ends at a
+ * point the model can continue from (the user message or the last tool
+ * results), so retrying just asks for the next step again.
+ */
+export async function retryAgent(hooks: AgentRunHooks) {
+  if (state.busy || !state.error) return;
+  await runAgentLoop(hooks);
+}
+
+async function runAgentLoop(hooks: AgentRunHooks) {
+  const run = generation;
+  const alive = () => run === generation;
+  set({ busy: true, error: null });
 
   try {
     for (let step = 0; step < MAX_STEPS; step += 1) {

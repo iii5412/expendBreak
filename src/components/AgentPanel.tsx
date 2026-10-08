@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Bot, Check, Loader2, Search, Send, ShieldCheck, Sparkles, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, Bot, Check, Loader2, RotateCcw, Search, Send, ShieldCheck, Sparkles, Trash2, Undo2, X } from 'lucide-react';
 import type {
   BankAccount, Budget, Category, PaymentCard, RecurringOccurrence, RecurringTemplate, Transaction,
 } from '../types';
 import type { AgentDataContext, AgentProposal } from '../agent/executor';
 import { applyAgentAction, type AgentActionDeps, type AgentActionResult } from '../agent/approve';
 import {
-  agentSession, clearAgentSession, recordProposalOutcome, sendAgentMessage, updateProposalEntry,
-  type AgentEntry, type ProposalStatus,
+  agentSession, clearAgentSession, recordProposalOutcome, retryAgent, sendAgentMessage, updateProposalEntry,
+  type AgentEntry, type AgentRunHooks, type ProposalStatus,
 } from '../agent/session';
 import type { AgentScreen } from '../agent/tools';
 import { FinanceChatAnswer } from './FinanceChatAnswer';
@@ -69,15 +69,17 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [session.entries.length, session.busy]);
+  }, [session.entries.length, session.busy, session.error]);
+
+  const hooks: AgentRunHooks = {
+    getContext: () => contextRef.current!,
+    navigate: screen => navigateRef.current(screen),
+  };
 
   const send = (text = input) => {
     if (!text.trim() || session.busy) return;
     setInput('');
-    void sendAgentMessage(text, {
-      getContext: () => contextRef.current!,
-      navigate: screen => navigateRef.current(screen),
-    });
+    void sendAgentMessage(text, hooks);
   };
 
   const approve = async (proposal: AgentProposal) => {
@@ -225,6 +227,19 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
           </div>
         )}
         {session.entries.map(renderEntry)}
+        {session.error && !session.busy && (
+          <div className="flex justify-start">
+            <div role="alert" className="max-w-[92%] rounded-2xl rounded-bl-md border border-rose-500/35 bg-rose-500/10 px-3.5 py-2.5 text-xs leading-relaxed text-rose-100">
+              <p className="flex items-start gap-1.5">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {session.error}
+              </p>
+              <button type="button" onClick={() => { void retryAgent(hooks); }} className="mt-2 flex min-h-9 items-center gap-1.5 rounded-lg bg-rose-500/20 px-3 font-bold text-rose-100 hover:bg-rose-500/30">
+                <RotateCcw className="h-3.5 w-3.5" /> 다시 시도
+              </button>
+            </div>
+          </div>
+        )}
         {session.busy && (
           <div className="flex items-center gap-2 pl-1 text-xs text-slate-400">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-300" /> 처리하는 중...
@@ -232,8 +247,6 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
         )}
         <div ref={endRef} />
       </div>
-
-      {session.error && <div role="alert" className="rounded-xl border border-rose-500/35 bg-rose-500/10 p-3 text-xs text-rose-200">{session.error}</div>}
 
       <div className="rounded-2xl border border-slate-700 bg-slate-900 p-2.5 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/30">
         <textarea

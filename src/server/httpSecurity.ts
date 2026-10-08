@@ -3,7 +3,7 @@ import type { ServerEnv } from './authConfig';
 
 /** Only these authenticated routes carry base64 images or audio. */
 export const LARGE_BODY_PATHS = ['/api/ai/receipt', '/api/ai/voice'];
-export const MEDIUM_BODY_PATHS = ['/api/ai/finance-chat', '/api/ai/card-statement/parse'];
+export const MEDIUM_BODY_PATHS = ['/api/ai/finance-chat', '/api/ai/card-statement/parse', '/api/ai/agent'];
 
 const DEFAULT_JSON_LIMIT = '100kb';
 const MEDIUM_JSON_LIMIT = '1mb';

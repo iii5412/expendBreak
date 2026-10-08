@@ -440,3 +440,24 @@ describe('agent', () => {
     }
   });
 });
+
+describe('request size and CORS', () => {
+  it('lets the agent send a long conversation while other routes keep the small limit', async () => {
+    const { call, login } = await start();
+    const token = await login();
+    const longItems = [{ type: 'message', role: 'user', content: 'q' }, ...Array.from({ length: 40 }, (_, index) => ({
+      type: 'function_call_output', call_id: `call_${index}`, output: 'x'.repeat(4_000),
+    }))];
+    const agent = await call('POST', '/api/ai/agent', { token, body: { items: longItems } });
+    expect(agent.status).not.toBe(413);
+
+    const classify = await call('POST', '/api/ai/classify', {
+      token,
+      headers: { Origin: 'https://app.example.com' },
+      body: { text: 'x'.repeat(200_000) },
+    });
+    expect(classify.status).toBe(413);
+    // The native app can only read the error when CORS headers are present.
+    expect(classify.headers.get('access-control-allow-origin')).toBe('https://app.example.com');
+  });
+});

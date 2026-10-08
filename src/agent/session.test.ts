@@ -11,7 +11,7 @@ describe('agent request trimming', () => {
   });
 
   it('drops whole old turns when the conversation is too large', () => {
-    const big = 'y'.repeat(300_000);
+    const big = '가'.repeat(150_000); // 450KB each in UTF-8
     const items: AgentItem[] = [user(big), { type: 'message', role: 'assistant', content: big }, user('최근 질문')];
     expect(itemsForRequest(items)).toEqual([user('최근 질문')]);
   });

@@ -18,7 +18,8 @@ import type { RouteDeps } from '../types';
 
 
 const MAX_ITEMS = 160;
-const MAX_BODY_BYTES = 600_000;
+// Below the 1mb parser limit for this path (httpSecurity MEDIUM_BODY_PATHS).
+const MAX_BODY_BYTES = 950_000;
 
 const text = (value: unknown, max: number) => String(value ?? '')
   .replace(/\r\n?/g, '\n')

@@ -68,9 +68,8 @@ export function createApp({ env, deps = {} }: CreateAppOptions): CreatedApp {
   const app = express();
   // Outermost, so every line logged while handling a request carries its id.
   app.use(requestLogging());
-  // Small JSON bodies by default; only the receipt and voice routes accept 12MB (see largeJsonBody).
-  applySecurityBaseline(app, { production: config.production, trustProxyHops: config.trustProxyHops });
-
+  // Runs before body parsing so a rejected body (413) still reaches the
+  // native app with CORS headers instead of surfacing as "Failed to fetch".
   // Same-origin web requests need no CORS headers. The bundled Capacitor WebView
   // has the exact origin https://localhost, so only configured native origins get
   // an explicit cross-origin grant.
@@ -88,6 +87,9 @@ export function createApp({ env, deps = {} }: CreateAppOptions): CreatedApp {
     }
     return next();
   });
+
+  // Small JSON bodies by default; only the receipt and voice routes accept 12MB (see largeJsonBody).
+  applySecurityBaseline(app, { production: config.production, trustProxyHops: config.trustProxyHops });
 
   // Liveness only: no authentication and no Firestore round trip.
   app.get('/healthz', (_req, res) => {
