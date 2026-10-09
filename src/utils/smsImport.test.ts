@@ -53,6 +53,16 @@ describe('parseFinancialSms', () => {
     }
   });
 
+  it('reads the time written right after (일시불) and a merchant wrapped onto the next line', () => {
+    const at = new Date(2026, 9, 9, 18, 0).getTime();
+    expect(parseFinancialSms(message('알림\n\n신한카드(8068)승인 최*철\n6,500원(일시불)10/09 10:54 씨유(CU)대전\n누적435,845원', at)))
+      .toMatchObject({ amount: 6500, merchant: '씨유(CU)대전', cardLast4: '8068', localDate: '2026-10-09' });
+    const wrapped = parseFinancialSms(message('신한카드(8068)승인 최*철\n2,000원(일시불)10/08 08:55\n메가MGC커피( 누적2,070,907원', at));
+    expect(wrapped).toMatchObject({ amount: 2000, merchant: '메가MGC커피', localDate: '2026-10-08' });
+    expect(new Date(wrapped!.occurredAt).getHours()).toBe(8);
+    expect(new Date(wrapped!.occurredAt).getMinutes()).toBe(55);
+  });
+
   it('drops advertising that happens to mention 승인 and an amount', () => {
     expect(parseFinancialSms(message('(광고)[신한카드] 이벤트 응모하고 5,000원 받으세요 승인 시 적립 무료수신거부 080'))).toBeNull();
   });

@@ -204,7 +204,8 @@ function resolveOccurredAt(body: string, receivedAt: number) {
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
 
-  const short = body.match(/(?:^|\s)(\d{1,2})[.\/-](\d{1,2})(?:\s+|\([^)]*\)\s*)(\d{1,2}):(\d{2})(?:\s|$)/m);
+  // "6,500원(일시불)10/09 10:54" puts the date right after a parenthesis.
+  const short = body.match(/(?:^|[\s)])(\d{1,2})[.\/-](\d{1,2})(?:\s+|\([^)]*\)\s*)(\d{1,2}):(\d{2})(?:\s|$)/m);
   if (!short) return received;
   let year = received.getFullYear();
   const parsed = new Date(year, Number(short[1]) - 1, Number(short[2]), Number(short[3]), Number(short[4]));
@@ -265,11 +266,17 @@ function cleanMerchantLine(line: string) {
  * put the merchant right after the time, followed by totals or points.
  */
 function merchantAfterTime(body: string): string | null {
-  const match = body.match(/\d{1,2}[.\/-]\d{1,2}\s*(?:\([^)]*\))?\s*\d{1,2}:\d{2}[ \t]+([^\n]+)/);
+  // Long (LMS/RCS) bodies may break the line right after the time.
+  const match = body.match(/\d{1,2}[.\/-]\d{1,2}\s*(?:\([^)]*\))?\s*\d{1,2}:\d{2}(?:[ \t]+([^\n]+)|[ \t]*\r?\n[ \t]*([^\n]+))/);
   if (!match) return null;
-  const merchant = match[1]
+  let merchant = (match[1] ?? match[2] ?? '')
     .replace(/\s*(?:총\s*)?누적.*$|\s*잔여\s*한도.*$|\s*잔액.*$|\s*[가-힣A-Za-z]*\s*\d[\d,]*\s*P\s*적립.*$|\s*(?:\d{1,3}(?:,\d{3})+|\d+)\s*원.*$/, '')
     .trim();
+  if (/^(?:승인|누적|잔액|잔여|한도|일시불|할부)/.test(merchant)) return null;
+  // Issuers cut long names mid-parenthesis ("메가MGC커피(").
+  if ((merchant.match(/\(/g) || []).length > (merchant.match(/\)/g) || []).length) {
+    merchant = merchant.slice(0, merchant.lastIndexOf('(')).trim();
+  }
   return merchant.length >= 2 && merchant.length <= 40 ? merchant : null;
 }
 
