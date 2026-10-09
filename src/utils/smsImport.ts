@@ -35,6 +35,8 @@ interface SmsBridgePlugin {
   checkPermissions(): Promise<Partial<SmsPermissionStatus>>;
   requestPermissions(): Promise<Partial<SmsPermissionStatus>>;
   openSettings(): Promise<void>;
+  getNotificationAccess(): Promise<{ enabled: boolean }>;
+  openNotificationAccessSettings(): Promise<void>;
   setActiveProfile(options: { profileKey: string; enabled: boolean; startAtInstall?: boolean }): Promise<SmsImportStatus>;
   getStatus(options: { profileKey: string }): Promise<SmsImportStatus>;
   scanInbox(options: { profileKey: string; force?: boolean }): Promise<SmsImportStatus>;
@@ -82,6 +84,17 @@ export async function requestSmsPermission(): Promise<SmsPermissionState> {
 export async function openSmsPermissionSettings() {
   if (!isSmsImportAvailable()) return;
   await SmsBridge.openSettings();
+}
+
+/** RCS card messages are only visible through messaging-app notifications. */
+export async function getNotificationAccessEnabled(): Promise<boolean> {
+  if (!isSmsImportAvailable()) return false;
+  return (await SmsBridge.getNotificationAccess()).enabled === true;
+}
+
+export async function openNotificationAccessSettings() {
+  if (!isSmsImportAvailable()) return;
+  await SmsBridge.openNotificationAccessSettings();
 }
 
 export async function configureSmsImport(

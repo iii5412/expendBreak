@@ -1,14 +1,18 @@
 package com.iii5412.expendbreak
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.provider.Telephony
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
@@ -135,7 +139,7 @@ class SmsBridgePlugin : Plugin() {
                         val sender = cursor.getString(senderIndex).orEmpty()
                         val body = cursor.getString(bodyIndex).orEmpty()
                         val receivedAt = cursor.getLong(dateIndex)
-                        if (SmsQueueStore.enqueueIfFinancialCandidate(context, profileKey, sender, body, receivedAt)) {
+                        if (SmsQueueStore.enqueueIfFinancialCandidate(context, profileKey, sender, body, receivedAt, SmsQueueStore.CHANNEL_INBOX)) {
                             candidateCount += 1
                         }
                     }
@@ -143,7 +147,7 @@ class SmsBridgePlugin : Plugin() {
                 // Long card messages (LMS) live in the MMS store.
                 MmsReader.readInbox(context, startAt, now).forEach { message ->
                     scannedCount += 1
-                    if (SmsQueueStore.enqueueIfFinancialCandidate(context, profileKey, message.sender, message.body, message.receivedAt)) {
+                    if (SmsQueueStore.enqueueIfFinancialCandidate(context, profileKey, message.sender, message.body, message.receivedAt, SmsQueueStore.CHANNEL_INBOX)) {
                         candidateCount += 1
                     }
                 }
@@ -202,6 +206,32 @@ class SmsBridgePlugin : Plugin() {
             Uri.parse("package:${context.packageName}"),
         ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun getNotificationAccess(call: PluginCall) {
+        val enabled = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        call.resolve(JSObject().put("enabled", enabled))
+    }
+
+    /** Opens this app's "notification access" switch, or the list on older Android. */
+    @PluginMethod
+    fun openNotificationAccessSettings(call: PluginCall) {
+        val detail = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).putExtra(
+                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                ComponentName(context, SmsNotificationListener::class.java).flattenToString(),
+            )
+        } else {
+            null
+        }
+        val fallback = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        try {
+            context.startActivity((detail ?: fallback).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: ActivityNotFoundException) {
+            context.startActivity(fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
         call.resolve()
     }
 

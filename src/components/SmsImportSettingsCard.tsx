@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { MessageSquareText, RefreshCw, Settings2, ShieldCheck } from 'lucide-react';
+import { BellRing, MessageSquareText, RefreshCw, Settings2, ShieldCheck } from 'lucide-react';
 import { UserProfile } from '../types';
 import {
   clearPendingSms,
   configureSmsImport,
+  getNotificationAccessEnabled,
   getSmsImportStatus,
   getSmsPermissionStatus,
   isSmsImportAvailable,
+  openNotificationAccessSettings,
   openSmsPermissionSettings,
   requestSmsPermissions,
   scanSmsInbox,
@@ -37,18 +39,31 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
   const { showToast } = useToast();
   const [permissions, setPermissions] = useState<SmsPermissionStatus>({ receiveSms: 'prompt', readSms: 'prompt' });
   const [status, setStatus] = useState<SmsImportStatus | null>(null);
+  const [notificationAccess, setNotificationAccess] = useState(false);
   const [working, setWorking] = useState(false);
   const available = isSmsImportAvailable();
 
   const refreshStatus = useCallback(async () => {
     if (!available || !userProfile.uid) return;
-    const [nextPermissions, nextStatus] = await Promise.all([
+    const [nextPermissions, nextStatus, nextNotificationAccess] = await Promise.all([
       getSmsPermissionStatus(),
       getSmsImportStatus(userProfile.uid),
+      getNotificationAccessEnabled().catch(() => false),
     ]);
     setPermissions(nextPermissions);
     setStatus(nextStatus);
+    setNotificationAccess(nextNotificationAccess);
   }, [available, userProfile.uid]);
+
+  // Notification access is switched in system settings; re-check on return.
+  useEffect(() => {
+    if (!available) return undefined;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshStatus().catch(() => undefined);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [available, refreshStatus]);
 
   useEffect(() => {
     void refreshStatus().catch(() => {
@@ -131,6 +146,21 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
     }
   };
 
+  const enableNotificationAccess = async () => {
+    const accepted = await confirm({
+      title: 'RCS로 온 결제 문자도 확인할까요?',
+      description: '"알림" 말풍선으로 오는 RCS 카드 문자는 문자함에 저장되지 않아, 메시지 앱 알림으로만 확인할 수 있습니다. 다음 화면에서 지출브레이크의 알림 접근을 허용해 주세요.',
+      details: [
+        { label: '확인 대상', value: '메시지 앱 알림 중 카드 승인·취소' },
+        { label: '처리 방식', value: '기기에서 분석 · 확인 후 등록' },
+        { label: '그 밖의 알림', value: '읽은 즉시 버리고 저장하지 않음' },
+      ],
+      confirmLabel: '알림 접근 설정 열기',
+      cancelLabel: '나중에',
+    });
+    if (accepted) await openNotificationAccessSettings();
+  };
+
   const scanNow = async () => {
     if (working) return;
     setWorking(true);
@@ -211,6 +241,8 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
               ? '확인 실패'
               : `SMS ${status?.lastScannedCount || 0}건 · 새 후보 ${status?.lastCandidateCount || 0}건`}
           </dd>
+          <dt className="text-slate-500">RCS 알림 읽기</dt>
+          <dd className="text-right text-slate-300">{notificationAccess ? '켜짐' : '꺼짐'}</dd>
           <dt className="text-slate-500">확인 대기</dt>
           <dd className="text-right text-slate-300">{status?.pendingCount || 0}건</dd>
         </dl>
@@ -225,6 +257,18 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
         >
           <RefreshCw className={`h-4 w-4 ${working ? 'animate-spin' : ''}`} />
           지금 확인
+        </button>
+      )}
+
+      {enabled && inboxConsentReady && !notificationAccess && (
+        <button
+          type="button"
+          disabled={working}
+          onClick={() => void enableNotificationAccess()}
+          className="flex min-h-11 w-full items-center justify-center gap-2 border border-sky-500/40 bg-sky-500/10 px-3 text-sm font-bold text-sky-200 disabled:opacity-50"
+        >
+          <BellRing className="h-4 w-4" />
+          RCS 결제 문자도 받기
         </button>
       )}
 

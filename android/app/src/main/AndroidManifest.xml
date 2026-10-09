@@ -51,6 +51,16 @@
             </intent-filter>
         </receiver>
 
+        <service
+            android:name=".SmsNotificationListener"
+            android:label="@string/notification_listener_label"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".widget.ExpendBreakWidgetReceiver"
             android:exported="false"

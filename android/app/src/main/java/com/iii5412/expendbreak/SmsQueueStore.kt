@@ -5,9 +5,19 @@ import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
+import kotlin.math.abs
 
 object SmsQueueStore {
     const val ACTION_PENDING_SMS = "com.iii5412.expendbreak.SMS_PENDING"
+    const val CHANNEL_SMS_BROADCAST = "sms_broadcast"
+    const val CHANNEL_INBOX = "inbox"
+    const val CHANNEL_NOTIFICATION = "notification"
+
+    private const val KEY_RECENT_CONTENT = "recent_message_content"
+    private const val CROSS_CHANNEL_WINDOW_MS = 10L * 60L * 1000L
+    // Inbox rescans reach back to when the feature was enabled.
+    private const val RECENT_CONTENT_TTL_MS = 45L * 24L * 60L * 60L * 1000L
+    private const val MAX_RECENT_CONTENT = 1_000
 
     private const val PREFS_NAME = "sms_import_private"
     private const val KEY_ACTIVE_PROFILE = "active_profile"
@@ -129,18 +139,26 @@ object SmsQueueStore {
         sender: String,
         body: String,
         receivedAt: Long,
+        channel: String,
     ): Boolean {
         val profileKey = activeProfile(context)
         if (profileKey.isBlank()) return false
-        return enqueueIfFinancialCandidate(context, profileKey, sender, body, receivedAt)
+        return enqueueIfFinancialCandidate(context, profileKey, sender, body, receivedAt, channel)
     }
 
+    /**
+     * [channel] names where the message was seen. The same message usually
+     * reaches the app more than once (SMS broadcast, inbox scan, notification)
+     * with a slightly different time and sender, so a copy from another channel
+     * with the same text within a few minutes is treated as the same message.
+     */
     fun enqueueIfFinancialCandidate(
         context: Context,
         profileKey: String,
         sender: String,
         body: String,
         receivedAt: Long,
+        channel: String,
     ): Boolean {
         if (profileKey.isBlank()) return false
         val normalizedBody = body.replace("\u0000", "").trim().take(4_000)
@@ -160,14 +178,40 @@ object SmsQueueStore {
             val seenIds = readStringList(prefs.getString(KEY_SEEN_IDS, null))
             val handledIds = readStringList(prefs.getString(KEY_HANDLED_IDS, null))
             if (id in seenIds || id in handledIds || queue.any { it.optString("id") == id }) return false
+            val nextSeenIds = (seenIds + id).takeLast(MAX_SEEN_IDS)
+
+            val key = contentKey(normalizedBody)
+            val recent = readQueue(prefs.getString(KEY_RECENT_CONTENT, null))
+            // Each record can absorb one copy per other channel, so two real
+            // purchases with identical text still pair up one-to-one.
+            val twin = recent.firstOrNull {
+                it.optString("k") == key
+                    && it.optString("c") != channel
+                    && channel !in it.optString("m").split(',')
+                    && abs(it.optLong("t") - receivedAt) <= CROSS_CHANNEL_WINDOW_MS
+            }
+            if (twin != null) {
+                twin.put("m", (twin.optString("m").split(',').filter(String::isNotBlank) + channel).joinToString(","))
+                prefs.edit()
+                    .putString(KEY_RECENT_CONTENT, JSONArray(recent).toString())
+                    .putString(KEY_SEEN_IDS, JSONArray(nextSeenIds).toString())
+                    .apply()
+                return false
+            }
+            val cutoff = System.currentTimeMillis() - RECENT_CONTENT_TTL_MS
+            val nextRecent = (recent.filter { it.optLong("t") >= cutoff } + JSONObject()
+                .put("k", key)
+                .put("c", channel)
+                .put("t", receivedAt))
+                .takeLast(MAX_RECENT_CONTENT)
 
             val updated = JSONArray()
             queue.forEach(updated::put)
             updated.put(item)
-            val nextSeenIds = (seenIds + id).takeLast(MAX_SEEN_IDS)
             prefs.edit()
                 .putString(KEY_QUEUE, updated.toString())
                 .putString(KEY_SEEN_IDS, JSONArray(nextSeenIds).toString())
+                .putString(KEY_RECENT_CONTENT, JSONArray(nextRecent).toString())
                 .apply()
         }
         return true
@@ -234,6 +278,13 @@ object SmsQueueStore {
 
     private fun messageId(sender: String, body: String, receivedAt: Long): String =
         sha256("$sender|$body|$receivedAt")
+
+    /** Notifications may drop "[Web발신]", add an "알림" title or rewrap lines. */
+    private fun contentKey(body: String): String = sha256(
+        body.replace(Regex("\\[?Web발신\\]?", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^\\s*알림"), "")
+            .replace(Regex("\\s+"), ""),
+    ).take(32)
 
     // Must stay in step with IGNORE_TRANSACTION / APPROVAL in src/utils/smsImport.ts.
     // Approvals often mention 잔여한도, 포인트 적립 or 결제일, so only clear ads

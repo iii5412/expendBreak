@@ -14,7 +14,7 @@ class SmsReceiver : BroadcastReceiver() {
         val sender = messages.firstNotNullOfOrNull { it.originatingAddress }.orEmpty()
         val body = messages.joinToString(separator = "") { it.messageBody.orEmpty() }
         val receivedAt = messages.minOfOrNull { it.timestampMillis } ?: System.currentTimeMillis()
-        if (SmsQueueStore.enqueueIfFinancialCandidate(context, sender, body, receivedAt)) {
+        if (SmsQueueStore.enqueueIfFinancialCandidate(context, sender, body, receivedAt, SmsQueueStore.CHANNEL_SMS_BROADCAST)) {
             context.sendBroadcast(
                 Intent(SmsQueueStore.ACTION_PENDING_SMS).setPackage(context.packageName),
             )
