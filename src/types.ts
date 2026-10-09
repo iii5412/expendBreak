@@ -299,6 +299,11 @@ export interface UserProfile {
    * utils/paydaySchedule.ts). `monthStartDay` mirrors the day of the current cycle.
    */
   paydaySchedule?: Array<{ fromYearMonth: string; monthStartDay: number }> | null;
+  /**
+   * Cycles that start before payday because the salary came early (payday on
+   * a weekend or holiday): cycle label (YYYY-MM) -> actual start (YYYY-MM-DD).
+   */
+  cycleStartOverrides?: Record<string, string> | null;
   /** One-time persisted migration marker for the salary-day planning model. */
   paydayPlanningVersion?: number;
   /** Set once the user has seen why the card bill changed their figures. */

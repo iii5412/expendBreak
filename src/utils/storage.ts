@@ -1822,7 +1822,10 @@ export function getUserProfile(): UserProfile {
   const profile = readJson<UserProfile>(STORAGE_KEYS.USER_PROFILE, INITIAL_USER_PROFILE);
   const { accessPin: _legacyPin, ...safeProfile } = profile;
   // Every period calculation in the app consults the registered schedule.
-  configurePaydaySchedule(profile.paydaySchedule);
+  configurePaydaySchedule(profile.paydaySchedule, {
+    monthStartDay: profile.monthStartDay,
+    cycleStartOverrides: profile.cycleStartOverrides,
+  });
   return { ...safeProfile, securityPinEnabled: true } as UserProfile;
 }
 

@@ -105,7 +105,7 @@ import { normalizeIdleLockMinutes } from './utils/lockPolicy';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
 import { SyncConflictBanner } from './components/SyncConflictBanner';
 import { StorageFullBanner } from './components/SyncStatusIndicator';
-import { normalizePaydaySchedule, startDayForYearMonth } from './utils/paydaySchedule';
+import { normalizeCycleStartOverrides, normalizePaydaySchedule, startDayForYearMonth } from './utils/paydaySchedule';
 import { useConfirm, useToast } from './components/ui/FeedbackProvider';
 import { PeriodSelector } from './components/PeriodSelector';
 import { QuickEntryBar } from './components/QuickEntryBar';
@@ -679,11 +679,17 @@ export default function App() {
     const schedule = normalizePaydaySchedule(userProfile.paydaySchedule);
     return schedule ? startDayForYearMonth(currentYM, schedule) : normalizeMonthStartDay(userProfile.monthStartDay);
   }, [userProfile.monthStartDay, userProfile.paydaySchedule, currentYM]);
+  // A cycle that starts early moves boundaries without changing the payday
+  // number, so period-dependent memos also key on the overrides.
+  const cycleOverridesKey = useMemo(
+    () => JSON.stringify(normalizeCycleStartOverrides(userProfile.cycleStartOverrides)),
+    [userProfile.cycleStartOverrides],
+  );
   const period = useMemo(
     () => getAccountingPeriod(currentYM, monthStartDay),
-    [currentYM, monthStartDay, dateKey],
+    [currentYM, monthStartDay, dateKey, cycleOverridesKey],
   );
-  const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay, dateKey]);
+  const currentPeriodYM = useMemo(() => getCurrentYearMonth(monthStartDay), [monthStartDay, dateKey, cycleOverridesKey]);
 
   // Keep the legacy `monthStartDay` field mirroring the current cycle's day so
   // older clients and exports read the right value once a scheduled change lands.
@@ -701,7 +707,7 @@ export default function App() {
   // only — no dependency on planning, so this stays above the planning memos.
   const rawCardSettlementSummary = useMemo(
     () => calculateMonthlyCardSettlementSummary(currentYM, transactions, paymentCards, monthStartDay),
-    [currentYM, transactions, paymentCards, monthStartDay],
+    [currentYM, transactions, paymentCards, monthStartDay, cycleOverridesKey],
   );
   const cardSettlementCandidates = useMemo(
     () => findManualCardSettlementCandidates(recurringTemplates.filter(template => !template.archivedAt), paymentCards, {
@@ -748,20 +754,21 @@ export default function App() {
     if (bootState !== 'ready') return;
     void ensureBudget(currentYM);
     ensureRecurringOccurrences(currentYM, monthStartDay);
-  }, [bootState, currentYM, monthStartDay]);
+  }, [bootState, currentYM, monthStartDay, cycleOverridesKey]);
 
   // Realign the selected period after login or a monthStartDay change so the app
   // never opens on a period that no longer contains today.
-  const alignedStartDay = useRef<number | null>(null);
+  const alignedStartDay = useRef<string | null>(null);
   useEffect(() => {
     if (bootState !== 'ready') {
       alignedStartDay.current = null;
       return;
     }
-    if (alignedStartDay.current === monthStartDay) return;
-    alignedStartDay.current = monthStartDay;
+    const alignment = `${monthStartDay}|${cycleOverridesKey}`;
+    if (alignedStartDay.current === alignment) return;
+    alignedStartDay.current = alignment;
     setCurrentYM(getCurrentYearMonth(monthStartDay));
-  }, [bootState, monthStartDay]);
+  }, [bootState, monthStartDay, cycleOverridesKey]);
 
   // Calculations. The card bill is part of the cash track, so it has to be
   // resolved before the month summary that spends against it.
@@ -774,7 +781,7 @@ export default function App() {
       planningAllRecurringOccurrences,
       planningRecurringTemplates,
     ),
-    [currentYM, transactions, paymentCards, monthStartDay, planningAllRecurringOccurrences, planningRecurringTemplates],
+    [currentYM, transactions, paymentCards, monthStartDay, cycleOverridesKey, planningAllRecurringOccurrences, planningRecurringTemplates],
   );
 
   const summary = useMemo(() => {
@@ -792,7 +799,7 @@ export default function App() {
         reserveUnmaterializedTemplates: false,
       },
     );
-  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay, cardSettlementSummary, cycleBaseline, dateKey]);
+  }, [currentYM, planningTransactions, planningRecurringOccurrences, budget, planningRecurringTemplates, monthStartDay, cycleOverridesKey, cardSettlementSummary, cycleBaseline, dateKey]);
 
   const categoryMap = useMemo(() => {
     return Object.fromEntries(categories.map(c => [c.id, { name: c.name, color: c.color, icon: c.icon, type: c.type }]));
@@ -801,7 +808,7 @@ export default function App() {
   // Category totals follow the same payday cycle as the living budget.
   const categoryBreakdown = useMemo(() => {
     return getCategoryBreakdown(currentYM, transactions, categoryMap, { variableOnly: true, monthStartDay });
-  }, [currentYM, transactions, categoryMap, monthStartDay]);
+  }, [currentYM, transactions, categoryMap, monthStartDay, cycleOverridesKey]);
 
   const cardPaymentSummary = useMemo(
     () => calculateCardPaymentSummary(
@@ -824,7 +831,7 @@ export default function App() {
       paymentCards,
       monthStartDay,
     ),
-    [currentYM, planningTransactions, planningRecurringTemplates, planningAllRecurringOccurrences, paymentCards, monthStartDay],
+    [currentYM, planningTransactions, planningRecurringTemplates, planningAllRecurringOccurrences, paymentCards, monthStartDay, cycleOverridesKey],
   );
 
   // The report only makes sense once the cycle it covers is over and the user
@@ -841,7 +848,7 @@ export default function App() {
       monthStartDay,
     );
   }, [currentYM, currentPeriodYM, previousYearMonth, dismissedClosingYM, planningTransactions,
-    planningAllRecurringOccurrences, categories, monthStartDay, cycleBaseline]);
+    planningAllRecurringOccurrences, categories, monthStartDay, cycleOverridesKey, cycleBaseline]);
 
   const cashflowTimeline = useMemo(
     () => buildCashflowTimeline(

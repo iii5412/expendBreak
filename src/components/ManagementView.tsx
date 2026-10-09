@@ -57,6 +57,7 @@ import { getActivePaydaySchedule, periodBoundsFor, planPaydayChange } from '../u
 import { authenticatedFetch, revokeOtherSessions } from '../utils/auth';
 import { getStorageUsage, totalStorageKb } from '../utils/storageUsage';
 import { MonthlyCardSettlementSummary } from '../utils/cardPayments';
+import { CycleStartAdvanceSetting } from './CycleStartAdvanceSetting';
 import { useConfirm, useToast } from './ui/FeedbackProvider';
 import { Modal } from './ui/Modal';
 import { AmountInput } from './ui/AmountInput';
@@ -1411,6 +1412,8 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 ))}
               </select>
             </label>
+
+            <CycleStartAdvanceSetting userProfile={userProfile} onUpdateUserProfile={onUpdateUserProfile} />
 
             <p className="text-xs text-slate-400">
               현재 기간: <span className="font-semibold text-slate-200">

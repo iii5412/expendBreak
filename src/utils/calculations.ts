@@ -192,6 +192,8 @@ export interface AccountingPeriod {
   daysRemaining: number; // includes today
   /** First cycle after a payday change; starts where the old cycle ended. */
   isTransition?: boolean;
+  /** Starts before payday because the salary came early (weekend or holiday). */
+  startAdvanced?: boolean;
 }
 
 /** Days 29-31 do not exist in every month, so the cycle start is capped at 28. */
@@ -254,6 +256,7 @@ export function getAccountingPeriod(
     // Days remaining includes today
     daysRemaining: today > endDate ? 0 : Math.min(daysInMonth, daysInMonth - daysPassed + 1),
     isTransition: bounds?.isTransition || undefined,
+    startAdvanced: bounds?.startAdvanced || undefined,
   };
 }
 
@@ -314,7 +317,10 @@ export function getCurrentYearMonth(monthStartDay: number = 1, now = new Date())
 
 /** Short label such as `8/25~9/24`, omitted when the period is a plain calendar month. */
 export function formatPeriodRange(period: AccountingPeriod): string {
-  if (period.monthStartDay === 1 && !period.isTransition) return '';
+  // A plain calendar month needs no range; an early-starting neighbour can still trim it.
+  const plainMonth = period.startDate === `${period.yearMonth}-01`
+    && period.endDate === getLocalDateString(new Date(Number(period.yearMonth.slice(0, 4)), Number(period.yearMonth.slice(5, 7)), 0));
+  if (plainMonth) return '';
   const short = (date: string) => {
     const [, month, day] = date.split('-').map(Number);
     return `${month}/${day}`;
