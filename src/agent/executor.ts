@@ -102,7 +102,9 @@ function names(ctx: AgentDataContext) {
     }
     if (item.paymentMethodType === 'card') {
       const card = item.cardId ? cards.get(item.cardId) : null;
-      return card ? `카드 ${card.cardName}` : '카드';
+      if (!card) return '카드';
+      // The company is how people name a card ("신한카드로 쓴 것"); the name alone is often a nickname.
+      return card.cardName.includes(card.cardCompany) ? `카드 ${card.cardName}` : `카드 ${card.cardCompany} ${card.cardName}`;
     }
     if (item.paymentMethodType === 'cash') return '현금';
     return item.paymentMethodType === 'other' ? '기타' : '미지정';
@@ -195,6 +197,47 @@ function transactionTarget(id: unknown, ctx: AgentDataContext) {
   const transactionId = str(id);
   const transaction = transactionId ? ctx.transactions.find(item => item.id === transactionId) : undefined;
   return transaction ?? null;
+}
+
+const squash = (value: unknown) => String(value ?? '').toLowerCase().replace(/\s+/g, '');
+
+/**
+ * Card, account, payment-type and living-only filters shared by the search
+ * and summary tools. A card can be named by id, company or name, so
+ * "신한카드" covers every Shinhan card.
+ */
+function paymentFilter(a: Record<string, unknown>, ctx: AgentDataContext) {
+  const card = str(a.card);
+  const accountId = str(a.accountId);
+  const method = ['account', 'card', 'cash', 'other'].includes(String(a.paymentMethodType)) ? String(a.paymentMethodType) : null;
+  const livingOnly = a.livingOnly === true;
+  let cardIds: Set<string> | null = null;
+  if (card) {
+    const needle = squash(card);
+    const matches = ctx.paymentCards.filter(item => item.id === card
+      || [item.cardName, item.cardCompany].some(name => {
+        const value = squash(name);
+        return value.length > 0 && (value.includes(needle) || needle.includes(value));
+      }));
+    if (matches.length === 0) return `'${clean(card, 40)}'에 해당하는 카드가 없습니다. get_reference_data로 카드 목록을 확인하세요.`;
+    cardIds = new Set(matches.map(item => item.id));
+  }
+  if (accountId && !ctx.bankAccounts.some(account => account.id === accountId)) {
+    return '없는 계좌입니다. get_reference_data로 id를 확인하세요.';
+  }
+  const { cards } = names(ctx);
+  return {
+    test: (item: Transaction) => (!cardIds || Boolean(item.cardId && cardIds.has(item.cardId)))
+      && (!accountId || item.accountId === accountId)
+      && (!method || item.paymentMethodType === method)
+      && (!livingOnly || !item.recurringTemplateId),
+    applied: {
+      cards: cardIds ? [...cardIds].map(id => `${cards.get(id)?.cardCompany ?? ''} ${cards.get(id)?.cardName ?? ''}`.trim()) : undefined,
+      accountId: accountId ?? undefined,
+      paymentMethodType: method ?? undefined,
+      livingOnly: livingOnly || undefined,
+    },
+  };
 }
 
 const MAX_BULK = 100;
@@ -380,8 +423,11 @@ export function executeAgentTool(name: string, rawArgs: unknown, ctx: AgentDataC
       const minAmount = int(a.minAmount);
       const maxAmount = int(a.maxAmount);
       const limit = Math.max(1, Math.min(100, int(a.limit) ?? 30));
+      const payment = paymentFilter(a, ctx);
+      if (typeof payment === 'string') return fail(payment);
       const matched = ctx.transactions
         .filter(item => item.localDate >= from && item.localDate <= to)
+        .filter(payment.test)
         .filter(item => !type || item.type === type)
         .filter(item => !categoryId || item.categoryId === categoryId)
         .filter(item => minAmount === null || item.amount >= minAmount)
@@ -391,6 +437,7 @@ export function executeAgentTool(name: string, rawArgs: unknown, ctx: AgentDataC
         .sort((left, right) => `${right.localDate}${right.createdAt}`.localeCompare(`${left.localDate}${left.createdAt}`));
       return {
         output: {
+          filters: payment.applied,
           matchedCount: matched.length,
           matchedTotal: matched.reduce((sum, item) => sum + Math.round(item.amount), 0),
           shown: Math.min(limit, matched.length),
@@ -404,6 +451,9 @@ export function executeAgentTool(name: string, rawArgs: unknown, ctx: AgentDataC
       const to = DATE.test(String(a.to)) ? String(a.to) : '9999-12-31';
       const type = a.type === 'income' ? 'income' : 'expense';
       const groupBy = String(a.groupBy);
+      const categoryId = str(a.categoryId);
+      const payment = paymentFilter(a, ctx);
+      if (typeof payment === 'string') return fail(payment);
       const keyOf = (item: Transaction) => {
         if (groupBy === 'category') return categories.get(item.categoryId)?.name ?? '미분류';
         if (groupBy === 'merchant') return clean(item.merchant, 60) || '사용처 미입력';
@@ -415,6 +465,8 @@ export function executeAgentTool(name: string, rawArgs: unknown, ctx: AgentDataC
       let total = 0;
       ctx.transactions
         .filter(item => isNormal(item) && item.type === type && item.localDate >= from && item.localDate <= to)
+        .filter(item => !categoryId || item.categoryId === categoryId)
+        .filter(payment.test)
         .forEach(item => {
           const key = keyOf(item);
           const group = groups.get(key) ?? { amount: 0, count: 0 };
@@ -429,6 +481,7 @@ export function executeAgentTool(name: string, rawArgs: unknown, ctx: AgentDataC
       return {
         output: {
           type, from, to, groupBy, total,
+          filters: { ...payment.applied, category: categoryId ? categories.get(categoryId)?.name ?? categoryId : undefined },
           groups: sorted.slice(0, 60).map(([key, value]) => ({ key, ...value })),
           omittedGroups: Math.max(0, sorted.length - 60),
         },

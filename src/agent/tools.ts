@@ -32,6 +32,14 @@ const object = (properties: Record<string, unknown>) => ({
 export const AGENT_SCREENS = ['home', 'recurring_payment', 'history', 'analytics', 'ai', 'accounts', 'management'] as const;
 export type AgentScreen = typeof AGENT_SCREENS[number];
 
+/** Filters shared by the search and summary tools. */
+const paymentFilters = {
+  card: nullable('string', { description: '특정 카드로 결제한 거래만. 카드 id, 또는 카드사·카드 이름 일부(예: "신한", "신한카드"). 같은 카드사 카드가 여러 장이면 모두 포함' }),
+  accountId: nullable('string', { description: '특정 계좌로 결제한 거래만 (get_reference_data의 계좌 id)' }),
+  paymentMethodType: nullable('string', { enum: ['account', 'card', 'cash', 'other', null], description: '결제수단 종류로 거르기' }),
+  livingOnly: nullable('boolean', { description: 'true면 고정지출로 생긴 거래를 빼고 생활비 지출만. 분석 화면의 "카테고리별 생활비" 합계와 같은 기준' }),
+};
+
 const paymentFields = {
   paymentMethodType: nullable('string', { enum: ['account', 'card', 'cash', 'other', null], description: '결제수단. 계좌/카드면 accountId/cardId도 지정' }),
   accountId: nullable('string', { description: 'get_reference_data의 계좌 id' }),
@@ -54,7 +62,7 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
   {
     name: 'search_transactions',
     kind: 'read',
-    description: '조건에 맞는 거래를 최신순으로 찾는다. 수정·삭제할 거래의 id를 찾을 때도 사용한다.',
+    description: '조건에 맞는 거래를 최신순으로 찾는다. 카테고리·카드·계좌·금액·기간으로 거를 수 있다. "신한카드로 쓴 식비 목록"처럼 목록을 보여달라는 요청과, 수정·삭제할 거래의 id를 찾을 때 사용한다.',
     parameters: object({
       from: date('시작일, 포함'),
       to: date('종료일, 포함'),
@@ -63,18 +71,21 @@ export const AGENT_TOOLS: AgentToolDefinition[] = [
       categoryId: nullable('string'),
       minAmount: nullable('integer'),
       maxAmount: nullable('integer'),
+      ...paymentFilters,
       limit: nullable('integer', { description: '최대 100, 기본 30' }),
     }),
   },
   {
     name: 'summarize_transactions',
     kind: 'read',
-    description: '기간 안의 거래를 묶어서 합계와 건수를 계산한다. 비교나 분석 질문에 사용한다.',
+    description: '기간 안의 거래를 묶어서 합계와 건수를 계산한다. 비교나 분석 질문에 사용한다. 카테고리·카드·계좌로 먼저 거를 수 있다(예: 신한카드 지출의 카테고리별 합계).',
     parameters: object({
       from: date('시작일, 포함'),
       to: date('종료일, 포함'),
       type: nullable('string', { enum: ['income', 'expense', null], description: '기본 expense' }),
       groupBy: { type: 'string', enum: ['category', 'merchant', 'cycle', 'day', 'payment'] },
+      categoryId: nullable('string', { description: '이 카테고리만' }),
+      ...paymentFilters,
     }),
   },
   {

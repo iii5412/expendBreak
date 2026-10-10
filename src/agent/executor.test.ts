@@ -72,7 +72,7 @@ describe('agent read tools', () => {
     expect((output as { transactions: Array<{ id: string }> }).transactions.map(item => item.id)).toEqual(['t4', 't2', 't1']);
 
     const cafe = executeAgentTool('search_transactions', JSON.stringify({ text: '스타 벅스' }), context()).output as { transactions: Array<{ id: string; payment: string }> };
-    expect(cafe.transactions).toEqual([expect.objectContaining({ id: 't2', payment: '카드 딥드림' })]);
+    expect(cafe.transactions).toEqual([expect.objectContaining({ id: 't2', payment: '카드 신한카드 딥드림' })]);
   });
 
   it('groups totals by category', () => {
@@ -189,5 +189,42 @@ describe('bulk update and criterion lookup', () => {
     expect(result.matched).toMatchObject({ count: 2, total: 57000, transactionIds: ['a', 'b'] });
     expect(result.unsure).toMatchObject({ count: 1, total: 25500, merchants: [{ merchant: '교촌치킨', probability: 0.57 }] });
     expect(result.excluded).toEqual({ count: 1, merchantCount: 1 });
+  });
+});
+
+describe('card and living filters', () => {
+  const second: PaymentCard = { ...card, id: 'card2', cardName: '체크', cardLast4: '5678' };
+  const other: PaymentCard = { ...card, id: 'card3', cardName: '생활', cardCompany: '현대카드', cardLast4: '9999' };
+  const ctx = () => context({
+    paymentCards: [card, second, other],
+    transactions: [
+      tx('a', '2026-10-03', 12000, { categoryId: 'food', paymentMethodType: 'card', cardId: 'card1' }),
+      tx('b', '2026-10-04', 8000, { categoryId: 'food', paymentMethodType: 'card', cardId: 'card2' }),
+      tx('c', '2026-10-05', 5000, { categoryId: 'cafe', paymentMethodType: 'card', cardId: 'card1' }),
+      tx('d', '2026-10-06', 9000, { categoryId: 'food', paymentMethodType: 'card', cardId: 'card3' }),
+      tx('e', '2026-10-07', 55000, { categoryId: 'food', paymentMethodType: 'card', cardId: 'card1', recurringTemplateId: 'tpl1' }),
+    ],
+  });
+
+  it('lists one category paid with every card of a company', () => {
+    const output = executeAgentTool('search_transactions', { categoryId: 'food', card: '신한카드', livingOnly: true }, ctx()).output as {
+      matchedCount: number; matchedTotal: number; transactions: Array<{ id: string; payment: string }>; filters: { cards: string[] };
+    };
+    expect(output.transactions.map(item => item.id)).toEqual(['b', 'a']);
+    expect(output.matchedTotal).toBe(20000);
+    expect(output.transactions[1].payment).toBe('카드 신한카드 딥드림');
+    expect(output.filters.cards).toEqual(['신한카드 딥드림', '신한카드 체크']);
+  });
+
+  it('summarizes one card by category', () => {
+    const output = executeAgentTool('summarize_transactions', { groupBy: 'category', card: 'card1' }, ctx()).output as {
+      total: number; groups: Array<{ key: string; amount: number }>;
+    };
+    expect(output.total).toBe(72000);
+    expect(output.groups).toEqual([{ key: '식비', amount: 67000, count: 2 }, { key: '카페', amount: 5000, count: 1 }]);
+  });
+
+  it('reports an unknown card instead of returning nothing', () => {
+    expect(executeAgentTool('search_transactions', { card: '롯데' }, ctx()).output).toMatchObject({ error: expect.stringContaining('롯데') });
   });
 });
