@@ -28,7 +28,7 @@ object SmsQueueStore {
     private const val MAX_SEEN_IDS = 5_000
     private const val MAX_HANDLED_IDS = 20_000
     /** Bump when the candidate filter changes so the inbox is read again once. */
-    private const val FILTER_VERSION = 2
+    private const val FILTER_VERSION = 3
     private val lock = Any()
 
     data class ScanState(
@@ -290,8 +290,14 @@ object SmsQueueStore {
     // Approvals often mention 잔여한도, 포인트 적립 or 결제일, so only clear ads
     // and billing notices are dropped; an approval keyword is still required.
     private fun isFinancialCandidate(body: String): Boolean {
-        if (!Regex("(?:\\d{1,3}(?:,\\d{3})+|\\d+)\\s*원").containsMatchIn(body)) return false
-        if (!Regex("승인|결제\\s*완료|카드\\s*사용|체크\\s*사용|승인\\s*취소|결제\\s*취소|매입\\s*취소|취소\\s*완료|환불\\s*완료").containsMatchIn(body)) return false
+        // Bank deposits ("입금 460,000원", or "입금 460,000" without 원). Must stay
+        // in step with DEPOSIT / NOT_DEPOSIT in src/utils/smsImport.ts.
+        val deposit = Regex("입금\\s*[:：]?\\s*(?:\\d{1,3}(?:,\\d{3})+|\\d+)").containsMatchIn(body)
+            && !Regex("입금\\s*(?:예정|요청|대기|기한|계좌|하실|하세요|바랍니다|부탁)|미입금|입금하|가상\\s*계좌|출금").containsMatchIn(body)
+        if (!deposit) {
+            if (!Regex("(?:\\d{1,3}(?:,\\d{3})+|\\d+)\\s*원").containsMatchIn(body)) return false
+            if (!Regex("승인|결제\\s*완료|카드\\s*사용|체크\\s*사용|승인\\s*취소|결제\\s*취소|매입\\s*취소|취소\\s*완료|환불\\s*완료").containsMatchIn(body)) return false
+        }
         return !Regex("\\(광고\\)|무료\\s*수신\\s*거부|수신\\s*거부|결제\\s*예정|청구\\s*(?:금액|예정|안내)|명세서|이용\\s*대금|납부\\s*(?:예정|안내)|자동\\s*이체").containsMatchIn(body)
     }
 

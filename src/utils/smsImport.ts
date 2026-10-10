@@ -1,7 +1,7 @@
 import { App } from '@capacitor/app';
 import { registerPlugin } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
-import { Category, MerchantRule, PaymentCard, Transaction } from '../types';
+import { BankAccount, Category, MerchantRule, PaymentCard, Transaction } from '../types';
 import { isNativeAndroid } from './platform';
 
 export type SmsPermissionState = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied';
@@ -146,7 +146,8 @@ export async function subscribeToPendingSms(listener: () => void): Promise<() =>
   };
 }
 
-export type ParsedSmsKind = 'approval' | 'cancellation';
+/** deposit: money received into a bank account (recorded as income). */
+export type ParsedSmsKind = 'approval' | 'cancellation' | 'deposit';
 
 export interface ParsedSmsTransaction {
   kind: ParsedSmsKind;
@@ -154,8 +155,11 @@ export interface ParsedSmsTransaction {
   merchant: string;
   localDate: string;
   occurredAt: string;
+  /** Card issuer, or the bank for a deposit. */
   issuer: string | null;
   cardLast4: string | null;
+  /** Last four digits of the receiving account; never the full number. */
+  accountLast4: string | null;
   approvalCode: string | null;
   installmentMonths: number | null;
   fingerprint: string;
@@ -166,6 +170,7 @@ export interface SmsReviewCandidate extends ParsedSmsTransaction {
   messageIds: string[];
   suggestedCategoryId: string;
   matchedCardId: string | null;
+  matchedAccountId: string | null;
 }
 
 export interface PreparedSmsReviewQueue {
@@ -194,6 +199,31 @@ const ISSUERS: Array<{ name: string; pattern: RegExp }> = [
 const IGNORE_TRANSACTION = /\(광고\)|무료\s*수신\s*거부|수신\s*거부|결제\s*예정|청구\s*(?:금액|예정|안내)|명세서|이용\s*대금|납부\s*(?:예정|안내)|자동\s*이체/;
 const CANCELLATION = /취소|환불\s*완료/;
 const APPROVAL = /승인|결제\s*완료|카드\s*사용|체크\s*사용/;
+// Must stay in step with DEPOSIT in SmsQueueStore.kt. Banks often omit 원
+// ("입금 460,000"), so the amount right after 입금 counts on its own.
+const DEPOSIT = /입금\s*[:：]?\s*(\d{1,3}(?:,\d{3})+|\d+)/;
+// Requests and notices that mention 입금 without money having arrived.
+const NOT_DEPOSIT = /입금\s*(?:예정|요청|대기|기한|계좌|하실|하세요|바랍니다|부탁)|미입금|입금하|가상\s*계좌|출금/;
+
+const BANKS: Array<{ name: string; pattern: RegExp }> = [
+  { name: '카카오뱅크', pattern: /카카오\s*뱅크/ },
+  { name: '토스뱅크', pattern: /토스\s*뱅크/ },
+  { name: '케이뱅크', pattern: /케이\s*뱅크|K\s*뱅크/i },
+  { name: 'IBK기업은행', pattern: /IBK|기업/i },
+  { name: 'KB국민은행', pattern: /KB|국민/i },
+  { name: '신한은행', pattern: /신한/ },
+  { name: '우리은행', pattern: /우리/ },
+  { name: '하나은행', pattern: /하나/ },
+  { name: 'NH농협', pattern: /NH|농협/i },
+  { name: 'SC제일은행', pattern: /SC\s*제일|SC은행/i },
+  { name: '새마을금고', pattern: /새마을/ },
+  { name: '우체국', pattern: /우체국/ },
+  { name: '신협', pattern: /신협/ },
+  { name: '수협', pattern: /수협/ },
+  { name: 'iM뱅크', pattern: /iM\s*뱅크|대구은행/i },
+  { name: '부산은행', pattern: /부산은행|BNK/i },
+];
+const BANK_TOKEN = /^(?:IBK|기업|KB|국민|신한|우리|하나|NH|농협|SC제일|새마을|우체국|신협|수협|카카오뱅크|토스뱅크|케이뱅크|iM뱅크|부산|대구|광주|전북|경남|제주)(?:은행|뱅크|금고)?$/i;
 
 function pad(value: number) {
   return String(value).padStart(2, '0');
@@ -323,13 +353,71 @@ function stableHash(value: string) {
   return `sms2_${(hash >>> 0).toString(36)}_${(secondHash >>> 0).toString(36)}`;
 }
 
+function extractAccountLast4(body: string): string | null {
+  // "413***65501013", "123-45**-6789": a long run of digits, usually masked.
+  const match = body.match(/(?:^|\s)(\d[\d*-]{5,}\d)(?=\s|$)/m);
+  if (!match || (!/[*-]/.test(match[1]) && match[1].length < 10)) return null;
+  const digits = match[1].replace(/\D/g, '');
+  return digits.length >= 4 ? digits.slice(-4) : null;
+}
+
+/** The sender's name on a deposit: what is left once dates, amounts, accounts and the bank are removed. */
+function extractDepositor(body: string): string | null {
+  const tokens = body
+    .replace(/\[?Web발신\]?/gi, '\n')
+    .replace(/\[[^\]\n]{1,12}\]/g, '\n')
+    .split(/\r?\n/)
+    .flatMap(line => line
+      .replace(/20\d{2}[./-]\d{1,2}[./-]\d{1,2}/g, ' ')
+      .replace(/\d{1,2}[./-]\d{1,2}(?=\s|$)/g, ' ')
+      .replace(/\d{1,2}:\d{2}(?::\d{2})?/g, ' ')
+      .replace(/잔액\s*[:：]?\s*(?:\d{1,3}(?:,\d{3})+|\d+)\s*원?/g, ' ')
+      .replace(/입금\s*[:：]?\s*(?:\d{1,3}(?:,\d{3})+|\d+)\s*원?/g, ' ')
+      .replace(/(?:\d{1,3}(?:,\d{3})+|\d+)\s*원/g, ' ')
+      .replace(/\d[\d*-]{5,}\d/g, ' ')
+      .replace(/입금|이체|계좌/g, ' ')
+      .split(/\s+/))
+    .map(token => token.trim())
+    .filter(token => token.length > 0
+      && !BANK_TOKEN.test(token)
+      && !/^[\d,.*()\-:]+$/.test(token)
+      && !/잔액|은행|고객|님$/.test(token));
+  const name = tokens.join(' ').trim();
+  return name.length >= 1 && name.length <= 30 ? name : null;
+}
+
+function parseDeposit(message: NativeSmsMessage, body: string): ParsedSmsTransaction | null {
+  const amountMatch = body.match(DEPOSIT);
+  const amount = amountMatch ? Number(amountMatch[1].replace(/,/g, '')) : 0;
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
+  const issuer = BANKS.find(item => item.pattern.test(body))?.name || null;
+  const accountLast4 = extractAccountLast4(body);
+  const occurred = resolveOccurredAt(body, message.receivedAt);
+  const merchant = extractDepositor(body) || `${issuer || '계좌'} 입금`;
+  const localDate = toLocalDateParts(occurred);
+  const minute = `${localDate}T${pad(occurred.getHours())}:${pad(occurred.getMinutes())}`;
+  return {
+    kind: 'deposit',
+    amount,
+    merchant,
+    localDate,
+    occurredAt: occurred.toISOString(),
+    issuer,
+    cardLast4: null,
+    accountLast4,
+    approvalCode: null,
+    installmentMonths: null,
+    fingerprint: stableHash(`${issuer || ''}|${accountLast4 || ''}|${amount}|${merchant.toLowerCase()}|${minute}|deposit|${message.id}`),
+  };
+}
+
 export function parseFinancialSms(message: NativeSmsMessage): ParsedSmsTransaction | null {
   const body = String(message.body || '').replace(/\u0000/g, '').trim();
   if (!body || IGNORE_TRANSACTION.test(body)) return null;
   const kind: ParsedSmsKind | null = CANCELLATION.test(body)
     ? 'cancellation'
     : APPROVAL.test(body) ? 'approval' : null;
-  if (!kind) return null;
+  if (!kind) return DEPOSIT.test(body) && !NOT_DEPOSIT.test(body) ? parseDeposit(message, body) : null;
 
   const amount = extractAmount(body);
   if (!amount) return null;
@@ -354,6 +442,7 @@ export function parseFinancialSms(message: NativeSmsMessage): ParsedSmsTransacti
     occurredAt: occurred.toISOString(),
     issuer,
     cardLast4,
+    accountLast4: null,
     approvalCode,
     installmentMonths,
     fingerprint: stableHash(identity),
@@ -382,6 +471,34 @@ export function matchPaymentCard(parsed: ParsedSmsTransaction, cards: PaymentCar
     if (matches.length === 1) return matches[0];
   }
   return cards.length === 1 ? cards[0] : null;
+}
+
+export function matchBankAccount(parsed: ParsedSmsTransaction, accounts: BankAccount[]): BankAccount | null {
+  const last4 = parsed.accountLast4;
+  if (last4) {
+    const byLast4 = accounts.filter(account => String(account.accountNumber || '').replace(/\D/g, '').endsWith(last4));
+    if (byLast4.length === 1) return byLast4[0];
+  }
+  const bank = parsed.issuer ? BANKS.find(item => item.name === parsed.issuer) : null;
+  if (bank) {
+    const byBank = accounts.filter(account => bank.pattern.test(account.bankName));
+    if (byBank.length === 1) return byBank[0];
+  }
+  return accounts.length === 1 ? accounts[0] : null;
+}
+
+/** Merchant rules, then 기타 수입. Deposits never go to AI: the sender is a person's name. */
+export function resolveSmsIncomeCategory(merchant: string, categories: Category[], rules: MerchantRule[]) {
+  const normalized = merchant.toLowerCase();
+  const rule = [...rules]
+    .sort((left, right) => right.pattern.length - left.pattern.length)
+    .find(item => item.pattern.trim() && normalized.includes(item.pattern.trim().toLowerCase()));
+  if (rule && categories.some(category => category.id === rule.categoryId && category.type === 'income' && category.active)) {
+    return rule.categoryId;
+  }
+  return categories.find(category => category.id === 'etc_income' && category.active)?.id
+    || categories.find(category => category.type === 'income' && category.active)?.id
+    || '';
 }
 
 export function resolveSmsCategory(
@@ -451,13 +568,14 @@ export function prepareSmsReviewQueue(
   cards: PaymentCard[],
   categories: Category[],
   rules: MerchantRule[],
+  bankAccounts: BankAccount[] = [],
 ): PreparedSmsReviewQueue {
   const candidatesByFingerprint = new Map<string, SmsReviewCandidate>();
   const ignoredMessageIds: string[] = [];
 
   messages.forEach(message => {
     const parsed = parseFinancialSms(message);
-    if (!parsed || (parsed.kind === 'approval' && isDuplicateSmsTransaction(parsed, transactions))) {
+    if (!parsed || (parsed.kind !== 'cancellation' && isDuplicateSmsTransaction(parsed, transactions))) {
       ignoredMessageIds.push(message.id);
       return;
     }
@@ -468,14 +586,16 @@ export function prepareSmsReviewQueue(
       return;
     }
 
-    const card = matchPaymentCard(parsed, cards);
+    const isDeposit = parsed.kind === 'deposit';
+    const card = isDeposit ? null : matchPaymentCard(parsed, cards);
     candidatesByFingerprint.set(parsed.fingerprint, {
       ...parsed,
       messageIds: [message.id],
       suggestedCategoryId: parsed.kind === 'approval'
         ? resolveSmsCategory(parsed.merchant, categories, rules)
-        : '',
+        : isDeposit ? resolveSmsIncomeCategory(parsed.merchant, categories, rules) : '',
       matchedCardId: card?.id || null,
+      matchedAccountId: isDeposit ? matchBankAccount(parsed, bankAccounts)?.id || null : null,
     });
   });
 

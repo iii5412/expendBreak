@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Check, MessageSquareText, Pencil, RotateCcw, Save, X } from 'lucide-react';
-import { Category, PaymentCard } from '../types';
+import { BankAccount, Category, PaymentCard } from '../types';
 import { formatKRW } from '../utils/calculations';
 import { SmsReviewCandidate } from '../utils/smsImport';
 
@@ -8,6 +8,7 @@ interface SmsReviewCardProps {
   candidates: SmsReviewCandidate[];
   categories: Category[];
   paymentCards: PaymentCard[];
+  bankAccounts?: BankAccount[];
   onApprove: (candidate: SmsReviewCandidate) => Promise<void>;
   onDismiss: (candidate: SmsReviewCandidate) => Promise<void>;
   onUpdate: (candidate: SmsReviewCandidate) => void;
@@ -17,6 +18,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
   candidates,
   categories,
   paymentCards,
+  bankAccounts = [],
   onApprove,
   onDismiss,
   onUpdate,
@@ -41,7 +43,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
         <MessageSquareText className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
         <div>
           <h2 className="text-sm font-bold text-sky-100">SMS 확인 대기 {candidates.length}건</h2>
-          <p className="mt-1 text-xs leading-relaxed text-slate-400">아직 지출에 반영되지 않았습니다. 내용을 확인한 뒤 승인해 주세요.</p>
+          <p className="mt-1 text-xs leading-relaxed text-slate-400">아직 가계부에 반영되지 않았습니다. 내용을 확인한 뒤 승인해 주세요.</p>
         </div>
       </div>
 
@@ -51,30 +53,37 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
           const category = categories.find(item => item.id === candidate.suggestedCategoryId);
           const working = workingId === candidate.fingerprint;
           const isCancellation = candidate.kind === 'cancellation';
+          const isDeposit = candidate.kind === 'deposit';
+          const account = bankAccounts.find(item => item.id === candidate.matchedAccountId);
+          const source = isDeposit
+            ? (account ? `${account.bankName} ${account.accountName}` : candidate.issuer || '계좌 미연결')
+            : card?.cardName || candidate.issuer || '카드 미연결';
           return (
             <article key={candidate.fingerprint} className="space-y-3 px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong className="truncate text-sm text-white">{candidate.merchant}</strong>
-                    <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${isCancellation ? 'bg-amber-500/15 text-amber-200' : 'bg-sky-500/15 text-sky-200'}`}>
-                      {isCancellation ? '승인취소 후보' : '지출 후보'}
+                    <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${isCancellation
+                      ? 'bg-amber-500/15 text-amber-200'
+                      : isDeposit ? 'bg-emerald-500/15 text-emerald-200' : 'bg-sky-500/15 text-sky-200'}`}>
+                      {isCancellation ? '승인취소 후보' : isDeposit ? '입금 후보' : '지출 후보'}
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-slate-400">
-                    {candidate.localDate} · {card?.cardName || candidate.issuer || '카드 미연결'}
+                    {candidate.localDate} · {source}
                     {!isCancellation && ` · ${category?.name || '카테고리 확인 필요'}`}
                   </p>
                 </div>
-                <strong className={`shrink-0 text-sm ${isCancellation ? 'text-amber-200' : 'text-rose-300'}`}>
-                  {isCancellation ? '취소 ' : ''}{formatKRW(candidate.amount)}
+                <strong className={`shrink-0 text-sm ${isCancellation ? 'text-amber-200' : isDeposit ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  {isCancellation ? '취소 ' : isDeposit ? '+' : ''}{formatKRW(candidate.amount)}
                 </strong>
               </div>
 
               {editing?.fingerprint === candidate.fingerprint ? (
                 <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-950/80 p-3 sm:grid-cols-2">
                   <label className="space-y-1 text-xs text-slate-400 sm:col-span-2">
-                    <span>사용처</span>
+                    <span>{isDeposit ? '보낸 사람' : '사용처'}</span>
                     <input
                       value={editing.merchant}
                       onChange={event => setEditing({ ...editing, merchant: event.target.value })}
@@ -93,7 +102,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                     />
                   </label>
                   <label className="space-y-1 text-xs text-slate-400">
-                    <span>사용일</span>
+                    <span>{isDeposit ? '입금일' : '사용일'}</span>
                     <input
                       type="date"
                       value={editing.localDate}
@@ -107,17 +116,31 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                       className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
                     />
                   </label>
-                  <label className="space-y-1 text-xs text-slate-400">
-                    <span>카드</span>
-                    <select
-                      value={editing.matchedCardId || ''}
-                      onChange={event => setEditing({ ...editing, matchedCardId: event.target.value || null })}
-                      className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
-                    >
-                      <option value="">카드 미연결</option>
-                      {paymentCards.map(item => <option key={item.id} value={item.id}>{item.cardName}</option>)}
-                    </select>
-                  </label>
+                  {isDeposit ? (
+                    <label className="space-y-1 text-xs text-slate-400">
+                      <span>입금 계좌</span>
+                      <select
+                        value={editing.matchedAccountId || ''}
+                        onChange={event => setEditing({ ...editing, matchedAccountId: event.target.value || null })}
+                        className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                      >
+                        <option value="">계좌 미연결</option>
+                        {bankAccounts.map(item => <option key={item.id} value={item.id}>{item.bankName} {item.accountName}</option>)}
+                      </select>
+                    </label>
+                  ) : (
+                    <label className="space-y-1 text-xs text-slate-400">
+                      <span>카드</span>
+                      <select
+                        value={editing.matchedCardId || ''}
+                        onChange={event => setEditing({ ...editing, matchedCardId: event.target.value || null })}
+                        className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                      >
+                        <option value="">카드 미연결</option>
+                        {paymentCards.map(item => <option key={item.id} value={item.id}>{item.cardName}</option>)}
+                      </select>
+                    </label>
+                  )}
                   {!isCancellation && (
                     <label className="space-y-1 text-xs text-slate-400">
                       <span>카테고리</span>
@@ -126,7 +149,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                         onChange={event => setEditing({ ...editing, suggestedCategoryId: event.target.value })}
                         className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
                       >
-                        {categories.filter(item => item.type === 'expense' && item.active).map(item => (
+                        {categories.filter(item => item.type === (isDeposit ? 'income' : 'expense') && item.active).map(item => (
                           <option key={item.id} value={item.id}>{item.name}</option>
                         ))}
                       </select>
@@ -160,7 +183,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                   onClick={() => setEditing({ ...candidate })}
                   className="flex min-h-10 w-full items-center justify-center gap-2 border border-slate-700 bg-slate-950 px-3 text-xs font-bold text-slate-300 disabled:opacity-50"
                 >
-                  <Pencil className="h-3.5 w-3.5" /> 금액·사용처·카드·카테고리 수정
+                  <Pencil className="h-3.5 w-3.5" /> {isDeposit ? '금액·보낸 사람·계좌·카테고리 수정' : '금액·사용처·카드·카테고리 수정'}
                 </button>
               )}
 

@@ -358,6 +358,7 @@ export default function App() {
           getPaymentCards(),
           getCategories(),
           getMerchantRules(),
+          getBankAccounts(),
         );
         await acknowledgePendingSms(userProfile.uid, prepared.ignoredMessageIds);
         if (cancelled) return;
@@ -511,7 +512,35 @@ export default function App() {
       return;
     }
     if (!candidate.suggestedCategoryId) {
-      showToast({ message: '사용 가능한 지출 카테고리가 없습니다.', tone: 'warning' });
+      showToast({ message: `사용 가능한 ${candidate.kind === 'deposit' ? '수입' : '지출'} 카테고리가 없습니다.`, tone: 'warning' });
+      return;
+    }
+
+    if (candidate.kind === 'deposit') {
+      saveTransaction({
+        type: 'income',
+        amount: candidate.amount,
+        occurredAt: candidate.occurredAt,
+        localDate: candidate.localDate,
+        categoryId: candidate.suggestedCategoryId,
+        merchant: candidate.merchant,
+        memo: `[SMS 입금 등록] ${candidate.issuer || '계좌'}`,
+        source: 'sms',
+        sourceFingerprint: candidate.fingerprint,
+        sourceReference: null,
+        paymentMethodType: candidate.matchedAccountId ? 'account' : 'other',
+        accountId: candidate.matchedAccountId,
+        cardId: null,
+        installment: null,
+      });
+      await acknowledgePendingSms(userProfile.uid, candidate.messageIds);
+      removeSmsCandidate(candidate);
+      refreshAppData();
+      showToast({
+        message: 'SMS 입금을 수입으로 등록했습니다.',
+        description: `${candidate.merchant} · ${formatKRW(candidate.amount)}`,
+        tone: 'success',
+      });
       return;
     }
 
@@ -1562,6 +1591,7 @@ export default function App() {
           candidates={smsCandidates}
           categories={categories}
           paymentCards={paymentCards}
+          bankAccounts={bankAccounts}
           onApprove={handleApproveSmsCandidate}
           onDismiss={handleDismissSmsCandidate}
           onUpdate={handleUpdateSmsCandidate}

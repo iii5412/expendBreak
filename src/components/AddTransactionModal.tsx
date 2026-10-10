@@ -952,6 +952,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 candidates={sms.candidates}
                 categories={categories}
                 paymentCards={paymentCards}
+                bankAccounts={bankAccounts}
                 onApprove={sms.onApprove}
                 onDismiss={sms.onDismiss}
                 onUpdate={sms.onUpdate}

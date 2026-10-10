@@ -81,7 +81,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
       details: [
         { label: '읽는 범위', value: `${formatTimestamp(baseline)} 이후 받은 SMS` },
         { label: '처리 방식', value: '기기에서 분석 · 확인 후 등록' },
-        { label: '지원 대상', value: '카드 승인·취소 SMS' },
+        { label: '지원 대상', value: '카드 승인·취소, 계좌 입금 SMS' },
       ],
       confirmLabel: '문자 확인 사용하기',
       cancelLabel: '나중에',
@@ -151,7 +151,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
       title: 'RCS로 온 결제 문자도 확인할까요?',
       description: '"알림" 말풍선으로 오는 RCS 카드 문자는 문자함에 저장되지 않아, 메시지 앱 알림으로만 확인할 수 있습니다. 다음 화면에서 지출브레이크의 알림 접근을 허용해 주세요.',
       details: [
-        { label: '확인 대상', value: '메시지 앱 알림 중 카드 승인·취소' },
+        { label: '확인 대상', value: '메시지 앱 알림 중 카드 승인·취소, 계좌 입금' },
         { label: '처리 방식', value: '기기에서 분석 · 확인 후 등록' },
         { label: '그 밖의 알림', value: '읽은 즉시 버리고 저장하지 않음' },
       ],

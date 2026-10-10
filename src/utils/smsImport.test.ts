@@ -138,3 +138,41 @@ describe('SMS transaction enrichment', () => {
     expect(result.ignoredMessageIds).toEqual(['native-1']);
   });
 });
+
+describe('bank deposit SMS', () => {
+  const at = new Date(2026, 9, 10, 14, 0).getTime();
+  const ibk = '[Web발신]\n2026/10/10 13:24\n입금 460,000원\n김지연\n413***65501013\n기업';
+
+  it('reads a deposit as income with the sender, bank and account ending', () => {
+    const parsed = parseFinancialSms(message(ibk, at));
+    expect(parsed).toMatchObject({
+      kind: 'deposit', amount: 460000, merchant: '김지연', issuer: 'IBK기업은행', accountLast4: '1013', localDate: '2026-10-10',
+    });
+    expect(new Date(parsed!.occurredAt).getHours()).toBe(13);
+  });
+
+  it('reads deposits that leave out 원 or put everything on separate lines', () => {
+    expect(parseFinancialSms(message('[KB]10/10 13:24\n123456**789\n김지연\n입금\n460,000\n잔액1,234,567', at)))
+      .toMatchObject({ kind: 'deposit', amount: 460000, merchant: '김지연', issuer: 'KB국민은행' });
+    expect(parseFinancialSms(message('[Web발신]\n[신한]10/10 13:24\n110-***-123456\n입금 460,000\n잔액 1,000,000\n 김지연', at)))
+      .toMatchObject({ kind: 'deposit', amount: 460000, merchant: '김지연', issuer: '신한은행' });
+  });
+
+  it('ignores deposit requests and withdrawals', () => {
+    expect(parseFinancialSms(message('[Web발신]\n입금 요청 460,000원 가상계좌 123', at))).toBeNull();
+    expect(parseFinancialSms(message('[Web발신]\n출금 460,000원 김지연', at))).toBeNull();
+  });
+
+  it('queues a deposit with an income category and the matching account, never a card', () => {
+    const accounts = [
+      { id: 'acc-ibk', bankName: 'IBK기업은행', accountName: '월급 통장', accountNumber: '413-123456-01-013' },
+      { id: 'acc-kb', bankName: 'KB국민', accountName: '생활비', accountNumber: '123-45-6789' },
+    ] as never;
+    const categories = [
+      { id: 'etc_expense', name: '기타 지출', type: 'expense', active: true },
+      { id: 'etc_income', name: '기타 수입', type: 'income', active: true },
+    ] as never;
+    const { candidates } = prepareSmsReviewQueue([message(ibk, at)], [], [], categories, [], accounts);
+    expect(candidates[0]).toMatchObject({ kind: 'deposit', suggestedCategoryId: 'etc_income', matchedAccountId: 'acc-ibk', matchedCardId: null });
+  });
+});
