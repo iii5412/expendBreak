@@ -720,39 +720,66 @@ export function formatKRW(amount: number): string {
 /**
  * Get category spending breakdown sorted by highest amount
  */
-export function getCategoryBreakdown(
+type CategoryInfoMap = Record<string, { name: string; color: string; icon: string; type: Transaction['type'] }>;
+
+/** Bucket for expenses whose category is missing or not an expense category. */
+export const NEEDS_REVIEW_EXPENSE_CATEGORY = '__needs_review_expense';
+
+export interface CategoryBreakdownEntry {
+  transaction: Transaction;
+  /** Counted amount: an installment contributes only this period's round. */
+  amount: number;
+  categoryId: string;
+  installmentRound: number | null;
+}
+
+/**
+ * The expenses behind {@link getCategoryBreakdown}, one entry per transaction,
+ * so a category's detail list always adds up to its total.
+ */
+export function getCategoryBreakdownEntries(
   yearMonth: string,
   transactions: Transaction[],
-  categories: Record<string, { name: string; color: string; icon: string; type: Transaction['type'] }>,
+  categories: CategoryInfoMap,
   options: { variableOnly?: boolean; monthStartDay?: number } = {},
-) {
+): CategoryBreakdownEntry[] {
   const period = getAccountingPeriod(yearMonth, options.monthStartDay ?? 1);
   // Installments contribute their round for this period, matching the spend
   // track, so one big purchase does not dominate the category mix for a month.
-  const expenses = transactions.filter(t => {
-    if (t.type !== 'expense') return false;
-    if (!isSpendingTransaction(t)) return false;
-    if (options.variableOnly && t.recurringTemplateId) return false;
-    return t.installment
-      ? Boolean(getInstallmentCharge(t.amount, t.installment, yearMonth))
-      : isDateInPeriod(t.localDate, period);
+  return transactions.flatMap(t => {
+    if (t.type !== 'expense') return [];
+    if (!isSpendingTransaction(t)) return [];
+    if (options.variableOnly && t.recurringTemplateId) return [];
+    const charge = t.installment ? getInstallmentCharge(t.amount, t.installment, yearMonth) : null;
+    if (t.installment ? !charge : !isDateInPeriod(t.localDate, period)) return [];
+    return [{
+      transaction: t,
+      amount: charge ? charge.amount : Math.round(t.amount),
+      categoryId: categories[t.categoryId]?.type === 'expense' ? t.categoryId : NEEDS_REVIEW_EXPENSE_CATEGORY,
+      installmentRound: charge?.round ?? null,
+    }];
   });
+}
+
+export function getCategoryBreakdown(
+  yearMonth: string,
+  transactions: Transaction[],
+  categories: CategoryInfoMap,
+  options: { variableOnly?: boolean; monthStartDay?: number } = {},
+) {
+  const entries = getCategoryBreakdownEntries(yearMonth, transactions, categories, options);
 
   const map: Record<string, number> = {};
   let total = 0;
 
-  for (const t of expenses) {
-    const categoryId = categories[t.categoryId]?.type === 'expense' ? t.categoryId : '__needs_review_expense';
-    const amount = t.installment
-      ? getInstallmentCharge(t.amount, t.installment, yearMonth)?.amount ?? 0
-      : Math.round(t.amount);
+  for (const { categoryId, amount } of entries) {
     map[categoryId] = (map[categoryId] || 0) + amount;
     total += amount;
   }
   
   return Object.entries(map)
     .map(([catId, amount]) => {
-      const catInfo = catId === '__needs_review_expense'
+      const catInfo = catId === NEEDS_REVIEW_EXPENSE_CATEGORY
         ? { name: '분류 확인 필요', color: '#F59E0B', icon: 'AlertTriangle', type: 'expense' as const }
         : categories[catId] || { name: '기타', color: '#94A3B8', icon: 'MoreHorizontal', type: 'expense' as const };
       const percent = total > 0 ? Math.round((amount / total) * 100) : 0;

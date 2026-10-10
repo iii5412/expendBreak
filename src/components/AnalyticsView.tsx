@@ -19,10 +19,12 @@ import {
   MonthSummary,
   formatKRW,
   getCategoryBreakdown,
+  getCategoryBreakdownEntries,
   getLocalDateString,
   isSpendingTransaction,
 } from '../utils/calculations';
-import { Transaction, Category, AIFeedbackResult } from '../types';
+import { Transaction, Category, AIFeedbackResult, PaymentCard, BankAccount } from '../types';
+import { CategorySpendingList } from './CategorySpendingList';
 import { FutureCommitmentSummary } from '../utils/futureCommitments';
 import { FutureCommitmentsCard } from './FutureCommitmentsCard';
 import { CashflowTimeline } from '../utils/cashflowTimeline';
@@ -47,6 +49,8 @@ interface AnalyticsViewProps {
   cashflowTimeline: CashflowTimeline;
   transactions: Transaction[];
   categories: Category[];
+  paymentCards?: PaymentCard[];
+  bankAccounts?: BankAccount[];
   aiInsightsEnabled?: boolean;
 }
 
@@ -56,6 +60,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   cashflowTimeline,
   transactions,
   categories,
+  paymentCards,
+  bankAccounts,
   aiInsightsEnabled = true,
 }) => {
   const [feedback, setFeedback] = useState<AIFeedbackResult | null>(null);
@@ -73,12 +79,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   // 2. Allowance category breakdown (fixed recurring expenses stay separate)
   const categoryInfo = Object.fromEntries(categories.map(category => [category.id, category]));
-  const categoryPieData = getCategoryBreakdown(
-    summary.yearMonth,
-    transactions,
-    categoryInfo,
-    { variableOnly: true, monthStartDay: Number(summary.spendPeriodStartDate.slice(8, 10)) },
-  ).map(item => ({ name: item.categoryName, value: item.amount, color: item.color }));
+  const breakdownOptions = { variableOnly: true, monthStartDay: Number(summary.spendPeriodStartDate.slice(8, 10)) };
+  const categoryEntries = getCategoryBreakdownEntries(summary.yearMonth, transactions, categoryInfo, breakdownOptions);
+  const categoryPieData = getCategoryBreakdown(summary.yearMonth, transactions, categoryInfo, breakdownOptions)
+    .map(item => ({ categoryId: item.categoryId, name: item.categoryName, value: item.amount, color: item.color }));
   const feedbackCacheKey = [
     summary.calculatedAt?.slice(0, 10),
     summary.spendPeriodStatus,
@@ -152,7 +156,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         },
         body: JSON.stringify({
           monthSummary: summary,
-          categoryBreakdown: categoryPieData,
+          categoryBreakdown: categoryPieData.map(({ name, value, color }) => ({ name, value, color })),
         }),
       });
 
@@ -348,7 +352,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* 2. Donut Category Breakdown Chart */}
       <section className="eb-panel rounded-xl p-4">
-        <h3 className="text-sm font-bold text-slate-200 mb-3">카테고리별 생활비 사용 비중</h3>
+        <h3 className="text-sm font-bold text-slate-200">카테고리별 생활비 사용 비중</h3>
+        <p className="mb-3 mt-0.5 text-[11px] text-slate-500">카테고리를 누르면 지출 내역을 볼 수 있습니다.</p>
         {categoryPieData.length === 0 ? (
           <div className="text-center py-10 text-xs text-slate-400">지출 기록이 없습니다.</div>
         ) : (
@@ -374,17 +379,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               </ResponsiveContainer>
             </div>
 
-            <div className="space-y-1.5 text-xs">
-              {categoryPieData.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between p-1.5 rounded bg-slate-950/40">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                    <span className="text-slate-300 font-medium">{item.name}</span>
-                  </div>
-                  <span className="font-bold text-slate-100">{formatKRW(item.value)}</span>
-                </div>
-              ))}
-            </div>
+            <CategorySpendingList
+              items={categoryPieData}
+              entries={categoryEntries}
+              paymentCards={paymentCards}
+              bankAccounts={bankAccounts}
+            />
           </div>
         )}
       </section>

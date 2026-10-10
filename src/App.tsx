@@ -1794,6 +1794,8 @@ export default function App() {
             cashflowTimeline={cashflowTimeline}
             transactions={planningTransactions}
             categories={categories}
+            paymentCards={paymentCards}
+            bankAccounts={bankAccounts}
             aiInsightsEnabled={userProfile.aiInsightsEnabled}
           />
         )}
