@@ -56,6 +56,13 @@ interface RecurringPaymentViewProps {
   onUndoAmountChanges?: (operationIds: string[]) => number;
 }
 
+export type PaymentStatusFilter = 'all' | 'pending' | 'posted';
+
+/** 납부 완료 = posted; everything else still visible in the list is unpaid. */
+export function matchesPaymentStatus(occurrence: Pick<RecurringOccurrence, 'status'>, filter: PaymentStatusFilter) {
+  return filter === 'all' || (filter === 'posted') === (occurrence.status === 'posted');
+}
+
 export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   period, planState = 'saved', onPrepareCycle, onOpenTemplateSettings, initialView, allRecurringOccurrences, summary, recurringOccurrences, recurringTemplates, transactions = [], categories, bankAccounts, paymentCards,
   cardSettlementSummary, hiddenExpenseItems, onCreateOccurrence, onReloadRecurringPlan,
@@ -88,6 +95,7 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   };
   const today = getLocalDateString();
   const [itemQuery, setItemQuery] = useState('');
+  const [itemStatus, setItemStatus] = useState<PaymentStatusFilter>('all');
   const [editingCardBill, setEditingCardBill] = useState<MonthlyCardSettlement | null>(null);
   const [cardBillAmount, setCardBillAmount] = useState(0);
 
@@ -287,11 +295,16 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
   };
 
   const normalizedQuery = itemQuery.trim().toLocaleLowerCase('ko-KR');
-  const detailedOccurrences = visibleOccurrences.filter(({ occurrence, template }) => {
+  const matchesQuery = ({ occurrence, template }: typeof visibleOccurrences[number]) => {
     if (!normalizedQuery) return true;
     const account = accountMap.get(occurrence.accountId ?? template?.accountId ?? '');
     return [template?.name, template?.counterparty, account?.accountName, categoryMap.get(template?.categoryId || '')?.name].some(value => value?.toLocaleLowerCase('ko-KR').includes(normalizedQuery));
-  });
+  };
+  // Counts follow the search, so a chip never promises rows the search hides.
+  const queryMatches = visibleOccurrences.filter(matchesQuery);
+  const postedCount = queryMatches.filter(({ occurrence }) => occurrence.status === 'posted').length;
+  const statusCounts = { all: queryMatches.length, pending: queryMatches.length - postedCount, posted: postedCount };
+  const detailedOccurrences = queryMatches.filter(({ occurrence }) => matchesPaymentStatus(occurrence, itemStatus));
 
   return <div className="space-y-5 pb-20">
     <ScreenHeader eyebrow="이번 주기" title="고정지출" description="이번 주기 금액을 확인하고, 계좌별로 보낼 돈을 정리하세요." icon={<Receipt className="h-4 w-4" />} meta={<span>{period.yearMonth.replace('-', '년 ')}월 주기{formatPeriodRange(period) ? ` · ${formatPeriodRange(period)}` : ''}</span>} />
@@ -372,6 +385,12 @@ export const RecurringPaymentView: React.FC<RecurringPaymentViewProps> = ({
     {viewMode === 'items' && <section className="space-y-3" aria-labelledby="item-list-title">
       <div><h2 id="item-list-title" className="text-base font-extrabold text-slate-100">항목별 고정지출</h2><p className="mt-0.5 text-xs text-slate-400">이름 · 이번 주기 금액 · 확인 상태 · 납부일. 금액을 누르면 바로 수정합니다.</p></div>
       <input type="search" value={itemQuery} onChange={event => setItemQuery(event.target.value)} placeholder="항목명·계좌·카테고리 검색" className="min-h-10 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 text-xs text-slate-100 outline-none focus:border-blue-500" />
+      <div role="group" aria-label="납부 상태로 거르기" className="flex gap-1.5">
+        {([['all', '전체'], ['pending', '미납'], ['posted', '납부 완료']] as const).map(([value, label]) => (
+          <button key={value} type="button" onClick={() => setItemStatus(value)} aria-pressed={itemStatus === value} className={`min-h-9 rounded-full border px-3 text-xs font-bold ${itemStatus === value ? 'border-blue-400 bg-blue-500/15 text-blue-100' : 'border-slate-700 text-slate-400'}`}>{label} {statusCounts[value]}</button>
+        ))}
+      </div>
+      {detailedOccurrences.length === 0 && <p className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-xs text-slate-400">{itemStatus === 'pending' ? '아직 납부하지 않은 항목이 없습니다.' : itemStatus === 'posted' ? '납부 완료한 항목이 아직 없습니다.' : '조건에 맞는 항목이 없습니다.'}</p>}
       <ul className="space-y-2">{detailedOccurrences.map(({ occurrence, template, type }) => {
         const method = occurrence.paymentMethodType ?? template?.paymentMethodType ?? 'account';
         const account = accountMap.get(occurrence.accountId ?? template?.accountId ?? ''); const card = cardMap.get(occurrence.cardId ?? template?.cardId ?? '');

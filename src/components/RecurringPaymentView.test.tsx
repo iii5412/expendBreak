@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { BankAccount, RecurringOccurrence, RecurringTemplate } from '../types';
 import type { AccountingPeriod, MonthSummary } from '../utils/calculations';
 import { FeedbackProvider } from './ui/FeedbackProvider';
-import { RecurringPaymentView } from './RecurringPaymentView';
+import { matchesPaymentStatus, RecurringPaymentView } from './RecurringPaymentView';
 
 describe('RecurringPaymentView', () => {
   it('shows one collapsed account row with its fixed cost and card bill combined', () => {
@@ -69,5 +69,54 @@ describe('RecurringPaymentView', () => {
     expect(accountSection).toContain('aria-expanded="false"');
     expect(accountSection).not.toContain('생활 카드 카드대금');
     expect(accountSection).not.toContain('월세</span>');
+  });
+  it('filters items by payment status and shows the counts on the chips', () => {
+    const base = {
+      expectedAmount: 10_000, paymentMethodType: 'cash', typeSnapshot: 'expense', createdAt: '', updatedAt: '',
+    } as const;
+    const make = (id: string, status: RecurringOccurrence['status']): RecurringOccurrence => ({
+      ...base, id, templateId: id, occurrenceKey: id, scheduledDate: '2026-09-10', status,
+    });
+    const rows = [make('a', 'scheduled'), make('b', 'posted'), make('c', 'posted'), make('d', 'scheduled'), make('e', 'scheduled')];
+    expect(rows.filter(row => matchesPaymentStatus(row, 'all')).length).toBe(5);
+    expect(rows.filter(row => matchesPaymentStatus(row, 'pending')).map(row => row.id)).toEqual(['a', 'd', 'e']);
+    expect(rows.filter(row => matchesPaymentStatus(row, 'posted')).map(row => row.id)).toEqual(['b', 'c']);
+
+    const templates = rows.map(row => ({
+      id: row.templateId, type: 'expense', name: `항목${row.id}`, defaultAmount: 10_000, categoryId: 'x', frequency: 'monthly',
+      dayOfMonth: 10, holidayPolicy: 'fixed_date', postingMode: 'confirm', allowAmountChange: true, paymentMethodType: 'cash',
+      startDate: '2026-01-01', nextDueDate: '2026-09-10', active: true, createdAt: '', updatedAt: '',
+    })) as unknown as RecurringTemplate[];
+    const markup = renderToStaticMarkup(
+      <FeedbackProvider>
+        <RecurringPaymentView
+          period={{ yearMonth: '2026-09', startDate: '2026-09-10', endDate: '2026-10-09' } as AccountingPeriod}
+          summary={{ cardFixedExpenses: 0 } as MonthSummary}
+          recurringOccurrences={rows}
+          recurringTemplates={templates}
+          categories={[]}
+          bankAccounts={[]}
+          paymentCards={[]}
+          cardSettlementSummary={{ yearMonth: '2026-09', totalAmount: 0, linkedAccountTotal: 0, unlinkedAmount: 0, cards: [] }}
+          hiddenExpenseItems={[]}
+          initialView="items"
+          onCreateOccurrence={() => undefined}
+          onReloadRecurringPlan={async () => undefined}
+          duplicateManualCardSettlementCount={0}
+          cardSettlementReviewItems={[]}
+          onResolveCardSettlementReview={() => undefined}
+          onUpdateCardSettlementStatus={() => true}
+          onSaveCardSettlementAmount={() => undefined}
+          onPostOccurrence={() => true}
+          onUndoPostedOccurrence={() => undefined}
+          onUndoOccurrenceDirect={() => true}
+          onExcludeOccurrence={() => undefined}
+          onUpdateOccurrencePlan={() => undefined}
+        />
+      </FeedbackProvider>,
+    );
+    expect(markup).toContain('전체 5');
+    expect(markup).toContain('미납 3');
+    expect(markup).toContain('납부 완료 2');
   });
 });
