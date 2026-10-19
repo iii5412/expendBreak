@@ -18,7 +18,10 @@ export const SyncConflictBanner: React.FC<{ onReview?: () => void }> = ({ onRevi
 
   const describe = (conflict: SyncConflict) => {
     const record = conflict.changeRecord;
-    if (!record) return '금액 변경';
+    if (!record) {
+      const transaction = conflict.documents.find(document => document.collectionName === 'transactions')?.data;
+      return transaction?.localDate ? `${transaction.localDate} 거래 수정` : '거래 수정';
+    }
     const after = record.after.amount == null ? '미입력' : formatKRW(record.after.amount);
     const kind = record.kind === 'post' ? '납부 완료'
       : record.kind === 'undo_post' ? '완료 취소'
@@ -30,8 +33,8 @@ export const SyncConflictBanner: React.FC<{ onReview?: () => void }> = ({ onRevi
     <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-100">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className="font-bold"><AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />다른 기기에서 먼저 수정한 항목 {conflicts.length}건은 반영하지 않았습니다.</p>
-          <p className="mt-0.5 text-amber-200/80">지금 화면의 값이 최신입니다. 필요하면 해당 항목을 다시 수정해 주세요.</p>
+          <p className="font-bold"><AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />자동으로 반영하지 못한 수정 {conflicts.length}건이 있습니다.</p>
+          <p className="mt-0.5 text-amber-200/80">내역·고정 항목의 최신 기록과 대기 중인 수정을 비교해 주세요.</p>
           <ul className="mt-1 space-y-0.5">
             {conflicts.slice(0, 3).map(conflict => (
               <li key={conflict.operationId} className="flex items-center justify-between gap-2">

@@ -6,6 +6,7 @@ const setDocMock = vi.fn(async (..._args: unknown[]) => undefined);
 const getDocsMock = vi.fn(async (..._args: unknown[]) => ({ docs: [] as unknown[] }));
 const resetFetchMock = vi.fn();
 const getServerDocsMock = vi.fn(async (..._args: unknown[]) => ({ docs: [] as unknown[] }));
+const runTransactionMock = vi.fn();
 
 vi.mock('firebase/firestore', () => ({
   collection: (_db: unknown, _users: string, _uid: string, name: string): Target => ({ kind: 'collection', name }),
@@ -22,7 +23,7 @@ vi.mock('firebase/firestore', () => ({
   getDoc: vi.fn(),
   deleteDoc: vi.fn(),
   writeBatch: vi.fn(),
-  runTransaction: vi.fn(),
+  runTransaction: (...args: unknown[]) => runTransactionMock(...args),
 }));
 vi.mock('../lib/firebase', () => ({ auth: {}, firebaseApp: {} }));
 vi.mock('../lib/firestore', () => ({ db: {} }));
@@ -80,6 +81,7 @@ beforeEach(() => {
   resetFetchMock.mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
   getServerDocsMock.mockReset();
   getServerDocsMock.mockResolvedValue({ docs: [] });
+  runTransactionMock.mockReset();
   storage = new MemoryStorage();
   vi.stubGlobal('localStorage', storage);
   vi.stubGlobal('navigator', { onLine: true });
@@ -196,6 +198,61 @@ describe('R1: a full device', () => {
     storage.capacity = 10;
     setDocMock.mockRejectedValueOnce(new Error('offline'));
     expect(await sync.syncTransactionToFirestore({ id: 't2', type: 'expense', amount: 1 } as never)).toBe(false);
+  });
+});
+
+describe('old rejected income date writes', () => {
+  const server = { id: 'salary', type: 'income', amount: 3000000, categoryId: 'salary', source: 'manual',
+    revision: 1, lastOperationId: 'posted', localDate: '2026-10-10', occurredAt: '2026-10-10T10:00:00Z' };
+  const changed = { ...server, localDate: '2026-10-11', occurredAt: '2026-10-11T12:00:00Z', updatedAt: '2026-10-19T00:00:00Z' };
+  const queue = { id: 'old-date', operation: 'set', collectionName: 'transactions', documentId: 'salary', data: changed, queuedAt: '2026-10-19T00:00:00Z' };
+  it('recovers the rejected date atomically and refreshes the local revision', async () => {
+    const { sync } = await boot();
+    storage.setItem('brake_transactions', JSON.stringify([changed]));
+    storage.setItem('brake_firestore_outbox', JSON.stringify([queue]));
+    setDocMock.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'permission-denied' }));
+    const update = vi.fn();
+    runTransactionMock.mockImplementation(async (_db, callback) => callback({
+      get: async () => ({ exists: () => true, data: () => server }), update,
+    }));
+    expect(await sync.flushFirestoreOutbox()).toBe(true);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ name: 'transactions', id: 'salary' }), expect.objectContaining({ revision: 2, localDate: '2026-10-11', amount: 3000000 }));
+    expect(readCache<Array<{ revision: number }>>('brake_transactions')[0].revision).toBe(2);
+    expect(localStorage.getItem('brake_firestore_outbox')).toBeNull();
+  });
+  it('preserves a newer local edit made during recovery', async () => {
+    const { sync } = await boot();
+    storage.setItem('brake_transactions', JSON.stringify([{ ...changed, memo: '다음 수정', updatedAt: '2026-10-19T00:01:00Z' }]));
+    storage.setItem('brake_firestore_outbox', JSON.stringify([queue]));
+    setDocMock.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'permission-denied' }));
+    runTransactionMock.mockImplementation(async (_db, callback) => callback({
+      get: async () => ({ exists: () => true, data: () => server }), update: vi.fn(),
+    }));
+    expect(await sync.flushFirestoreOutbox()).toBe(true);
+    expect(readCache<Array<{ memo: string }>>('brake_transactions')[0].memo).toBe('다음 수정');
+  });
+  it('keeps a competing server change as a reviewable conflict and lets later writes continue', async () => {
+    const { sync } = await boot();
+    storage.setItem('brake_transactions', JSON.stringify([changed]));
+    storage.setItem('brake_firestore_outbox', JSON.stringify([queue, { ...queue, id: 'later', documentId: 'new-income', data: { type: 'income', amount: 1000 } }]));
+    setDocMock.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'permission-denied' }));
+    const update = vi.fn();
+    runTransactionMock.mockImplementation(async (_db, callback) => callback({
+      get: async () => ({ exists: () => true, data: () => ({ ...server, revision: 2 }) }), update,
+    }));
+    expect(await sync.flushFirestoreOutbox()).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+    expect(setDocMock).toHaveBeenCalledTimes(2);
+    expect(sync.getSyncConflicts()[0].documents[0].data).toMatchObject({ localDate: '2026-10-11' });
+    expect(readCache<Array<{ localDate: string; revision: number }>>('brake_transactions')[0]).toMatchObject({ localDate: '2026-10-10', revision: 2 });
+  });
+  it('keeps the original write pending on network errors instead of treating it as a date conflict', async () => {
+    const { sync } = await boot();
+    storage.setItem('brake_firestore_outbox', JSON.stringify([queue]));
+    setDocMock.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'unavailable' }));
+    expect(await sync.flushFirestoreOutbox()).toBe(false);
+    expect(runTransactionMock).not.toHaveBeenCalled();
+    expect(readCache<unknown[]>('brake_firestore_outbox')).toHaveLength(1);
   });
 });
 

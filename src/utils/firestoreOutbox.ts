@@ -140,7 +140,10 @@ export function subscribeSyncConflicts(listener: () => void): () => void {
 export function recordSyncConflict(entry: PendingFirestoreWrite, error: AmountConflictError) {
   const conflict: SyncConflict = {
     operationId: entry.operationId || entry.id,
-    documents: entry.documents || [],
+    documents: entry.documents || (entry.operation === 'set' ? [{
+      collectionName: entry.collectionName, documentId: entry.documentId, data: entry.data,
+      expectedRevision: Number(entry.data?.revision || 0),
+    }] : []),
     changeRecord: entry.changeRecord,
     queuedAt: entry.queuedAt,
     conflictedAt: new Date().toISOString(),

@@ -27,6 +27,7 @@ import {
   AmountChangeRecord,
 } from '../types';
 import { AmountConflictError, isAmountConflict } from './amountOperations';
+import { isQueuedIncomeDateCandidate, queuedIncomeDateRetry } from './queuedIncomeDate';
 import {
   registerOutboxFlusher,
   reportPendingCount,
@@ -93,6 +94,40 @@ export {
 } from './firestoreOutbox';
 
 let persistenceChain: Promise<void> = Promise.resolve();
+let notifyRecoveredWrite: (() => void) | null = null;
+
+async function retryRejectedIncomeDate(entry: PendingFirestoreWrite) {
+  const uid = getSignedInAccount().uid;
+  const reference = scopedDoc(COLLECTION_TRANSACTIONS, entry.documentId);
+  const saved = await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(reference);
+    const current = snapshot.exists() ? snapshot.data() : null;
+    try {
+      const retry = queuedIncomeDateRetry(entry, current);
+      if (retry.changed) transaction.update(reference, retry.data);
+      return { data: retry.data, conflict: null };
+    } catch (error) {
+      if (!isAmountConflict(error)) throw error;
+      return { data: current, conflict: error };
+    }
+  });
+  if (getSignedInAccount().uid !== uid) return;
+  const key = STORAGE_KEYS.TRANSACTIONS;
+  const cached = parseStoredObject<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+  const original = entry.data!;
+  // Do not replace an edit made while the network request was in flight.
+  safeSetItem(key, JSON.stringify(cached.flatMap(row => {
+    if (row.id !== entry.documentId || row.revision !== original.revision || row.localDate !== original.localDate
+      || row.updatedAt !== original.updatedAt) return [row];
+    return saved.data ? [{ ...saved.data, id: row.id }] : [];
+  })));
+  if (saved.conflict) {
+    notifyRecoveredWrite?.();
+    throw saved.conflict;
+  }
+  removeFirestoreWrite(entry.id);
+  notifyRecoveredWrite?.();
+}
 
 /**
  * Applies every document of one operation in a single Firestore transaction,
@@ -168,8 +203,14 @@ async function executeFirestoreWrite(entry: PendingFirestoreWrite) {
   if (entry.collectionName === COLLECTION_TRANSACTIONS) {
     // A cached copy without its OCR text must not erase the stored text.
     const write = toCloudTransactionWrite(entry.data || {});
-    if (write.merge) await setDoc(reference, stripUndefined(write.data), { merge: true });
-    else await setDoc(reference, stripUndefined(write.data));
+    try {
+      if (write.merge) await setDoc(reference, stripUndefined(write.data), { merge: true });
+      else await setDoc(reference, stripUndefined(write.data));
+    } catch (error) {
+      const code = String((error as { code?: unknown })?.code || '');
+      if (!code.endsWith('permission-denied') || !isQueuedIncomeDateCandidate(entry)) throw error;
+      await retryRejectedIncomeDate(entry);
+    }
     return;
   }
   await setDoc(reference, stripUndefined(entry.data || {}));
@@ -416,6 +457,7 @@ export function initFirestoreSync(
 ): Promise<{ hasCloudData: boolean }> {
   if (isSyncInitialized) return Promise.resolve({ hasCloudData: localCacheHasAnyData() });
   requireOwnerUid();
+  notifyRecoveredWrite = onNotify;
   isSyncInitialized = true;
   setLiveTransactionWindowStart(transactionWindowStart);
   safeSetItem(ACCOUNT_KEYS.transactionHistoryFloor, readHistoryFloor(transactionWindowStart));
@@ -535,6 +577,7 @@ export function initFirestoreSync(
 }
 
 export function stopFirestoreSync() {
+  notifyRecoveredWrite = null;
   activeUnsubscribers.forEach(unsubscribe => unsubscribe());
   activeUnsubscribers = [];
   isSyncInitialized = false;
