@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { setLogSink } from './lib/logger';
 import { createSessionToken, sessionTtlMs } from './session';
 import { listen } from './testServer';
+import type { AiDailyUsageStore } from './lib/budgetAiRuntime';
 
 const SECRET = 's'.repeat(48);
 const env = {
@@ -27,7 +28,7 @@ afterEach(async () => {
   running = null;
 });
 
-async function start({ gemini = null as FakeGemini | null, fetchImpl }: { gemini?: FakeGemini | null; fetchImpl?: typeof fetch } = {}) {
+async function start({ gemini = null as FakeGemini | null, fetchImpl, usageStore }: { gemini?: FakeGemini | null; fetchImpl?: typeof fetch; usageStore?: AiDailyUsageStore } = {}) {
   const adminAuth = {
     createCustomToken: vi.fn(async (uid: string) => `firebase-${uid}`),
     revokeRefreshTokens: vi.fn(async () => undefined),
@@ -38,6 +39,7 @@ async function start({ gemini = null as FakeGemini | null, fetchImpl }: { gemini
       getGeminiClient: () => gemini as never,
       getAdminServices: () => ({ adminAuth, adminDb: {} }) as never,
       fetchImpl,
+      aiDailyUsage: usageStore ?? { consume: vi.fn(async () => true) },
     },
   });
   running = await listen(app);
@@ -161,6 +163,50 @@ describe('migration and bank accounts', () => {
 });
 
 describe('AI routes: input validation and failure handling', () => {
+  it('applies the same fail-closed daily usage store to both new and legacy AI endpoints', async () => {
+    const consume = vi.fn(async () => false);
+    const gemini = geminiReturning('{}');
+    const { call, login } = await start({ gemini, usageStore: { consume } });
+    const token = await login();
+    const classification = { text: '처음 가본 서점 1000원', categories, merchantRules: [], defaultDate: '2026-10-19' };
+    expect((await call('POST', '/api/ai/classify', { token, body: classification })).status).toBe(429);
+    expect(
+      (await call('POST', '/api/ai/classify', { token, body: { ...classification, categories: categories.map(({ id, name, type }) => ({ id, name, type })), contract: 'budget-v1' } })).status,
+    ).toBe(429);
+    expect(
+      (
+        await call('POST', '/api/ai/feedback', {
+          token,
+          body: { monthSummary: { yearMonth: '2026-10' }, categoryBreakdown: [] },
+        })
+      ).status,
+    ).toBe(429);
+    expect(
+      (
+        await call('POST', '/api/ai/feedback', {
+          token,
+          body: {
+            contract: 'budget-v1',
+            summary: {
+              budgetPeriodKey: '2026-10',
+              variableExpenseLimit: 10000,
+              spentVariable: 1000,
+              fixedExpense: 0,
+              pendingVariable: 0,
+              remainingToday: 0,
+              currentSafeBalance: 9000,
+              remainingDays: 13,
+              dailyBurnRate: null,
+              projectedExpense: null,
+              categoryTotals: [],
+            },
+          },
+        })
+      ).status,
+    ).toBe(429);
+    expect(consume).toHaveBeenCalledTimes(4);
+    expect(gemini.models.generateContent).not.toHaveBeenCalled();
+  });
   it('classify rejects bad input with 400', async () => {
     const { call, login } = await start({ gemini: geminiReturning('{}') });
     const token = await login();

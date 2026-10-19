@@ -117,6 +117,7 @@ import { QuickEntrySuggestion, suggestQuickEntryCandidates } from './utils/quick
 import type { OnboardingResult } from './components/OnboardingSheet';
 
 const HistoryView = lazy(() => import('./components/HistoryView').then(module => ({ default: module.HistoryView })));
+const ConnectedBudgetView = lazy(() => import('./budget-app/ConnectedBudgetView').then(module => ({ default: module.ConnectedBudgetView })));
 const AnalyticsView = lazy(() => import('./components/AnalyticsView').then(module => ({ default: module.AnalyticsView })));
 import { clearAgentSession } from './agent/session';
 const AiView = lazy(() => import('./components/AiView').then(module => ({ default: module.AiView })));
@@ -1538,6 +1539,10 @@ export default function App() {
         }}
       />
     );
+  }
+
+  if (new URLSearchParams(window.location.search).get('view') === 'budget') {
+    return <Suspense fallback={<ViewLoading />}><ConnectedBudgetView onLock={handleLock} /></Suspense>;
   }
 
   return (

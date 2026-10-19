@@ -4,6 +4,8 @@ type Target = { kind: 'collection' | 'doc'; name: string; id?: string };
 const listeners = new Map<string, (snapshot: unknown) => void>();
 const setDocMock = vi.fn(async (..._args: unknown[]) => undefined);
 const getDocsMock = vi.fn(async (..._args: unknown[]) => ({ docs: [] as unknown[] }));
+const resetFetchMock = vi.fn();
+const getServerDocsMock = vi.fn(async (..._args: unknown[]) => ({ docs: [] as unknown[] }));
 
 vi.mock('firebase/firestore', () => ({
   collection: (_db: unknown, _users: string, _uid: string, name: string): Target => ({ kind: 'collection', name }),
@@ -16,6 +18,7 @@ vi.mock('firebase/firestore', () => ({
   },
   setDoc: (...args: unknown[]) => setDocMock(...args),
   getDocs: (...args: unknown[]) => getDocsMock(...args),
+  getDocsFromServer: (...args: unknown[]) => getServerDocsMock(...args),
   getDoc: vi.fn(),
   deleteDoc: vi.fn(),
   writeBatch: vi.fn(),
@@ -24,6 +27,7 @@ vi.mock('firebase/firestore', () => ({
 vi.mock('../lib/firebase', () => ({ auth: {}, firebaseApp: {} }));
 vi.mock('../lib/firestore', () => ({ db: {} }));
 vi.mock('./auth', () => ({
+  authenticatedFetch: (...args: unknown[]) => resetFetchMock(...args),
   getAccountStorageKey: (key: string) => key,
   getSignedInAccount: () => ({ uid: 'owner', name: 'o', isOwner: true }),
 }));
@@ -72,6 +76,10 @@ beforeEach(() => {
   setDocMock.mockClear();
   getDocsMock.mockReset();
   getDocsMock.mockResolvedValue({ docs: [] });
+  resetFetchMock.mockReset();
+  resetFetchMock.mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+  getServerDocsMock.mockReset();
+  getServerDocsMock.mockResolvedValue({ docs: [] });
   storage = new MemoryStorage();
   vi.stubGlobal('localStorage', storage);
   vi.stubGlobal('navigator', { onLine: true });
@@ -191,11 +199,36 @@ describe('R1: a full device', () => {
   });
 });
 
-describe('R4: full reset errors are not swallowed', () => {
-  it('rejects when a collection cannot be read', async () => {
+describe('R4: authenticated reset does not swallow server failures', () => {
+  it('uses the server endpoint so immutable financial audit records can be reset', async () => {
     const { sync } = await boot();
-    getDocsMock.mockRejectedValueOnce(new Error('network down'));
-    await expect(sync.clearFirestoreAllData()).rejects.toThrow('network down');
+    await sync.clearFirestoreAllData();
+    expect(resetFetchMock).toHaveBeenCalledWith('/api/account/reset-data', expect.objectContaining({ method: 'POST', body: JSON.stringify({ confirmation: '내 가계부 초기화' }) }));
+    expect(getDocsMock).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('rejects unsuccessful or missing JSON confirmations (http ok: %s)', async ok => {
+    const { sync } = await boot();
+    resetFetchMock.mockResolvedValueOnce({ ok, json: async () => ({ error: 'reset_incomplete' }) });
+    await expect(sync.clearFirestoreAllData()).rejects.toThrow('완료되지');
+  });
+});
+
+describe('complete account CSV source', () => {
+  it('reads all server rows without a date query or reliance on the cached window', async () => {
+    const { sync } = await boot();
+    getServerDocsMock.mockResolvedValueOnce(docSnapshot([{ id: 'old', data: { localDate: '2020-01-01', amount: 1000 } }]));
+    getServerDocsMock.mockResolvedValueOnce(docSnapshot([{ id: 'food', data: { name: '식비' } }]));
+    const result = await sync.fetchAllTransactionsForExport();
+    expect(result.transactions).toEqual([{ id: 'old', localDate: '2020-01-01', amount: 1000 }]);
+    expect(result.categories).toEqual([{ id: 'food', name: '식비' }]);
+    expect(getServerDocsMock.mock.calls.map(args => args[0])).toEqual([
+      { kind: 'collection', name: 'transactions' }, { kind: 'collection', name: 'categories' },
+    ]);
+  });
+  it('does not silently export a partial cache when the server is unavailable', async () => {
+    const { sync } = await boot();
+    getServerDocsMock.mockRejectedValueOnce(new Error('offline'));
+    await expect(sync.fetchAllTransactionsForExport()).rejects.toThrow('offline');
   });
 });
 

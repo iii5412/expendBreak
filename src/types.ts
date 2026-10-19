@@ -106,6 +106,9 @@ export interface InstallmentPlan {
 }
 
 export interface Transaction {
+  budgetPeriodKey?: string;
+  expenseNature?: 'fixed' | 'variable';
+  isOneOff?: boolean;
   id: string;
   type: TransactionType;
   amount: number; // KRW Integer
@@ -142,6 +145,8 @@ export interface Transaction {
 }
 
 export interface Budget {
+  categoryCountLimits?: Record<string, number>;
+  categoryAmountLimits?: Record<string, number>;
   yearMonth: string; // YYYY-MM
   totalLimit: number; // Persisted legacy field used as the user-set monthly allowance limit
   thresholds: number[]; // e.g. [0.70, 0.85, 1.00]
@@ -150,6 +155,12 @@ export interface Budget {
 }
 
 export interface RecurringTemplate {
+  /** Additional non-business dates supplied by the user (public/bank holidays). */
+  nonBusinessDates?: string[];
+  budgetSetupRole?: 'salary' | 'fixed';
+  /** Explicit opt-in from the new budget UI; legacy auto rows remain manual. */
+  budgetAutoPostingEnabled?: boolean;
+  budgetAutoPostingStartDate?: string;
   id: string;
   type: TransactionType;
   name: string;
@@ -185,6 +196,7 @@ export interface RecurringTemplate {
 }
 
 export interface RecurringOccurrence {
+  budgetPeriodKey?: string;
   id: string;
   templateId: string;
   occurrenceKey: string; // templateId + YYYY-MM-DD
@@ -287,6 +299,8 @@ export type WidgetPrivacyMode = 'unlock_required' | 'always_show' | 'amounts_hid
 export type AppTheme = 'dark' | 'light';
 
 export interface UserProfile {
+  categoryCountLimits?: Record<string, number>;
+  categoryAmountLimits?: Record<string, number>;
   uid: string;
   displayName: string;
   email: string;

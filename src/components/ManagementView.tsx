@@ -639,6 +639,14 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
         meta={<span>현재 섹션 · {activeSectionLabel}</span>}
       />
 
+      <a
+        href="/?view=budget"
+        className="flex min-h-12 items-center justify-between rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 font-bold text-emerald-200"
+      >
+        <span>새 예산 화면 열기</span>
+        <span aria-hidden="true">→</span>
+      </a>
+
       {/* Top Sub-Navigation Bar */}
       <div className="no-scrollbar flex gap-1 overflow-x-auto border-b border-slate-800 pb-3 text-xs">
         <button

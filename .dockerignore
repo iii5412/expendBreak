@@ -1,3 +1,4 @@
+# Allowlist excludes .env, credentials, Android keystores and account exports.
 # The image is assembled from build output produced by the deploy workflow
 # (dist, server-dist, live-update); sources and local files stay out.
 *

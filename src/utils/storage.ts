@@ -1,3 +1,4 @@
+import { transactionsCsv } from './transactionCsv';
 import {
   Transaction,
   Category,
@@ -1315,6 +1316,7 @@ export function createOccurrenceForPeriod(
   const now = new Date().toISOString();
   const occurrenceKey = `${template.id}_${scheduledDate}`;
   const created: RecurringOccurrence = {
+    budgetPeriodKey: yearMonth,
     id: `occ_${occurrenceKey.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
     templateId: template.id,
     occurrenceKey,
@@ -1516,6 +1518,9 @@ export async function postOccurrenceToTransaction(
   // happened (here or on another device) and the occurrence is stale.
   if (getTransactions().some(transaction => transaction.id === transactionId)) return null;
   const newTx: Omit<Transaction, 'revision' | 'lastOperationId'> = {
+    budgetPeriodKey: target.budgetPeriodKey || getYearMonthForDate(target.scheduledDate, getUserProfile().monthStartDay),
+    expenseNature: template.expenseNature === 'variable_estimate' ? 'variable' : 'fixed',
+    isOneOff: false,
     id: transactionId,
     type: occurrenceType,
     amount,
@@ -1876,29 +1881,7 @@ export function saveCachedAIFeedback(periodId: string, feedback: AIFeedbackResul
 export function exportTransactionsCSV(yearMonth?: string, monthStartDay: number = 1): string {
   const period = yearMonth ? getAccountingPeriod(yearMonth, monthStartDay) : null;
   const txs = getTransactions().filter(transaction => !period || isDateInPeriod(transaction.localDate, period));
-  const cats = getCategories();
-  const catMap = new Map(cats.map(c => [c.id, c.name]));
-  const csvCell = (value: string | number) => {
-    let text = String(value ?? '');
-    if (/^[=+\-@]/.test(text)) text = `'${text}`;
-    return `"${text.replace(/"/g, '""')}"`;
-  };
-
-  const headers = ['날짜', '유형', '금액(KRW)', '카테고리', '사용처/거래처', '메모', '생활태그', '입력방식', '영수증번호', '영수증품목'];
-  const rows = txs.map(t => [
-    csvCell(t.localDate),
-    csvCell(t.type === 'income' ? '수입' : '지출'),
-    csvCell(t.amount),
-    csvCell(catMap.get(t.categoryId) || '기타'),
-    csvCell(t.merchant || ''),
-    csvCell(t.memo || ''),
-    csvCell((t.tags || []).join('|')),
-    csvCell(t.source === 'receipt' ? '영수증OCR' : t.source === 'ai' ? 'AI자동' : t.source === 'voice' ? '음성' : t.source === 'sms' ? 'SMS자동' : '직접입력'),
-    csvCell(t.receipt?.receiptNumber || ''),
-    csvCell((t.receipt?.lineItems || []).map(item => item.name).join('|')),
-  ]);
-
-  return '\uFEFF' + [headers.map(csvCell).join(','), ...rows.map(r => r.join(','))].join('\n');
+  return transactionsCsv(txs, getCategories());
 }
 
 // Bank Account CRUD
@@ -2071,11 +2054,19 @@ export class ResetIncompleteError extends Error {
  * cloud; running the reset again deletes only the remaining documents.
  */
 export async function resetAllData(): Promise<void> {
+  const uid = getSignedInAccount().uid;
+  const generation = sessionGeneration;
+  const assertSession = () => {
+    if (uid !== getSignedInAccount().uid || generation !== sessionGeneration) throw new Error('로그인 계정이 변경되었습니다.');
+  };
   stopFirestoreSync();
   try {
-    await flushFirestoreOutbox();
+    if (!await flushFirestoreOutbox()) throw new Error('저장 대기 중인 변경사항을 먼저 동기화해 주세요.');
+    assertSession();
     await clearAllReceiptImages();
+    assertSession();
     await clearFirestoreAllData();
+    assertSession();
   } catch (error) {
     console.error('Full reset did not complete:', error);
     storageReady = false;

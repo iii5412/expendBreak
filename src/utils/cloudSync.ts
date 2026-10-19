@@ -124,3 +124,5 @@ export const commitConditionalOperation = (input: {
   documents: ConditionalDocumentWrite[];
   changeRecord?: AmountChangeRecord;
 }) => persistLazy(writes.conditionalOperationWrite(input));
+
+export const fetchAllTransactionsForExport = lazy(module => module.fetchAllTransactionsForExport);

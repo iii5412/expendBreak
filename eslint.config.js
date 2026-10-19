@@ -9,6 +9,8 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'server-dist/**',
+      'build/**',
+      'live-update/**',
       'android/**',
       'artifacts/**',
       'coverage/**',

@@ -4,9 +4,9 @@ import {
   setDoc,
   collection,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   deleteDoc,
-  writeBatch,
   runTransaction,
   query,
   where,
@@ -36,7 +36,7 @@ import {
 } from './syncStatus';
 import { describeFirestoreWriteError, sanitizeUserProfileForFirestore, stripUndefined } from './firestorePayload';
 import { mergeFetchedHistory, mergeTransactionWindow } from './transactionWindow';
-import { getAccountStorageKey, getSignedInAccount } from './auth';
+import { authenticatedFetch, getAccountStorageKey, getSignedInAccount } from './auth';
 import { safeSetItem } from './safeStorage';
 import { overlayDocument, overlayList, overlayMap } from './outboxOverlay';
 import { stripReceiptBulk, toCloudTransactionWrite } from './receiptCache';
@@ -354,6 +354,22 @@ export async function loadTransactionHistoryFrom(startDate: string, onNotify: Sy
   onNotify();
 }
 
+/** Full server read, independent of the recent-history cache and its storage quota. */
+export async function fetchAllTransactionsForExport() {
+  const uid = getSignedInAccount().uid;
+  if (!await flushFirestoreOutbox()) throw new Error('동기화를 완료한 뒤 내보내 주세요.');
+  if (uid !== getSignedInAccount().uid) throw new Error('로그인 계정이 변경되었습니다.');
+  const [transactions, categories] = await Promise.all([
+    getDocsFromServer(collection(db, 'users', uid, COLLECTION_TRANSACTIONS)),
+    getDocsFromServer(collection(db, 'users', uid, COLLECTION_CATEGORIES)),
+  ]);
+  if (uid !== getSignedInAccount().uid) throw new Error('로그인 계정이 변경되었습니다.');
+  return {
+    transactions: transactions.docs.map(d => ({ ...d.data(), id: d.id } as Transaction)),
+    categories: categories.docs.map(d => ({ ...d.data(), id: d.id } as Category)),
+  };
+}
+
 /** Every source the first snapshot round has to cover before the cache is whole. */
 const SYNC_SOURCES = [
   'profile',
@@ -566,29 +582,14 @@ export const deletePaymentCardFromFirestore = (id: string) => persistFirestoreWr
  * what is left.
  */
 export async function clearFirestoreAllData() {
-  const collectionsToClear = [
-    COLLECTION_TRANSACTIONS,
-    COLLECTION_CATEGORIES,
-    COLLECTION_BUDGETS,
-    COLLECTION_RECURRING_TEMPLATES,
-    COLLECTION_RECURRING_OCCURRENCES,
-    COLLECTION_MERCHANT_RULES,
-    COLLECTION_BANK_ACCOUNTS,
-    COLLECTION_PAYMENT_CARDS,
-    COLLECTION_CYCLE_BASELINES,
-    COLLECTION_QUICK_ENTRIES,
-    COLLECTION_AMOUNT_CHANGES,
-  ];
-
-  for (const colName of collectionsToClear) {
-    const snap = await getDocs(scopedCollection(colName));
-    for (let offset = 0; offset < snap.docs.length; offset += 400) {
-      const batch = writeBatch(db);
-      snap.docs.slice(offset, offset + 400).forEach(docSnap => batch.delete(docSnap.ref));
-      await batch.commit();
-    }
-  }
-  await deleteDoc(scopedDoc(COLLECTION_APP_SETTINGS, DOC_GLOBAL_SETTINGS));
+  const uid = getSignedInAccount().uid;
+  const response = await authenticatedFetch('/api/account/reset-data', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: '내 가계부 초기화' }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok || result?.ok !== true) throw new Error('계정 초기화가 완료되지 않았습니다.');
+  if (uid !== getSignedInAccount().uid) throw new Error('로그인 계정이 변경되었습니다.');
 }
 
 /** The receipt's OCR text, which the local cache leaves out. */

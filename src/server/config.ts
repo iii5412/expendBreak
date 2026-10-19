@@ -51,7 +51,7 @@ export function loadServerConfig(env: ServerEnv): ServerConfig {
 
   return {
     production,
-    port: Number(env.PORT) || 3000,
+    port: Number(env.PORT) || (production ? 8080 : 3000),
     ownerUid,
     sessionSecrets: resolveSessionSecrets(env, { warn: message => warnings.push(String(message)) }),
     accounts,

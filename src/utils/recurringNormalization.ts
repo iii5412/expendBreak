@@ -8,12 +8,12 @@ const toLocalDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
-const adjustForWeekend = (dateText: string, policy: RecurringTemplate['holidayPolicy']) => {
+const adjustForWeekend = (dateText: string, policy: RecurringTemplate['holidayPolicy'], nonBusinessDates: string[] = []) => {
   if (policy === 'fixed_date') return dateText;
   const [year, month, day] = dateText.split('-').map(Number);
   const date = new Date(year, month - 1, day);
   const direction = policy === 'previous_business_day' ? -1 : 1;
-  while (date.getDay() === 0 || date.getDay() === 6) date.setDate(date.getDate() + direction);
+  while (date.getDay() === 0 || date.getDay() === 6 || nonBusinessDates.includes(toLocalDate(date))) date.setDate(date.getDate() + direction);
   return toLocalDate(date);
 };
 
@@ -44,14 +44,16 @@ const adjustWithinCycle = (
   nominalDate: string,
   policy: RecurringTemplate['holidayPolicy'],
   monthStartDay: number,
+  nonBusinessDates: string[] = [],
 ) => {
-  const adjusted = adjustForWeekend(nominalDate, policy);
+  const adjusted = adjustForWeekend(nominalDate, policy, nonBusinessDates);
   const cycle = cycleOf(nominalDate, monthStartDay);
   if (cycleOf(adjusted, monthStartDay) === cycle) return adjusted;
 
   const reversed = adjustForWeekend(
     nominalDate,
     policy === 'previous_business_day' ? 'next_business_day' : 'previous_business_day',
+    nonBusinessDates,
   );
   return cycleOf(reversed, monthStartDay) === cycle ? reversed : nominalDate;
 };
@@ -79,7 +81,7 @@ export function getScheduledDatesForMonth(
     while (toLocalDate(cursor) <= monthEnd) {
       const dateText = toLocalDate(cursor);
       if (!template.endDate || dateText <= template.endDate) {
-        dates.push(adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay));
+        dates.push(adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay, template.nonBusinessDates));
       }
       cursor.setDate(cursor.getDate() + 7);
     }
@@ -94,7 +96,7 @@ export function getScheduledDatesForMonth(
   // lowering the payday setting recreated that gap for existing items.
   if (cycleOf(dateText, monthStartDay) < cycleOf(template.startDate, monthStartDay)) return [];
   if (template.endDate && dateText > template.endDate) return [];
-  return [adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay)];
+  return [adjustWithinCycle(dateText, template.holidayPolicy, monthStartDay, template.nonBusinessDates)];
 }
 
 export interface NormalizedRecurringOccurrences {

@@ -1,7 +1,7 @@
 {
   "name": "지출브레이크",
   "short_name": "지출브레이크",
-  "description": "PIN으로 보호되는 1인용 수입·지출 관리 앱",
+  "description": "계정별 PIN으로 보호하는 개인·가족 가계부, 지출브레이크",
   "lang": "ko",
   "dir": "ltr",
   "start_url": "/",
@@ -28,6 +28,14 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "오늘의 소비 여유",
+      "short_name": "소비 여유",
+      "url": "/?view=budget",
+      "description": "새 예산 화면 열기"
     }
   ]
 }

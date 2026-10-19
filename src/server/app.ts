@@ -23,8 +23,11 @@ import {
 import { createAppUpdateRouter } from './routes/appUpdate';
 import { createLiveUpdateRouter } from './routes/liveUpdate';
 import { createBankAccountsRouter } from './routes/bankAccounts';
+import { createAccountDataRouter } from './routes/accountData';
 import { createCategoryRecommendRouter } from './routes/ai/categoryRecommend';
 import { createClassifyRouter } from './routes/ai/classify';
+import { createBudgetAiRouter } from './routes/ai/budgetAi';
+import { createBudgetAiRuntime, firestoreAiUsageStore, type AiDailyUsageStore } from './lib/budgetAiRuntime';
 import { createFeedbackRouter } from './routes/ai/feedback';
 import { createFinanceChatRouter } from './routes/ai/financeChat';
 import { createAgentRouter } from './routes/ai/agent';
@@ -37,7 +40,7 @@ import type { RouteDeps } from './routes/types';
 export interface CreateAppOptions {
   env: ServerEnv;
   /** Replace the outside world (Firebase Admin, Gemini, OpenAI) — used by tests. */
-  deps?: Partial<Pick<RouteDeps, 'getGeminiClient' | 'getAdminServices' | 'fetchImpl'>>;
+  deps?: Partial<Pick<RouteDeps, 'getGeminiClient' | 'getAdminServices' | 'fetchImpl'>> & { aiDailyUsage?: AiDailyUsageStore };
 }
 
 export interface CreatedApp {
@@ -133,10 +136,13 @@ export function createApp({ env, deps = {} }: CreateAppOptions): CreatedApp {
   app.use('/api/ai', createCardStatementRouter(routeDeps));
   app.use('/api/ai', createReceiptRouter(routeDeps));
   app.use('/api/ai', createVoiceRouter(routeDeps));
-  app.use('/api/ai', createClassifyRouter(routeDeps));
+  const budgetAiRuntime = createBudgetAiRuntime(deps.aiDailyUsage ?? firestoreAiUsageStore(routeDeps));
+  app.use('/api/ai', createBudgetAiRouter(routeDeps, budgetAiRuntime));
+  app.use('/api/ai', createClassifyRouter(routeDeps, budgetAiRuntime));
   app.use('/api/ai', createCategoryRecommendRouter(routeDeps));
-  app.use('/api/ai', createFeedbackRouter(routeDeps));
+  app.use('/api/ai', createFeedbackRouter(routeDeps, budgetAiRuntime));
   app.use('/api/bank-accounts', createBankAccountsRouter(routeDeps));
+  app.use('/api/account', createAccountDataRouter(routeDeps));
 
   // Auth endpoint to check status
   app.get('/api/auth/status', (_req, res) => {
