@@ -735,45 +735,57 @@ export function restoreTransaction(transaction: Transaction, linkedOccurrenceIds
 }
 
 export function updateTransaction(id: string, updates: Partial<Transaction>): Transaction | null {
-  let txs = getTransactions();
-  let idx = txs.findIndex(t => t.id === id);
+  const txs = getTransactions();
+  const idx = txs.findIndex(t => t.id === id);
   if (idx === -1) return null;
-
-  const nextType = updates.type ?? txs[idx].type;
-  const nextCategoryId = updates.categoryId ?? txs[idx].categoryId;
+  const previous = txs[idx];
+  const nextType = updates.type ?? previous.type;
+  const nextCategoryId = updates.categoryId ?? previous.categoryId;
   assertCategoryMatchesType(nextType, nextCategoryId);
+  const nextAmount = updates.amount == null ? previous.amount : Math.round(Number(updates.amount));
+  if (!Number.isSafeInteger(nextAmount) || nextAmount <= 0) throw new Error('1원 이상의 정수 금액을 입력해 주세요.');
+  const protectedChange = nextAmount !== previous.amount
+    || (updates.localDate !== undefined && updates.localDate !== previous.localDate)
+    || (updates.recurringOccurrenceKey !== undefined && updates.recurringOccurrenceKey !== previous.recurringOccurrenceKey);
+  const now = new Date().toISOString();
 
-  // A history edit of a posted recurring payment's amount is the same
-  // correction as editing it from the fixed-expense screen: occurrence and
-  // transaction move together under one operation (PRD §8 "같은 도메인 동작").
-  const nextAmount = updates.amount == null ? null : Math.round(Number(updates.amount));
-  if (nextAmount != null && nextAmount !== Math.round(txs[idx].amount)) {
+  if (protectedChange) {
     const linkedOccurrence = readJson<RecurringOccurrence[]>(STORAGE_KEYS.RECURRING_OCCURRENCES, [])
       .find(occurrence => occurrence.status === 'posted'
-        && (occurrence.transactionId === id || (!occurrence.transactionId && occurrence.occurrenceKey === txs[idx].recurringOccurrenceKey)));
+        && (occurrence.transactionId === id || (!occurrence.transactionId && occurrence.occurrenceKey === previous.recurringOccurrenceKey)));
     if (linkedOccurrence) {
-      const operation = buildPlanAmountOperation(linkedOccurrence, txs[idx], { amount: nextAmount }, new Date().toISOString());
-      applyAmountOperation(operation);
-      txs = getTransactions();
-      idx = txs.findIndex(t => t.id === id);
-      if (idx === -1) return null;
-      const { amount: _amount, ...rest } = updates;
-      void _amount;
-      updates = rest;
-      if (Object.keys(updates).length === 0) return txs[idx];
+      const operation = buildPlanAmountOperation(linkedOccurrence, previous, { amount: nextAmount }, now);
+      // A history form submits amount, actual date and metadata together. Keep
+      // them in the SAME revision operation: a second ordinary set carrying
+      // the advanced revision would be rejected for a changed localDate.
+      operation.transaction = {
+        ...operation.transaction!, ...updates, id: previous.id, amount: nextAmount,
+        updatedAt: now, revision: revisionOf(previous) + 1, lastOperationId: operation.operationId,
+      };
+      return applyAmountOperation(operation) ? operation.transaction : null;
+    }
+    if (nextAmount !== previous.amount && (previous.recurringOccurrenceKey || previous.recurringTemplateId)) {
+      throw new Error('연결된 정기 항목을 찾지 못했습니다. 동기화 후 다시 수정해 주세요.');
     }
   }
 
-  txs[idx] = {
-    ...txs[idx],
-    ...updates,
-    updatedAt: new Date().toISOString(),
-  };
-
-  safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
-  syncTransactionToFirestore(txs[idx]);
+  const transaction: Transaction = { ...previous, ...updates, id: previous.id, amount: nextAmount, updatedAt: now };
+  if (protectedChange && previous.revision !== undefined) {
+    const operationId = newOperationId();
+    transaction.revision = revisionOf(previous) + 1;
+    transaction.lastOperationId = operationId;
+    safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs.map(t => t.id === id ? transaction : t)));
+    void commitConditionalOperation({ operationId, documents: [{
+      collectionName: TRANSACTIONS_COLLECTION, documentId: id,
+      data: transaction as unknown as Record<string, unknown>, expectedRevision: revisionOf(previous),
+    }] });
+  } else {
+    txs[idx] = transaction;
+    safeSetItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+    syncTransactionToFirestore(transaction);
+  }
   notifyListeners();
-  return txs[idx];
+  return transaction;
 }
 
 export interface DeletedTransactionSnapshot {

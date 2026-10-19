@@ -251,22 +251,27 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       return;
     }
     setEditError(null);
-    onUpdateTransaction(editingTx.id, {
-      amount,
-      merchant: editingTx.merchant,
-      memo: editingTx.memo,
-      categoryId: editingTx.categoryId,
-      localDate: editingTx.localDate,
-      occurredAt: `${editingTx.localDate}T12:00:00.000Z`,
-      type: editingTx.type,
-      tags: normalizeTags(editingTx.tags || []),
-      paymentMethodType,
-      accountId: paymentMethodType === 'account' ? editingTx.accountId || null : null,
-      cardId: paymentMethodType === 'card' ? editingTx.cardId || null : null,
-      installment: editingTx.type === 'expense' && paymentMethodType === 'card'
-        ? editingTx.installment ?? null
-        : null,
-    });
+    try {
+      onUpdateTransaction(editingTx.id, {
+        amount,
+        merchant: editingTx.merchant,
+        memo: editingTx.memo,
+        categoryId: editingTx.categoryId,
+        localDate: editingTx.localDate,
+        occurredAt: `${editingTx.localDate}T12:00:00.000Z`,
+        type: editingTx.type,
+        tags: normalizeTags(editingTx.tags || []),
+        paymentMethodType,
+        accountId: paymentMethodType === 'account' ? editingTx.accountId || null : null,
+        cardId: paymentMethodType === 'card' ? editingTx.cardId || null : null,
+        installment: editingTx.type === 'expense' && paymentMethodType === 'card'
+          ? editingTx.installment ?? null
+          : null,
+      });
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : '수정하지 못했습니다. 동기화 상태를 확인해 주세요.');
+      return;
+    }
     setEditingTx(null);
   };
 

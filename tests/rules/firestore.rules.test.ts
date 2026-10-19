@@ -139,6 +139,21 @@ describe('revision protocol', () => {
     await assertSucceeds(updateDoc(transactionRef(), { memo: '메모', revision: 1 }));
   });
 
+  it('reproduces posted income date edits denied without a revision advance', async () => {
+    const ref = doc(owner(), 'users/owner/transactions/salary-posted');
+    await assertSucceeds(setDoc(ref, transaction({ type: 'income', categoryId: 'salary', revision: 1, lastOperationId: 'salary-post' })));
+    await assertFails(updateDoc(ref, { localDate: '2026-09-21', revision: 1 }));
+    await assertSucceeds(updateDoc(ref, { localDate: '2026-09-21', revision: 2, lastOperationId: 'salary-date-edit' }));
+  });
+
+  it('reproduces the second date write of a split amount/date edit being denied', async () => {
+    const ref = doc(owner(), 'users/owner/transactions/salary-split');
+    await assertSucceeds(setDoc(ref, transaction({ type: 'income', categoryId: 'salary', revision: 1, lastOperationId: 'salary-post' })));
+    await assertSucceeds(updateDoc(ref, { amount: 3200000, revision: 2, lastOperationId: 'amount-edit' }));
+    await assertFails(updateDoc(ref, { amount: 3200000, localDate: '2026-09-21', revision: 2 }));
+    await assertSucceeds(updateDoc(ref, { amount: 3300000, localDate: '2026-09-21', revision: 3, lastOperationId: 'combined-edit' }));
+  });
+
   it('rejects an occurrence update that moves the revision backwards', async () => {
     await assertFails(updateDoc(occurrenceRef(), { revision: 2, lastOperationId: 'op1' }));
     await assertFails(updateDoc(occurrenceRef(), { revision: 1 }));
