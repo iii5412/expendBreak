@@ -55,6 +55,8 @@ interface DashboardViewProps {
   cycleClosingSlot?: React.ReactNode;
   /** One-tap quick entry chips, rendered under the allowance card. */
   quickEntrySlot?: React.ReactNode;
+  /** Monthly coupon count limits per category ID (e.g. delivery_food: 6). */
+  categoryCountLimits?: Record<string, number>;
 }
 
 /** `2026-08-01` -> `8/1`. */
@@ -126,6 +128,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   baselineChangeDismissed,
   cycleClosingSlot,
   quickEntrySlot,
+  categoryCountLimits,
 }) => {
   const getAlertBadgeProps = () => {
     switch (summary.alertLevel) {
@@ -233,14 +236,81 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const isIncomplete = summary.calculationStatus === 'incomplete';
   const isEstimated = summary.calculationStatus === 'estimated' || summary.isProjected;
   const showsShortfall = summary.spendPeriodStatus !== 'closed' && !isIncomplete && summary.fundingShortfall > 0;
+  const todayStr = getLocalDateString(new Date());
   const homeActions = buildHomeActions({
     summary, occurrences: upcomingOccurrences, transactions, bankAccounts, cardSettlementSummary,
-    showPaydayPrompt, today: getLocalDateString(new Date()),
+    showPaydayPrompt, today: todayStr,
   });
   const runHomeAction = (target: typeof homeActions[number]['target']) => {
     if (target === 'payday') onStartPayday();
     else onNavigateTab(target);
   };
+
+  // Non-diluted today allowance & 3-segment waterfall bar metrics
+  const periodVariableTxs = transactions.filter(
+    t => t.type === 'expense'
+      && !t.recurringTemplateId
+      && t.role !== 'transfer'
+      && t.role !== 'card_settlement'
+      && t.localDate >= summary.spendPeriodStartDate
+      && t.localDate <= summary.spendPeriodEndDate,
+  );
+  const spentToday = periodVariableTxs
+    .filter(t => t.localDate === todayStr)
+    .reduce((sum, t) => sum + Math.floor(t.amount || 0), 0);
+  const spentBeforeToday = Math.max(0, summary.confirmedVariableExpenses - spentToday);
+  const pendingVariableAmount = upcomingOccurrences
+    .filter(occ => {
+      if (occ.status === 'posted' || occ.status === 'skipped') return false;
+      const tmpl = recurringTemplates.find(candidate => candidate.id === occ.templateId);
+      const type = occ.typeSnapshot || tmpl?.type || 'expense';
+      return type === 'expense' && tmpl?.expenseNature === 'variable_estimate';
+    })
+    .reduce((sum, occ) => sum + Math.floor(resolveRecurringAmount(occ, transactions).amount || 0), 0);
+  const daysRem = Math.max(1, summary.spendDaysRemaining);
+  const safeBalanceAtStartOfDay = Math.max(0, summary.spendableLimit - spentBeforeToday - pendingVariableAmount);
+  const todayFixedAllowance = Math.max(0, Math.floor(safeBalanceAtStartOfDay / daysRem));
+  const remainingToday = todayFixedAllowance - spentToday;
+  const yesterdayDate = (() => {
+    const d = new Date(`${todayStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const spentYesterday = periodVariableTxs
+    .filter(t => t.localDate === yesterdayDate)
+    .reduce((sum, t) => sum + Math.floor(t.amount || 0), 0);
+  const savedYesterdayRollover = summary.spendPeriodStatus === 'active'
+    && yesterdayDate >= summary.spendPeriodStartDate
+    && todayFixedAllowance > 0
+    && spentYesterday < todayFixedAllowance;
+
+  const waterfallSafe = Math.max(0, summary.spendableLimit - summary.confirmedVariableExpenses - pendingVariableAmount);
+  const waterfallTotal = Math.max(1, summary.confirmedVariableExpenses + pendingVariableAmount + waterfallSafe);
+  const waterfallSpentPct = (summary.confirmedVariableExpenses / waterfallTotal) * 100;
+  const waterfallPendingPct = (pendingVariableAmount / waterfallTotal) * 100;
+  const waterfallSafePct = (waterfallSafe / waterfallTotal) * 100;
+
+  const effectiveCoupons: Record<string, number> =
+    categoryCountLimits && Object.keys(categoryCountLimits).length > 0
+      ? categoryCountLimits
+      : { delivery_food: 6, taxi_transport: 8 };
+  const couponCards = Object.entries(effectiveCoupons)
+    .filter(([, limit]) => limit > 0)
+    .map(([catId, limit]) => {
+      const cat = categories.find(c => c.id === catId);
+      const used = periodVariableTxs.filter(t => t.categoryId === catId && t.localDate <= todayStr).length;
+      const label = cat?.name || (catId === 'delivery_food' ? '배달음식' : catId === 'taxi_transport' ? '택시/교통' : catId);
+      const icon = catId.includes('delivery') || label.includes('배달') ? '🛵' : catId.includes('taxi') || label.includes('택시') ? '🚕' : '🎟️';
+      return {
+        id: catId,
+        label,
+        icon,
+        limit,
+        used,
+        remaining: Math.max(0, limit - used),
+        over: Math.max(0, used - limit),
+      };
+    });
 
   return (
     <div className="space-y-6 pb-24">
@@ -347,6 +417,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 : showsShortfall ? `고정지출·카드대금·저축 계획이 수입보다 ${formatKRW(summary.fundingShortfall)} 많습니다. 생활비 사용 ${formatKRW(summary.confirmedVariableExpenses)}은 별도 지표이며, 실제 통장 잔액이 아닙니다.`
                 : `급여에서 계좌 고정 이체와 카드대금을 확보하고, 남은 생활비를 ${summary.spendDaysRemaining}일로 나눈 안전선입니다.${summary.suggestedAmountCount > 0 ? ` 전 주기 제안 금액 ${summary.suggestedAmountCount}건이 포함된 예상치입니다.` : ''}${summary.integrityIssueCount > 0 ? ` 기록 차이 확인 중 ${summary.integrityIssueCount}건은 연결 거래 금액으로 계산했습니다.` : ''}`}
             </p>
+
+            {summary.spendPeriodStatus === 'active' && !isIncomplete && !showsShortfall && (
+              <div className="mt-4 space-y-2">
+                {savedYesterdayRollover && (
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-bold text-emerald-300">
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>어제 절약으로 오늘 일일 예산이 +{formatKRW(Math.max(0, todayFixedAllowance - spentYesterday))} 늘었어요!</span>
+                  </div>
+                )}
+                <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-800/90 bg-slate-950/60 p-3 text-xs">
+                  <div>
+                    <span className="block text-[11px] text-slate-400">오늘 배정 예산</span>
+                    <strong className="eb-tabular mt-0.5 block text-sm font-extrabold text-slate-100">
+                      {formatKRW(todayFixedAllowance)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="block text-[11px] text-slate-400">오늘 쓴 금액</span>
+                    <strong className={`eb-tabular mt-0.5 block text-sm font-extrabold ${spentToday > 0 ? 'text-amber-300' : 'text-slate-300'}`}>
+                      {spentToday > 0 ? `−${formatKRW(spentToday)}` : '0원'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="block text-[11px] text-slate-400">
+                      {remainingToday >= 0 ? '오늘 남은 가능액' : '오늘 초과액'}
+                    </span>
+                    <strong className={`eb-tabular mt-0.5 block text-sm font-extrabold ${remainingToday >= 0 ? 'text-emerald-300' : 'text-rose-400'}`}>
+                      {remainingToday >= 0 ? formatKRW(remainingToday) : `−${formatKRW(Math.abs(remainingToday))}`}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {homeActions.length > 0 && (
               <ul className="mt-4 divide-y divide-slate-800/80 border-y border-slate-800/80" aria-label="확인할 일">
                 {homeActions.map(action => (
@@ -407,6 +511,48 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             />
           </div>
 
+          {/* 3-segment waterfall bar: Spent vs Pending Variable vs Safe Remaining */}
+          {summary.spendableLimit > 0 && (
+            <div className="mt-3 rounded-xl border border-slate-800/80 bg-slate-950/50 p-3">
+              <div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-400">
+                <span className="font-semibold text-slate-300">생활비 한도 3단 분해</span>
+                <span className="eb-tabular">총 한도 {formatKRW(summary.spendableLimit)}</span>
+              </div>
+              <div
+                className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-900"
+                role="img"
+                aria-label={`생활비 한도 중 확정 지출 ${Math.round(waterfallSpentPct)}%, 예정 변동지출 ${Math.round(waterfallPendingPct)}%, 안전 잔액 ${Math.round(waterfallSafePct)}%`}
+              >
+                <span
+                  className="bg-rose-500 transition-[width] duration-500"
+                  style={{ width: `${waterfallSpentPct}%` }}
+                />
+                <span
+                  className="bg-amber-400/85 transition-[width] duration-500"
+                  style={{ width: `${waterfallPendingPct}%` }}
+                />
+                <span
+                  className="bg-emerald-500/80 transition-[width] duration-500"
+                  style={{ width: `${waterfallSafePct}%` }}
+                />
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-rose-500" />
+                  <span className="truncate text-slate-400">사용 <strong className="eb-tabular text-slate-200">{formatKRW(summary.confirmedVariableExpenses)}</strong></span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-amber-400" />
+                  <span className="truncate text-slate-400">예정 <strong className="eb-tabular text-slate-200">{formatKRW(pendingVariableAmount)}</strong></span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                  <span className="truncate text-slate-400">안전 잔액 <strong className="eb-tabular text-emerald-300">{formatKRW(Math.max(0, summary.remainingAllowance))}</strong></span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="mt-3 flex flex-col justify-between gap-1 text-xs text-slate-400 sm:flex-row sm:items-center">
             <span className="eb-tabular">남은 생활비 <strong className="text-slate-200">{formatKRW(summary.remainingAllowance)}</strong></span>
             <span>{badgeProps.desc}</span>
@@ -416,7 +562,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {summary.configuredLimitUsagePercent !== null && <p className="mt-2 text-xs text-slate-400">설정 한도 {formatKRW(summary.allowanceLimit)} · 사용률 {summary.configuredLimitUsagePercent}% · 실제 적용 한도 {formatKRW(summary.spendableLimit)}</p>}
         </div>
 
-        <details className="eb-panel rounded-xl p-3 text-xs text-slate-300">
+        <details className="eb-panel mt-4 rounded-xl p-3 text-xs text-slate-300">
           <summary className="cursor-pointer font-bold">계산 기준과 연결 내역</summary>
           <p className="mt-2">소비: {summary.spendPeriodStartDate}–{summary.spendPeriodEndDate} · 급여일 기준 생활비 주기</p>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -427,15 +573,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <p className="mt-2">수입 − 계좌 고정 지출 − 카드대금 − 저축 확보액 = 생활비 재원 {formatKRW(summary.signedLivingBudget)}{summary.isBaselineLocked ? ' (최신 금액 기준, 처음 계획은 비교용)' : ''}. 사용액은 급여일~다음 급여일 전날 기준입니다.</p>
         </details>
-        {/* Cash track: how the salary splits before any spending happens. */}
-        <div className="mt-5 border-t border-slate-800 pt-4">
-          <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+
+        {/* Cash track: how the salary splits before any spending happens (folded by default to reduce clutter). */}
+        <details className="eb-panel mt-3 rounded-xl p-3 text-xs text-slate-300">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 font-semibold text-slate-300">
               <Lock className="h-3.5 w-3.5 text-indigo-400" />
               이번 주기 생활비는 이렇게 나왔습니다
             </span>
-            <div className="flex shrink-0 items-center gap-2">
-              <span className="font-bold text-white">{formatKRW(summary.livingBudget)}</span>
+            <span className="eb-tabular font-bold text-white">{formatKRW(summary.livingBudget)} · 상세 보기</span>
+          </summary>
+
+          <div className="mt-3 border-t border-slate-800/80 pt-3">
+            <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+              <span className="text-slate-400">급여에서 고정지출·카드대금·저축을 뺀 결과</span>
               <button
                 onClick={onStartPayday}
                 className="rounded-md border border-slate-700 px-2 py-0.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800"
@@ -443,87 +594,87 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {summary.isBaselineLocked ? '다시 확정' : '확정하기'}
               </button>
             </div>
-          </div>
 
-          {/* One bar, four envelopes: the salary splitting is the whole story. */}
-          {summary.planningIncome > 0 && (
-            <div
-              className="mb-2 flex h-4 w-full overflow-hidden rounded-full border border-slate-800 bg-slate-950"
-              role="img"
-              aria-label={`급여 ${formatKRW(summary.planningIncome)}이 계좌 고정 이체 ${formatKRW(summary.accountFixedOutflow)}, 카드대금 ${formatKRW(summary.cardSettlementOutflow)}, 저축 ${formatKRW(summary.savingsReserve)}, 생활비 ${formatKRW(summary.livingBudget)}으로 나뉩니다`}
-            >
-              {envelopeSegments.map(segment => (
-                <span
-                  key={segment.label}
-                  className={`${segment.className} transition-[width] duration-700 ease-out motion-reduce:transition-none`}
-                  style={{ width: `${(segment.amount / summary.planningIncome) * 100}%` }}
-                />
-              ))}
-            </div>
-          )}
-
-          <dl className="space-y-1 rounded-xl border border-slate-800/60 bg-slate-950/40 p-3 text-xs">
-            <div className="flex items-center justify-between">
-              <dt className="flex items-center gap-1.5 text-slate-400">
-                <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
-                {summary.isProjected ? '급여 (입금 예정)' : '급여 입금'}
-              </dt>
-              <dd className={`font-bold ${summary.isProjected ? 'text-emerald-400/70 decoration-dotted underline underline-offset-4' : 'text-emerald-400'}`}>
-                {formatKRW(summary.planningIncome)}
-              </dd>
-            </div>
-
-            <AmountBreakdown
-              label="− 계좌 고정 이체"
-              amount={summary.accountFixedOutflow}
-              amountClassName="text-slate-200"
-              swatchClassName="bg-slate-500"
-              rows={[
-                { label: '이체 완료', value: summary.confirmedAccountFixedOutflow },
-                { label: '남은 이체', value: summary.scheduledAccountFixedOutflow },
-              ]}
-            />
-
-            <AmountBreakdown
-              label="− 카드대금"
-              amount={summary.cardSettlementOutflow}
-              amountClassName={cardBillIsEstimated ? 'text-indigo-300/70 decoration-dotted underline underline-offset-4' : 'text-indigo-300'}
-              swatchClassName="bg-indigo-500"
-              rows={cardSettlementSummary.cards
-                .filter(card => card.amount > 0)
-                .map(card => ({
-                  label: card.cardName,
-                  value: card.amount,
-                  hint: card.hasStatementWindow
-                    ? `${card.usageStartDate} ~ ${card.usageEndDate} 사용분`
-                    : `${card.usageYearMonth} 사용분 · 추정`,
-                }))}
-              emptyHint="이번 주기에 결제일이 오는 카드대금이 없습니다."
-            />
-
-            {summary.savingsReserve > 0 && (
-              <div className="flex items-center justify-between">
-                <dt className="flex items-center gap-1.5 text-slate-400">
-                  <span aria-hidden className="h-2 w-2 rounded-sm bg-emerald-500" />
-                  − 저축
-                </dt>
-                <dd className="font-semibold text-emerald-300">{formatKRW(summary.savingsReserve)}</dd>
+            {/* One bar, four envelopes: the salary splitting is the whole story. */}
+            {summary.planningIncome > 0 && (
+              <div
+                className="mb-2 flex h-4 w-full overflow-hidden rounded-full border border-slate-800 bg-slate-950"
+                role="img"
+                aria-label={`급여 ${formatKRW(summary.planningIncome)}이 계좌 고정 이체 ${formatKRW(summary.accountFixedOutflow)}, 카드대금 ${formatKRW(summary.cardSettlementOutflow)}, 저축 ${formatKRW(summary.savingsReserve)}, 생활비 ${formatKRW(summary.livingBudget)}으로 나뉩니다`}
+              >
+                {envelopeSegments.map(segment => (
+                  <span
+                    key={segment.label}
+                    className={`${segment.className} transition-[width] duration-700 ease-out motion-reduce:transition-none`}
+                    style={{ width: `${(segment.amount / summary.planningIncome) * 100}%` }}
+                  />
+                ))}
               </div>
             )}
 
-            <div className="flex items-center justify-between border-t border-slate-800 pt-1.5">
-              <dt className="flex items-center gap-1.5 font-semibold text-slate-200">
-                <span aria-hidden className="h-2 w-2 rounded-sm bg-rose-500" />
-                = 이번 주기 생활비
-              </dt>
-              <dd className="font-extrabold text-white">{formatKRW(summary.livingBudget)}</dd>
-            </div>
-          </dl>
+            <dl className="space-y-1 rounded-xl border border-slate-800/60 bg-slate-950/40 p-3 text-xs">
+              <div className="flex items-center justify-between">
+                <dt className="flex items-center gap-1.5 text-slate-400">
+                  <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
+                  {summary.isProjected ? '급여 (입금 예정)' : '급여 입금'}
+                </dt>
+                <dd className={`font-bold ${summary.isProjected ? 'text-emerald-400/70 decoration-dotted underline underline-offset-4' : 'text-emerald-400'}`}>
+                  {formatKRW(summary.planningIncome)}
+                </dd>
+              </div>
 
-          <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
-            카드대금은 카드 이용기간에 쓴 돈의 청구서입니다. 이번 주기 생활비 사용에는 다시 더하지 않습니다.
-          </p>
-        </div>
+              <AmountBreakdown
+                label="− 계좌 고정 이체"
+                amount={summary.accountFixedOutflow}
+                amountClassName="text-slate-200"
+                swatchClassName="bg-slate-500"
+                rows={[
+                  { label: '이체 완료', value: summary.confirmedAccountFixedOutflow },
+                  { label: '남은 이체', value: summary.scheduledAccountFixedOutflow },
+                ]}
+              />
+
+              <AmountBreakdown
+                label="− 카드대금"
+                amount={summary.cardSettlementOutflow}
+                amountClassName={cardBillIsEstimated ? 'text-indigo-300/70 decoration-dotted underline underline-offset-4' : 'text-indigo-300'}
+                swatchClassName="bg-indigo-500"
+                rows={cardSettlementSummary.cards
+                  .filter(card => card.amount > 0)
+                  .map(card => ({
+                    label: card.cardName,
+                    value: card.amount,
+                    hint: card.hasStatementWindow
+                      ? `${card.usageStartDate} ~ ${card.usageEndDate} 사용분`
+                      : `${card.usageYearMonth} 사용분 · 추정`,
+                  }))}
+                emptyHint="이번 주기에 결제일이 오는 카드대금이 없습니다."
+              />
+
+              {summary.savingsReserve > 0 && (
+                <div className="flex items-center justify-between">
+                  <dt className="flex items-center gap-1.5 text-slate-400">
+                    <span aria-hidden className="h-2 w-2 rounded-sm bg-emerald-500" />
+                    − 저축
+                  </dt>
+                  <dd className="font-semibold text-emerald-300">{formatKRW(summary.savingsReserve)}</dd>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between border-t border-slate-800 pt-1.5">
+                <dt className="flex items-center gap-1.5 font-semibold text-slate-200">
+                  <span aria-hidden className="h-2 w-2 rounded-sm bg-rose-500" />
+                  = 이번 주기 생활비
+                </dt>
+                <dd className="font-extrabold text-white">{formatKRW(summary.livingBudget)}</dd>
+              </div>
+            </dl>
+
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
+              카드대금은 카드 이용기간에 쓴 돈의 청구서입니다. 이번 주기 생활비 사용에는 다시 더하지 않습니다.
+            </p>
+          </div>
+        </details>
 
         <div className="mt-3 grid grid-cols-1 gap-3 border-t border-slate-800 pt-3 text-xs sm:grid-cols-2">
           {/* 이체가 남았으면 할 일을, 끝났으면 아직 못 쓰는 돈을 보여준다. */}
@@ -577,6 +728,76 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* 1b. Repeat spending, one tap. Sits directly under the allowance figure
           it moves, and above the cards that only explain the month. */}
       {quickEntrySlot}
+
+      {/* 1c. Monthly category coupon stamp cards */}
+      {couponCards.length > 0 && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-md" aria-label="이번 주기 카테고리 횟수 쿠폰">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-100">이번 주기 카테고리 횟수 쿠폰</h3>
+              <p className="text-xs text-slate-400">배달·커피 등 자주 쓰는 지출을 금액 대신 횟수 스탬프로 관리합니다</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('management', 'settings')}
+              className="text-xs font-semibold text-indigo-300 hover:text-indigo-200"
+            >
+              한도 설정
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            {couponCards.map(card => {
+              const isOver = card.over > 0;
+              const isNear = !isOver && card.used >= card.limit - 1;
+              return (
+                <div
+                  key={card.id}
+                  className={`rounded-xl border p-3 ${
+                    isOver
+                      ? 'border-rose-500/35 bg-rose-500/10'
+                      : isNear
+                      ? 'border-amber-500/30 bg-amber-500/5'
+                      : 'border-slate-800 bg-slate-950/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-200">{card.icon} {card.label}</span>
+                    <span className={`eb-tabular font-extrabold ${
+                      isOver ? 'text-rose-300' : isNear ? 'text-amber-300' : 'text-emerald-300'
+                    }`}>
+                      {card.used} / {card.limit}회
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1" aria-hidden="true">
+                    {Array.from({ length: Math.min(card.limit, 12) }, (_, idx) => {
+                      const stamped = idx < card.used;
+                      return (
+                        <span
+                          key={idx}
+                          className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-extrabold ${
+                            stamped
+                              ? isOver
+                                ? 'bg-rose-500/30 text-rose-200 border border-rose-400/50'
+                                : 'bg-indigo-500/25 text-indigo-200 border border-indigo-400/40'
+                              : 'border border-dashed border-slate-700 text-slate-600'
+                          }`}
+                        >
+                          {stamped ? '✓' : '·'}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-slate-400">
+                    {isOver
+                      ? `이번 주기 목표 횟수를 ${card.over}회 초과했어요`
+                      : `남은 쿠폰 ${card.remaining}회`}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* 2. Credit card usage and next settlement estimate */}
       {(cardPaymentSummary.creditCards.length > 0 || cardPaymentSummary.totalCardUsage > 0) && (

@@ -113,7 +113,14 @@ export function BudgetApp({
           </span>
           지출브레이크<span className="bb-brand-dot">.</span>
         </a>
-        <span className="bb-demo-badge">{isDemo ? '가상 데이터로 체험 중' : '내 계정과 연결됨'}</span>
+        <div className="bb-button-row" style={{ marginTop: 0 }}>
+          <span className="bb-demo-badge">{isDemo ? '가상 데이터로 체험 중' : '내 계정과 연결됨'}</span>
+          {!isDemo && (
+            <a href="/" className="bb-small-button">
+              기본 화면
+            </a>
+          )}
+        </div>
       </header>
       <main id="bb-content" className="bb-content">
         {banner}

@@ -50,16 +50,30 @@ button {
 .bb-app {
   --green: #275840;
   min-height: 100dvh;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(183, 190, 109, 0.16), transparent 28rem),
+    radial-gradient(circle at 88% 14%, rgba(46, 92, 66, 0.08), transparent 30rem),
+    #f6f7f2;
+  color: #253b32;
+  color-scheme: light;
+}
+.bb-app :is(h1, h2, h3, h4, dt, dd, strong, b, label, summary, li) {
+  color: inherit;
 }
 .bb-header {
-  height: 88px;
+  height: 76px;
   max-width: 1120px;
   margin: auto;
-  padding: 0 40px;
+  padding: 0 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid #e0e5da;
+  background: rgba(246, 247, 242, 0.86);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 .bb-brand {
   display: flex;
@@ -89,7 +103,7 @@ button {
 }
 .bb-content {
   width: min(100%, 840px);
-  padding: 42px 28px 146px;
+  padding: 32px 24px 146px;
   margin: auto;
 }
 .bb-page-heading {
@@ -140,6 +154,7 @@ h2 {
   white-space: nowrap;
   color: #596b50;
   border: 1px solid #dbe2d1;
+  background: #fffefa;
   border-radius: 8px;
   padding: 7px 10px;
 }
@@ -147,11 +162,15 @@ h2 {
   --tone: #285a40;
   --soft: #eff4df;
   --ink: #fffef5;
-  background: var(--tone);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--tone) 92%, #ffffff), var(--tone));
   color: var(--ink);
   border-radius: 24px;
   padding: 29px 32px 0;
   overflow: hidden;
+  box-shadow: 0 18px 42px rgba(30, 58, 43, 0.18);
+}
+.bb-hero :is(span, strong, p) {
+  color: inherit;
 }
 .bb-hero.bb-caution {
   --tone: #79550f;
@@ -238,14 +257,16 @@ h2 {
   margin: 0 -32px;
   font-size: 11px;
   text-align: center;
-  font-weight: 500;
+  font-weight: 600;
 }
 .bb-card {
   border: 1px solid #e1e6db;
   border-radius: 20px;
   background: #fffefa;
+  color: #253b32;
   padding: 25px 28px;
   margin-top: 20px;
+  box-shadow: 0 10px 28px rgba(36, 75, 54, 0.05);
 }
 .bb-section-heading {
   display: flex;
@@ -626,38 +647,47 @@ dd {
   padding: 0;
   width: min(calc(100% - 32px), 480px);
   max-height: calc(100dvh - 40px);
+  overflow-y: auto;
   border-radius: 24px;
   background: #fffefa;
   color: #253b32;
+  color-scheme: light;
   box-shadow: 0 24px 100px #10281e35;
+}
+.bb-dialog :is(h1, h2, h3, h4, dt, dd, strong, b, label, summary, button) {
+  color: inherit;
 }
 .bb-dialog::backdrop {
   background: #18332570;
   backdrop-filter: blur(4px);
 }
 .bb-dialog-header {
-  padding: 22px 24px 16px;
+  padding: 18px 22px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   border-bottom: 1px solid #e7ebdf;
+  position: sticky;
+  top: 0;
+  background: #fffefa;
+  z-index: 5;
 }
 .bb-dialog-header h2 {
-  font-size: 20px;
+  font-size: 19px;
 }
 .bb-icon-button {
   border: 0;
   background: #f0f2e8;
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   flex-shrink: 0;
 }
 .bb-dialog-content {
-  padding: 20px 24px;
+  padding: 16px 22px 22px;
 }
 .bb-field-label {
   font-size: 12px;
@@ -672,8 +702,8 @@ dd {
 .bb-amount-field input {
   width: 100%;
   min-width: 0;
-  padding: 5px 0;
-  font-size: 42px;
+  padding: 4px 0;
+  font-size: 36px;
   font-weight: 700;
   border: 0;
   background: none;
@@ -681,26 +711,27 @@ dd {
   letter-spacing: -0.035em;
 }
 .bb-amount-field > span {
-  font-size: 21px;
+  font-size: 19px;
 }
 .bb-field-hint {
   font-size: 11px;
   color: #758368;
-  margin: 10px 0;
+  margin: 8px 0;
 }
 .bb-quick-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 14px 0;
+  margin: 10px 0;
 }
 .bb-quick-chips button {
   border: 1px solid #dce3d2;
   background: #f5f7ee;
   border-radius: 8px;
-  padding: 9px 10px;
-  min-height: 40px;
+  padding: 7px 10px;
+  min-height: 36px;
   font-size: 11px;
+  font-weight: 600;
 }
 .bb-quick-chips button > span {
   margin-right: 5px;
@@ -712,16 +743,17 @@ dd {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 5px;
-  margin: 15px 0 20px;
+  margin: 10px 0 14px;
 }
 .bb-keypad button {
   display: grid;
   place-items: center;
-  min-height: 45px;
+  min-height: 38px;
   border: 0;
   background: #f4f5ee;
   border-radius: 8px;
-  font-size: 20px;
+  font-size: 18px;
+  font-weight: 600;
 }
 .bb-keypad button:active {
   background: #dbe6d2;
@@ -729,7 +761,7 @@ dd {
 .bb-entry-fields {
   display: grid;
   grid-template-columns: 1fr 1.4fr;
-  gap: 12px;
+  gap: 10px;
 }
 .bb-entry-fields label {
   font-size: 11px;

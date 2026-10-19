@@ -29,7 +29,7 @@ import {
   RecurringTemplate,
   QuickEntry,
 } from '../types';
-import { formatKRW, getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
+import { MonthSummary, formatKRW, getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
 import { authenticatedFetch } from '../utils/auth';
 import { normalizeTags } from '../utils/receipt';
 import { Modal } from './ui/Modal';
@@ -86,6 +86,7 @@ interface AddTransactionModalProps {
   recurringOccurrences?: RecurringOccurrence[];
   recurringTemplates?: RecurringTemplate[];
   monthStartDay?: number;
+  summary?: MonthSummary;
   aiClassificationEnabled?: boolean;
   /** Enables AI for the currently signed-in account after its own consent. */
   onEnableAI?: () => Promise<boolean> | boolean;
@@ -122,6 +123,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   recurringOccurrences = [],
   recurringTemplates = [],
   monthStartDay = 1,
+  summary,
   aiClassificationEnabled = true,
   onEnableAI,
   onSaveTransaction,
@@ -155,6 +157,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [installmentMonths, setInstallmentMonths] = useState<number>(1);
   const [installmentCurrentRound, setInstallmentCurrentRound] = useState<number>(1);
+  const [isOneOff, setIsOneOff] = useState<boolean>(false);
 
   // AI Prompt State
   const [aiPromptText, setAiPromptText] = useState<string>('');
@@ -611,6 +614,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       installment: type === 'expense' && paymentMethodType === 'card'
         ? normalizeInstallmentPlan(installmentMonths, installmentCurrentRound, getCurrentYearMonth(monthStartDay))
         : null,
+      isOneOff: type === 'expense' && isOneOff ? true : undefined,
     });
 
     setRecurringMatchPrompt(null);
@@ -674,6 +678,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     setInstallmentCurrentRound(1);
     setConfirmInstallmentMonths(1);
     setConfirmInstallmentCurrentRound(1);
+    setIsOneOff(false);
     setQuickAmountEntry(null);
     setQuickAmount(0);
   };
@@ -1611,6 +1616,62 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-white"
               />
             </div>
+
+            {type === 'expense' && (
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-300 transition-colors hover:border-slate-700">
+                <input
+                  type="checkbox"
+                  checked={isOneOff}
+                  onChange={(e) => setIsOneOff(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-rose-500 focus:ring-rose-500"
+                />
+                <span>
+                  <strong className="block font-bold text-slate-100">병원비·경조사 등 일회성 지출</strong>
+                  <span className="mt-0.5 block text-[11px] text-slate-400">
+                    생활비 잔액에서는 정상 차감하되, 평소 소비 속도(월말 예측) 왜곡에서 제외합니다.
+                  </span>
+                </span>
+              </label>
+            )}
+
+            {/* 3-second brake simulator preview */}
+            {type === 'expense' && summary && (() => {
+              const numVal = parseAmountInput(amount);
+              if (numVal <= 0) return null;
+              const effectiveCharge = paymentMethodType === 'card' && installmentMonths > 1
+                ? Math.floor(numVal / installmentMonths)
+                : numVal;
+              const currentDaily = summary.dailySafeAllowance;
+              const remainingDaysAfterToday = Math.max(1, summary.spendDaysRemaining - 1);
+              const nextRemainingPool = summary.remainingAllowance - effectiveCharge;
+              const nextDaily = Math.max(0, Math.floor(nextRemainingPool / remainingDaysAfterToday));
+              const isOverToday = effectiveCharge > currentDaily && currentDaily > 0;
+              return (
+                <div
+                  className={`rounded-xl border p-3 text-xs ${
+                    nextRemainingPool < 0
+                      ? 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                      : isOverToday
+                      ? 'border-amber-500/35 bg-amber-500/10 text-amber-100'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between font-bold">
+                    <span>💡 결제 전 3초 브레이크</span>
+                    <span className="eb-tabular">
+                      내일 하루 예산 {formatKRW(currentDaily)} → <strong>{formatKRW(nextDaily)}</strong>
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] opacity-90">
+                    {nextRemainingPool < 0
+                      ? `이 지출을 기록하면 이번 주기 생활비 한도를 ${formatKRW(Math.abs(nextRemainingPool))} 초과합니다.`
+                      : isOverToday
+                      ? `오늘 안전선(${formatKRW(currentDaily)})보다 ${formatKRW(effectiveCharge - currentDaily)} 더 쓰게 되어, 남은 ${remainingDaysAfterToday}일 동안 하루 예산이 줄어듭니다.`
+                      : `오늘 안전선 안에서 지출합니다. 기록 후 남은 생활비는 ${formatKRW(nextRemainingPool)}입니다.`}
+                  </p>
+                </div>
+              );
+            })()}
 
             {saveErrorNotice}
 

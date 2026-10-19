@@ -1626,6 +1626,7 @@ export default function App() {
             cardSettlementSummary={cardSettlementSummary}
             bankAccounts={bankAccounts}
             paymentCards={paymentCards}
+            categoryCountLimits={budget.categoryCountLimits || userProfile.categoryCountLimits}
             onOpenAddModal={() => { setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null); setIsAddModalOpen(true); }}
             onNavigateTab={(tab, sub) => handleNavigateTab(tab as NavTab, sub)}
             onConfirmOccurrence={handlePostOccurrence}
@@ -1956,6 +1957,7 @@ export default function App() {
         recurringOccurrences={recurringOccurrences}
         recurringTemplates={recurringTemplates}
         monthStartDay={monthStartDay}
+        summary={summary}
         aiClassificationEnabled={userProfile.aiClassificationEnabled}
         onEnableAI={handleEnableTransactionAi}
         onSaveTransaction={handleSaveTransaction}
