@@ -31,6 +31,24 @@ public class FileExportPlugin extends Plugin {
 
     @PluginMethod
     public void saveJson(PluginCall call) {
+        String content = call.getString("content");
+        if (content != null) {
+            try {
+                new JSONObject(content);
+            } catch (JSONException error) {
+                call.reject("Invalid JSON content", error);
+                return;
+            }
+        }
+        pickDestination(call, "application/json", ".json");
+    }
+
+    @PluginMethod
+    public void saveCsv(PluginCall call) {
+        pickDestination(call, "text/csv", ".csv");
+    }
+
+    private void pickDestination(PluginCall call, String mimeType, String suffix) {
         String fileName = call.getString("fileName");
         String content = call.getString("content");
 
@@ -39,29 +57,22 @@ public class FileExportPlugin extends Plugin {
             return;
         }
 
-        try {
-            new JSONObject(content);
-        } catch (JSONException error) {
-            call.reject("Invalid JSON content", error);
-            return;
-        }
-
         File pendingFile;
         byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
         try {
-            pendingFile = File.createTempFile(PENDING_FILE_PREFIX, ".json", getContext().getCacheDir());
+            pendingFile = File.createTempFile(PENDING_FILE_PREFIX, suffix, getContext().getCacheDir());
             try (FileOutputStream output = new FileOutputStream(pendingFile, false)) {
                 output.write(contentBytes);
                 output.flush();
                 output.getFD().sync();
             }
         } catch (IOException error) {
-            call.reject("Unable to prepare the JSON file", error);
+            call.reject("Unable to prepare the file", error);
             return;
         }
 
         // The system document picker can stop and recreate the Activity. Keeping a
-        // large JSON string in PluginCall would then copy it into Android's saved
+        // large string in PluginCall would then copy it into Android's saved
         // instance state and may exceed the Binder transaction limit. Persist only
         // the small cache-file reference while the picker is open.
         call.getData().remove("content");
@@ -70,7 +81,7 @@ public class FileExportPlugin extends Plugin {
 
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/json");
+        intent.setType(mimeType);
         intent.putExtra(Intent.EXTRA_TITLE, fileName);
 
         try {
@@ -116,7 +127,7 @@ public class FileExportPlugin extends Plugin {
             long verifiedBytes = countBytes(target);
             if (writtenBytes != expectedBytes || verifiedBytes != expectedBytes) {
                 throw new IOException(
-                    "JSON file size mismatch: expected " + expectedBytes
+                    "File size mismatch: expected " + expectedBytes
                         + ", wrote " + writtenBytes
                         + ", verified " + verifiedBytes
                 );
@@ -125,7 +136,7 @@ public class FileExportPlugin extends Plugin {
             try (InputStream expected = new FileInputStream(pendingFile);
                  InputStream saved = getContext().getContentResolver().openInputStream(target)) {
                 if (saved == null || !Arrays.equals(digest(expected), digest(saved))) {
-                    throw new IOException("Saved JSON content does not match the export");
+                    throw new IOException("Saved content does not match the export");
                 }
             }
 
@@ -133,7 +144,7 @@ public class FileExportPlugin extends Plugin {
             response.put("bytesWritten", writtenBytes);
             call.resolve(response);
         } catch (IOException error) {
-            call.reject("Unable to save the JSON file", error);
+            call.reject("Unable to save the file", error);
         } finally {
             deletePendingFile(pendingFile);
         }
@@ -161,7 +172,7 @@ public class FileExportPlugin extends Plugin {
             while ((count = input.read(buffer)) != -1) hash.update(buffer, 0, count);
             return hash.digest();
         } catch (NoSuchAlgorithmException error) {
-            throw new IOException("Unable to verify JSON content", error);
+            throw new IOException("Unable to verify saved content", error);
         }
     }
 

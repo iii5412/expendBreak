@@ -65,15 +65,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
 
-            <a
-              href="/?view=budget"
-              className="flex min-h-11 items-center justify-center gap-1.5 border border-emerald-500/40 bg-emerald-500/10 px-2.5 text-xs font-bold text-emerald-300 transition-colors hover:border-emerald-400 hover:bg-emerald-500/20"
-              title="새 예산 화면 열기"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="whitespace-nowrap">예산 뷰</span>
-            </a>
-
             <button
               type="button"
               onClick={() => setIsMoreOpen(true)}

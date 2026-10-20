@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { saveCsvFile } from '../utils/fileExport';
 
 export function DataControls({
   exportCsv,
@@ -30,15 +31,8 @@ export function DataControls({
           setMessage('전체 거래를 불러오는 중입니다…');
           try {
             const csv = await exportCsv();
-            const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `지출브레이크-전체거래-${new Date().toISOString().slice(0, 10)}.csv`;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 60_000);
-            setMessage('CSV 다운로드를 요청했습니다. 저장 위치를 확인해 주세요.');
+            const saved = await saveCsvFile(`지출브레이크-전체거래-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+            setMessage(saved ? 'CSV 파일을 저장했습니다.' : 'CSV 저장을 취소했습니다.');
           } catch {
             setMessage('전체 거래를 내보내지 못했습니다. 연결과 동기화 상태를 확인해 주세요.');
           } finally {

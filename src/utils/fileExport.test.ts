@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const native = vi.hoisted(() => ({ platform: 'android', saveJson: vi.fn() }));
-vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => native.platform }, registerPlugin: () => ({ saveJson: native.saveJson }) }));
-import { saveJsonWithNativePicker } from './fileExport';
+const native = vi.hoisted(() => ({ platform: 'android', saveJson: vi.fn(), saveCsv: vi.fn() }));
+vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => native.platform }, registerPlugin: () => ({ saveJson: native.saveJson, saveCsv: native.saveCsv }) }));
+import { saveCsvWithNativePicker, saveJsonWithNativePicker } from './fileExport';
 describe('diagnostic file saving', () => {
-  beforeEach(() => { native.platform = 'android'; native.saveJson.mockReset(); });
+  beforeEach(() => { native.platform = 'android'; native.saveJson.mockReset(); native.saveCsv.mockReset(); });
   it('rejects invalid or empty JSON before opening a picker', async () => {
     await expect(saveJsonWithNativePicker('data.json', '')).rejects.toThrow();
     await expect(saveJsonWithNativePicker('data.json', '[]')).rejects.toThrow();
@@ -22,5 +22,18 @@ describe('diagnostic file saving', () => {
     expect(await saveJsonWithNativePicker('data.json', '{}')).toEqual({ saved: false });
     native.platform = 'web';
     expect(await saveJsonWithNativePicker('data.json', '{}')).toBeNull();
+  });
+  it('saves CSV through the native picker only in the Android app', async () => {
+    const content = '\uFEFF"날짜"\r\n"2026-10-20"';
+    const bytesWritten = new TextEncoder().encode(content).length;
+    native.saveCsv.mockResolvedValue({ saved: true, bytesWritten });
+    expect(await saveCsvWithNativePicker('a.csv', content)).toEqual({ saved: true, bytesWritten });
+    native.saveCsv.mockResolvedValue({ saved: true, bytesWritten: 1 });
+    await expect(saveCsvWithNativePicker('a.csv', content)).rejects.toThrow('크기');
+    await expect(saveCsvWithNativePicker('a.csv', '')).rejects.toThrow();
+    native.platform = 'web';
+    native.saveCsv.mockClear();
+    expect(await saveCsvWithNativePicker('a.csv', content)).toBeNull();
+    expect(native.saveCsv).not.toHaveBeenCalled();
   });
 });

@@ -142,7 +142,7 @@ import { buildCashflowTimeline } from './utils/cashflowTimeline';
 import { applyAppTheme } from './utils/theme';
 import { getDiagnosticRuntime } from './utils/diagnosticRuntime';
 import { serializeDiagnosticExport } from './utils/diagnosticExport';
-import { saveJsonWithNativePicker } from './utils/fileExport';
+import { saveCsvFile, saveJsonWithNativePicker } from './utils/fileExport';
 import {
   buildWidgetSnapshot,
   NativeDestination,
@@ -1444,17 +1444,20 @@ export default function App() {
     refreshAppData();
   };
 
-  const handleExportCSV = () => {
-    const csvContent = exportTransactionsCSV(currentYM, monthStartDay);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `지출브레이크_거래내역_${currentYM}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  const handleExportCSV = async () => {
+    try {
+      const csvContent = exportTransactionsCSV(currentYM, monthStartDay);
+      const saved = await saveCsvFile(`지출브레이크_거래내역_${currentYM}.csv`, csvContent);
+      if (!saved) return;
+      showToast({ message: 'CSV 파일을 저장했습니다.', tone: 'success' });
+    } catch (error) {
+      console.error('CSV export failed', error);
+      showToast({
+        message: 'CSV 파일을 저장하지 못했습니다.',
+        description: '저장 위치를 다시 선택한 뒤 재시도해 주세요.',
+        tone: 'error',
+      });
+    }
   };
 
   const handleExportDiagnostic = async () => {
