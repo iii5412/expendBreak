@@ -61,10 +61,11 @@ button {
   color: inherit;
 }
 .bb-header {
-  height: 76px;
+  /* The status bar overlays the page on Android, so the bar grows by the top inset instead of being covered. */
+  height: calc(76px + env(safe-area-inset-top, 0px));
   max-width: 1120px;
   margin: auto;
-  padding: 0 32px;
+  padding: env(safe-area-inset-top, 0px) 32px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -840,8 +841,8 @@ dd {
 }
 @media (max-width: 600px) {
   .bb-header {
-    height: 68px;
-    padding: 0 20px;
+    height: calc(68px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 20px 0;
   }
   .bb-brand {
     font-size: 18px;
@@ -981,6 +982,12 @@ dd {
   border: 1px solid #d6dfca;
   border-radius: 8px;
   font-size: 11px;
+}
+.bb-small-button[aria-pressed='true'] {
+  background: #275840;
+  border-color: #275840;
+  color: #fffef5;
+  font-weight: 700;
 }
 .bb-button-row {
   display: flex;

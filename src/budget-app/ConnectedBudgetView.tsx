@@ -27,6 +27,7 @@ import { getCurrentYearMonth, getLocalDateString } from '../utils/calculations';
 import { fetchAllTransactionsForExport, getLoadedTransactionHistoryFloor } from '../utils/cloudSync';
 import { authenticatedFetch, getSignedInAccount, isOwnerLoggedIn } from '../utils/auth';
 import { aiRequest } from './aiClient';
+import { StartViewSetting } from './StartViewSetting';
 import { BudgetMerchantRule } from '../lib/budgetAi';
 import { auth } from '../lib/firebase';
 import { OfflineBanner, SyncStatusIndicator, StorageFullBanner } from '../components/SyncStatusIndicator';
@@ -209,7 +210,7 @@ export function ConnectedBudgetView({ onLock }: { onLock: () => void }) {
       <StorageFullBanner />
       <SyncConflictBanner
         onReview={() => {
-          window.location.href = '/';
+          window.location.href = '/?view=classic';
         }}
       />
       <AccountBudgetView
@@ -218,18 +219,20 @@ export function ConnectedBudgetView({ onLock }: { onLock: () => void }) {
         isDemo={false}
         aiRequest={aiRequest(authenticatedFetch)}
         accountContent={
-          <section className="bb-card">
-            <div className="bb-section-heading">
-              <h2>{getSignedInAccount().name}의 가계부</h2>
-              <SyncStatusIndicator />
-            </div>
-            <div className="bb-button-row">
-              <a href="/">기존 화면으로</a>
-              <button type="button" className="bb-small-button" onClick={onLock}>
-                잠그기
-              </button>
-            </div>
-          </section>
+          <>
+            <section className="bb-card">
+              <div className="bb-section-heading">
+                <h2>{getSignedInAccount().name}의 가계부</h2>
+                <SyncStatusIndicator />
+              </div>
+              <div className="bb-button-row">
+                <button type="button" className="bb-small-button" onClick={onLock}>
+                  잠그기
+                </button>
+              </div>
+            </section>
+            <StartViewSetting />
+          </>
         }
       />
     </>

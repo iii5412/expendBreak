@@ -116,7 +116,7 @@ export function BudgetApp({
         <div className="bb-button-row" style={{ marginTop: 0 }}>
           <span className="bb-demo-badge">{isDemo ? '가상 데이터로 체험 중' : '내 계정과 연결됨'}</span>
           {!isDemo && (
-            <a href="/" className="bb-small-button">
+            <a href="/?view=classic" className="bb-small-button">
               기본 화면
             </a>
           )}

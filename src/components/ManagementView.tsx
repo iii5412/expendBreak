@@ -1,4 +1,5 @@
 import { retainedPlanSummary } from '../utils/dataReview';
+import { getStartView, setStartView, type StartView } from '../utils/startView';
 import React, { useEffect, useState } from 'react';
 import { QuickEntryDraft, QuickEntryManager } from './QuickEntryManager';
 import {
@@ -420,6 +421,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     showToast({ message: `'${name}' 원본 항목을 삭제했습니다.`, description: '기존 월 계획은 새로 불러오기 전까지 유지됩니다.', tone: 'info' });
   };
 
+  const [startView, setStartViewState] = useState<StartView>(getStartView);
   const [isRevokingSessions, setIsRevokingSessions] = useState(false);
   const [storageUsage, setStorageUsage] = useState(() => getStorageUsage());
   const handleRevokeOtherSessions = async () => {
@@ -643,7 +645,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
         href="/?view=budget"
         className="flex min-h-12 items-center justify-between rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 font-bold text-emerald-200"
       >
-        <span>새 예산 화면 열기</span>
+        <span>예산뷰 열기</span>
         <span aria-hidden="true">→</span>
       </a>
 
@@ -1367,6 +1369,42 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
       {subTab === 'settings' && (
         <div className="space-y-4 text-xs">
+          {/* Start screen */}
+          <div className="eb-panel space-y-3 rounded-xl p-4">
+            <h3 className="text-sm font-bold text-white">시작 화면</h3>
+            <p className="text-xs leading-relaxed text-slate-400">
+              잠금을 풀었을 때 처음 보이는 화면입니다. 이 기기에만 적용됩니다.
+            </p>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="시작 화면">
+              {([
+                ['budget', '예산뷰'],
+                ['classic', '기존 화면'],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={startView === value}
+                  onClick={() => {
+                    if (value === startView) return;
+                    if (setStartView(value)) {
+                      setStartViewState(value);
+                      showToast({ message: `다음부터 ${label}으로 시작합니다.`, tone: 'success' });
+                    } else {
+                      showToast({ message: '이 기기에 설정을 저장하지 못했습니다.', tone: 'error' });
+                    }
+                  }}
+                  className={`min-h-11 border px-3 py-2 font-bold transition-colors ${
+                    startView === value
+                      ? 'border-rose-500 bg-rose-500 text-white'
+                      : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Accounting cycle */}
           <div className="eb-panel space-y-3 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">

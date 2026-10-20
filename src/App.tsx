@@ -102,6 +102,7 @@ import { LegacyMigrationFailedError } from './utils/migrationStatus';
 import { MigrationFailedScreen } from './components/MigrationFailedScreen';
 import { startNetworkWatch } from './utils/syncStatus';
 import { normalizeIdleLockMinutes } from './utils/lockPolicy';
+import { resolveView } from './utils/startView';
 import { OfflineBanner, SyncStatusIndicator } from './components/SyncStatusIndicator';
 import { SyncConflictBanner } from './components/SyncConflictBanner';
 import { StorageFullBanner } from './components/SyncStatusIndicator';
@@ -1541,7 +1542,7 @@ export default function App() {
     );
   }
 
-  if (new URLSearchParams(window.location.search).get('view') === 'budget') {
+  if (resolveView(window.location.search) === 'budget') {
     return <Suspense fallback={<ViewLoading />}><ConnectedBudgetView onLock={handleLock} /></Suspense>;
   }
 
