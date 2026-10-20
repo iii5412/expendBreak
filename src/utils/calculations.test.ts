@@ -237,3 +237,30 @@ describe('financial calculations', () => {
     expect(breakdown).toEqual([expect.objectContaining({ amount: 150_000, percent: 100 })]);
   });
 });
+
+describe('recurring expenses paid ahead of their cycle', () => {
+  const prepaid = tx({
+    id: 'prepaid-rent', amount: 650_000, localDate: '2026-09-30', recurringTemplateId: 'rent',
+    recurringOccurrenceKey: 'rent_2026-10-01',
+  });
+  const rent: RecurringTemplate = {
+    id: 'rent', type: 'expense', name: '월세', defaultAmount: 650_000, categoryId: 'food', counterparty: '임대인',
+    frequency: 'monthly', dayOfMonth: 1, holidayPolicy: 'fixed_date', postingMode: 'confirm',
+    allowAmountChange: false, startDate: '2026-01-01', nextDueDate: '2026-10-01', active: true,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  };
+  const run = (yearMonth: string) => calculateMonthSummary(
+    yearMonth, [prepaid], [], { ...budget, yearMonth }, [rent], new Date(2026, 9, 15), 1, { reserveUnmaterializedTemplates: false },
+  );
+
+  it('counts the bill only in the cycle its plan was scheduled for', () => {
+    expect(run('2026-10').confirmedFixedExpenses).toBe(650_000);
+    expect(run('2026-09').confirmedFixedExpenses).toBe(0);
+  });
+
+  it('leaves plain purchases on the day they happened', () => {
+    const plain = tx({ id: 'plain', amount: 10_000, localDate: '2026-09-30' });
+    const summary = calculateMonthSummary('2026-09', [plain], [], { ...budget, yearMonth: '2026-09' }, [], new Date(2026, 9, 15));
+    expect(summary.confirmedExpenses).toBe(10_000);
+  });
+});

@@ -373,8 +373,16 @@ export function calculateMonthSummary(
     template?: RecurringTemplate,
   ) => (item.paymentMethodType ?? template?.paymentMethodType) === 'card';
 
+  // A recurring expense belongs to the cycle its plan was scheduled in, even when
+  // it was paid a few days early or late. The date is part of the occurrence key
+  // (`<templateId>_<scheduledDate>`), so no occurrence lookup is needed and the
+  // transaction lands in exactly one cycle.
+  const owningDate = (t: Transaction) => {
+    if (t.type !== 'expense' || !t.recurringOccurrenceKey) return t.localDate;
+    return /_(\d{4}-\d{2}-\d{2})$/.exec(t.recurringOccurrenceKey)?.[1] ?? t.localDate;
+  };
   // Filter transactions inside this accounting period
-  const monthTxs = transactions.filter(t => isDateInPeriod(t.localDate, period));
+  const monthTxs = transactions.filter(t => isDateInPeriod(owningDate(t), period));
 
   // Confirmed Income
   const confirmedIncome = monthTxs

@@ -3,6 +3,7 @@ import { registerPlugin } from '@capacitor/core';
 import type { PluginListenerHandle } from '@capacitor/core';
 import { BankAccount, Category, MerchantRule, PaymentCard, Transaction } from '../types';
 import { isNativeAndroid } from './platform';
+import { getYearMonthForDate } from './calculations';
 
 export type SmsPermissionState = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied';
 
@@ -171,6 +172,8 @@ export interface SmsReviewCandidate extends ParsedSmsTransaction {
   suggestedCategoryId: string;
   matchedCardId: string | null;
   matchedAccountId: string | null;
+  /** Chosen on the review card; keeps a special purchase out of the daily-pace forecast. */
+  isOneOff?: boolean;
 }
 
 export interface PreparedSmsReviewQueue {
@@ -507,22 +510,24 @@ export function resolveSmsCategory(
   rules: MerchantRule[],
 ) {
   const normalized = merchant.toLowerCase();
-  const rule = [...rules]
+  const matchingRules = [...rules]
     .sort((left, right) => right.pattern.length - left.pattern.length)
-    .find(item => item.pattern.trim() && normalized.includes(item.pattern.trim().toLowerCase()));
-  if (rule && categories.some(category => category.id === rule.categoryId && category.type === 'expense')) {
-    return rule.categoryId;
-  }
+    .filter(item => item.pattern.trim() && normalized.includes(item.pattern.trim().toLowerCase()))
+    .filter(item => categories.some(category => category.id === item.categoryId && category.type === 'expense'));
+  // 기타 rules are usually leftovers from bulk imports that never had a real
+  // category, so they must not shadow the keyword heuristics below.
+  const specificRule = matchingRules.find(item => item.categoryId !== 'etc_expense');
+  if (specificRule) return specificRule.categoryId;
 
   const heuristics: Array<[RegExp, string]> = [
-    [/배민|배달|쿠팡이츠|요기요/, 'delivery_food'],
-    [/택시|카카오모빌리티|대중교통|버스|지하철|철도|코레일|주유|충전소/, 'transportation'],
-    [/병원|의원|약국|치과|한의원/, 'medical_health'],
-    [/마트|슈퍼|이마트|홈플러스|롯데마트|컬리|농협/, 'groceries'],
-    [/카페|커피|스타벅스|투썸|메가커피|음식|식당|레스토랑|맥도날드/, 'dining_out'],
+    [/배민|배달|쿠팡이츠|요기요|땡겨요/, 'delivery_food'],
+    [/택시|카카오모빌리티|카카오T|대중교통|버스|지하철|철도|코레일|SRT|주유|충전소|하이패스|주차/, 'transportation'],
+    [/병원|의원|약국|치과|한의원|내과|소아과|이비인후과|피부과|안과|정형외과|산부인과|똑딱|비브로스/, 'medical_health'],
+    [/마트|슈퍼|이마트|홈플러스|롯데마트|컬리|농협|하나로|식자재|정육|청과|과일|아삭/, 'groceries'],
+    [/카페|커피|스타벅스|투썸|메가커피|메가MGC|MGC|컴포즈|빽다방|이디야|폴바셋|음식|식당|레스토랑|맥도날드|버거|피자|치킨|베이커리|파리바게뜨|뚜레쥬르|성심당|도너츠|던킨|배스킨라빈스|설빙|김밥|분식|국밥|해장국|회관|식육/i, 'dining_out'],
     [/넷플릭스|유튜브|디즈니|구독|멤버십/, 'subscriptions'],
     [/통신|모바일|SKT|KT|LGU/, 'telecom'],
-    [/쿠팡|스토어|백화점|쇼핑|마켓/, 'shopping'],
+    [/쿠팡|스토어|백화점|쇼핑|마켓|다이소|올리브영|무신사|편의점|씨유|(^|[^A-Za-z])CU([^A-Za-z]|$)|GS25|세븐일레븐|이마트24/, 'shopping'],
   ];
   for (const [pattern, categoryId] of heuristics) {
     if (pattern.test(merchant) && categories.some(category => category.id === categoryId && category.active)) {
@@ -532,6 +537,43 @@ export function resolveSmsCategory(
   return categories.find(category => category.id === 'etc_expense')?.id
     || categories.find(category => category.type === 'expense' && category.active)?.id
     || '';
+}
+
+/**
+ * The transaction an approved card-approval candidate becomes. It carries the budget
+ * view's fields (one-off flag, cycle) so the new row counts correctly in both screens.
+ */
+export function buildSmsExpenseTransaction(candidate: SmsReviewCandidate, monthStartDay: number) {
+  return {
+    type: 'expense' as const,
+    amount: candidate.amount,
+    occurredAt: candidate.occurredAt,
+    localDate: candidate.localDate,
+    categoryId: candidate.suggestedCategoryId,
+    merchant: candidate.merchant,
+    expenseNature: 'variable' as const,
+    isOneOff: Boolean(candidate.isOneOff),
+    budgetPeriodKey: getYearMonthForDate(candidate.localDate, monthStartDay),
+    memo: `[SMS 승인 등록] ${candidate.issuer || '카드'}${candidate.cardLast4 ? ` 끝 ${candidate.cardLast4}` : ''}`,
+    source: 'sms' as const,
+    sourceFingerprint: candidate.fingerprint,
+    sourceReference: candidate.approvalCode,
+    paymentMethodType: 'card' as const,
+    accountId: null,
+    cardId: candidate.matchedCardId,
+    installment: candidate.installmentMonths && candidate.installmentMonths > 1 ? {
+      totalMonths: candidate.installmentMonths,
+      currentRound: 1,
+      baseYearMonth: candidate.localDate.slice(0, 7),
+    } : null,
+  };
+}
+
+/** Approving under a real category teaches the merchant; 기타 is never worth remembering. */
+export function merchantRuleToRemember(candidate: SmsReviewCandidate) {
+  const pattern = candidate.merchant.trim();
+  if (!pattern || !candidate.suggestedCategoryId || candidate.suggestedCategoryId === 'etc_expense') return null;
+  return { pattern, categoryId: candidate.suggestedCategoryId };
 }
 
 export function isDuplicateSmsTransaction(parsed: ParsedSmsTransaction, transactions: Transaction[]) {

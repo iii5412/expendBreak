@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Category, RecurringOccurrence, RecurringTemplate } from '../types';
 import { resolveRecurringAmount } from '../utils/recurringAmounts';
 
@@ -32,6 +32,14 @@ export function RecurringManager({
   const [message, setMessage] = useState('');
   const [holidayDate, setHolidayDate] = useState('');
   const [draft, setDraft] = useState<TemplateInput>(() => blank());
+  const formRef = useRef<HTMLFormElement>(null);
+  // The form sits above the list, so tapping 수정 on a lower row would otherwise
+  // open it off-screen and look like nothing happened.
+  useEffect(() => {
+    if (!open) return;
+    formRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    formRef.current?.querySelector('input')?.focus({ preventScroll: true });
+  }, [open, editing]);
   const pending = occurrences.filter(
     (o) =>
       o.status !== 'posted' &&
@@ -93,6 +101,7 @@ export function RecurringManager({
       </p>
       {open && (
         <form
+          ref={formRef}
           className="bb-recurring-form"
           onSubmit={(event) => {
             event.preventDefault();
@@ -116,6 +125,7 @@ export function RecurringManager({
             }, '정기 항목을 저장했습니다.');
           }}
         >
+          <p className="bb-kicker">{editing ? `‘${draft.name}’ 수정 중` : '새 정기 항목'}</p>
           <label>
             이름
             <input
@@ -275,6 +285,9 @@ export function RecurringManager({
               취소
             </button>
           </div>
+          <p role="status" className="bb-caption">
+            {message}
+          </p>
         </form>
       )}
       <div className="bb-template-list">
@@ -400,9 +413,11 @@ export function RecurringManager({
       {templates.length === 0 && (
         <p className="bb-caption">등록한 정기 항목이 없습니다. 월급이나 고정비부터 추가해 보세요.</p>
       )}
-      <p className="bb-caption" role="status">
-        {message}
-      </p>
+      {!open && (
+        <p className="bb-caption" role="status">
+          {message}
+        </p>
+      )}
     </section>
   );
 }

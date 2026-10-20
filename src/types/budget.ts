@@ -25,6 +25,10 @@ export interface BudgetTransaction {
   categoryId?: string;
   merchant?: string;
   memo?: string;
+  /** How it was paid; set by one-tap entries that remember a card or account. */
+  paymentMethodType?: 'account' | 'card' | 'cash' | 'other';
+  cardId?: string | null;
+  accountId?: string | null;
 }
 
 export interface BudgetRecurringTemplate {

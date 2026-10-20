@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { AgentScreen } from '../agent/tools';
 import { ArrowLeft, Delete, X } from 'lucide-react';
 import { calculateBudget, getBudgetPeriodKey } from '../lib/calculator';
 import type { BudgetCalculationInput, BudgetTransaction } from '../types/budget';
@@ -18,6 +19,10 @@ export function QuickAddDialog({
   isDemo,
   ai,
   periodKeyForDate,
+  pendingSmsCount = 0,
+  onReviewSms,
+  agentSlot,
+  onNavigate,
 }: {
   input: BudgetCalculationInput;
   onSave: (transaction: BudgetTransaction, rule?: BudgetMerchantRule) => Promise<void> | void;
@@ -27,6 +32,16 @@ export function QuickAddDialog({
   isDemo: boolean;
   ai?: BudgetAiUi;
   periodKeyForDate?: (date: string) => string;
+  /** Payment texts found on the phone and still waiting for the user's approval. */
+  pendingSmsCount?: number;
+  onReviewSms?: () => void;
+  /**
+   * Renders the AI agent at the top of the dialog in place of the one-sentence box.
+   * `onQuickAdd` fills the form below with a sentence the agent recognised as a plain
+   * entry, and `onNavigate` closes the dialog and opens the screen the agent chose.
+   */
+  agentSlot?: (hooks: { onQuickAdd: (text: string) => void; onNavigate: (screen: AgentScreen) => void }) => ReactNode;
+  onNavigate?: (screen: AgentScreen) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const amountInput = useRef<HTMLInputElement>(null);
@@ -80,6 +95,28 @@ export function QuickAddDialog({
     };
   }, []);
 
+  const applyClassification = (result: BudgetClassification, selectedCategoryId: string) => {
+    setApplied(result);
+    setDigits(String(result.amount));
+    setMerchant(result.merchant);
+    setLocalDate(result.date);
+    setTransactionType(result.type);
+    setCategoryId(selectedCategoryId);
+    setSaveRule(false);
+    amountInput.current?.focus();
+  };
+  // Nothing is saved here: the sentence only pre-fills the form for the user to check.
+  const quickAddFromAgent = (text: string) => {
+    if (!ai) return;
+    void ai
+      .classify(text, new AbortController().signal)
+      .then((result) => {
+        const fallback = ai.categories.find((c) => c.type === result.type)?.id || '';
+        applyClassification(result, result.suggestedCategoryId || fallback);
+      })
+      .catch((failure) => setError(failure instanceof Error ? failure.message : '문장을 해석하지 못했습니다. 직접 입력해 주세요.'));
+  };
+
   const updateDigits = (value: string) =>
     setDigits(
       value
@@ -88,7 +125,8 @@ export function QuickAddDialog({
         .slice(0, 9),
     );
   const save = async (quick?: BudgetQuickEntry) => {
-    if (amount < 1 || saving.current || !categoryId) return;
+    const finalAmount = quick?.defaultAmount || amount;
+    if (finalAmount < 1 || saving.current || !categoryId) return;
     saving.current = true;
     setBusy(true);
     setError('');
@@ -97,7 +135,21 @@ export function QuickAddDialog({
         {
           ...draft,
           id: crypto.randomUUID(),
-          ...(quick ? { merchant: quick.merchant, categoryId: quick.categoryId, source: 'manual' as const } : {}),
+          ...(quick
+            ? {
+                amount: finalAmount,
+                merchant: quick.merchant,
+                categoryId: quick.categoryId,
+                source: 'manual' as const,
+                ...(quick.paymentMethodType
+                  ? {
+                      paymentMethodType: quick.paymentMethodType,
+                      cardId: quick.cardId ?? null,
+                      accountId: quick.accountId ?? null,
+                    }
+                  : {}),
+              }
+            : {}),
         },
         !quick && saveRule && applied && categoryId !== applied.suggestedCategoryId
           ? { pattern: merchant.trim(), categoryId }
@@ -131,21 +183,24 @@ export function QuickAddDialog({
         </button>
       </div>
       <div className="bb-dialog-content">
-        {ai && (
-          <NaturalEntry
-            ai={ai}
-            onManual={() => amountInput.current?.focus()}
-            onApply={(result, selectedCategoryId) => {
-              setApplied(result);
-              setDigits(String(result.amount));
-              setMerchant(result.merchant);
-              setLocalDate(result.date);
-              setTransactionType(result.type);
-              setCategoryId(selectedCategoryId);
-              setSaveRule(false);
-              amountInput.current?.focus();
-            }}
-          />
+        {pendingSmsCount > 0 && onReviewSms && (
+          <button type="button" className="bb-sms-shortcut" disabled={busy} onClick={onReviewSms}>
+            인식된 결제 문자 {pendingSmsCount}건 검토하기
+          </button>
+        )}
+        {agentSlot ? (
+          agentSlot({
+            onQuickAdd: quickAddFromAgent,
+            onNavigate: (screen) => onNavigate?.(screen),
+          })
+        ) : (
+          ai && (
+            <NaturalEntry
+              ai={ai}
+              onManual={() => amountInput.current?.focus()}
+              onApply={applyClassification}
+            />
+          )
         )}
         <label className="bb-field-label" htmlFor="quick-amount">
           지출 금액
@@ -164,13 +219,13 @@ export function QuickAddDialog({
           />
           <span>원</span>
         </div>
-        <p className="bb-field-hint">금액 입력 후 단골을 누르면 바로 저장돼요.</p>
+        <p className="bb-field-hint">금액이 정해진 단골은 바로 저장되고, 아닌 단골은 금액 입력 후 누르면 저장돼요.</p>
         <div className="bb-quick-chips" aria-label="단골 원탭 저장">
           {quickEntries.map((quick) => (
             <button
-              key={quick.merchant}
+              key={quick.key || quick.merchant}
               type="button"
-              disabled={amount < 1 || busy || transactionType === 'income'}
+              disabled={(!quick.defaultAmount && amount < 1) || busy || transactionType === 'income'}
               onClick={() => void save(quick)}
             >
               <span aria-hidden="true">{quick.icon}</span>

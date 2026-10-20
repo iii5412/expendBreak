@@ -1,11 +1,14 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   ArrowDownLeft,
   ChartNoAxesCombined,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   House,
   List,
   Plus,
+  Search,
   Settings2,
   ShieldCheck,
   Wallet,
@@ -17,11 +20,24 @@ import { categories as defaultCategories, quickEntries as defaultQuickEntries, m
 import type { BudgetCategory, BudgetQuickEntry } from './catalog';
 import { BudgetSettingsForm } from './BudgetSettingsForm';
 import { QuickAddDialog } from './QuickAddDialog';
+import type { AgentScreen } from '../agent/tools';
+import { TransactionEditSheet } from './TransactionEditSheet';
+import { filterHistory, HISTORY_FILTERS, type HistoryFilter, type TransactionEdit } from './history';
 import type { BudgetAiUi } from './aiClient';
 import type { BudgetMerchantRule } from '../lib/budgetAi';
 
 const won = (value: number | null) => (value === null ? '데이터 부족' : `${value.toLocaleString('ko-KR')}원`);
 type Tab = 'home' | 'history' | 'analysis' | 'manage';
+
+/** Moves between accounting cycles; the app shell owns which cycle is selected. */
+export interface BudgetPeriodNav {
+  isCurrent: boolean;
+  canGoPrev: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  onToday: () => void;
+}
+const dotted = (date: string) => date.replaceAll('-', '.');
 const tabs = [
   { id: 'home', label: '홈', icon: House },
   { id: 'history', label: '내역', icon: List },
@@ -44,6 +60,16 @@ export function BudgetApp({
   ai,
   analysisContent,
   periodKeyForDate,
+  periodNav,
+  limitSetupNeeded = false,
+  onUpdateTransaction,
+  onDeleteTransaction,
+  smsPendingCount = 0,
+  onReviewSms,
+  entryRequested = false,
+  onEntryRequestHandled,
+  agentSlot,
+  livingBudget = null,
 }: {
   data?: BudgetCalculationInput;
   categories?: BudgetCategory[];
@@ -58,12 +84,29 @@ export function BudgetApp({
   ai?: BudgetAiUi;
   analysisContent?: ReactNode;
   periodKeyForDate?: (date: string) => string;
+  periodNav?: BudgetPeriodNav;
+  /** No typed limit and no locked living budget: ask the user to set one instead of showing 0원. */
+  limitSetupNeeded?: boolean;
+  onUpdateTransaction?: (id: string, edit: TransactionEdit) => Promise<void>;
+  onDeleteTransaction?: (id: string) => Promise<void>;
+  smsPendingCount?: number;
+  onReviewSms?: () => void;
+  /** A widget or deep link asked for the entry dialog; reported back once it opened. */
+  entryRequested?: boolean;
+  onEntryRequestHandled?: () => void;
+  /** AI agent shown at the top of the add dialog; see QuickAddDialog. */
+  agentSlot?: ComponentProps<typeof QuickAddDialog>['agentSlot'];
+  /** The cycle's locked living budget, offered as a one-tap limit. */
+  livingBudget?: number | null;
 } = {}) {
   const [localInput, setInput] = useState<BudgetCalculationInput>(mockBudget);
   const input = data ?? localInput;
   const [tab, setTab] = useState<Tab>('home');
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState('');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<HistoryFilter>('all');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const result = calculateBudget(input);
   const spent = result.actualVariableBeforeToday + result.actualVariableToday;
   const signal = spendingSignal(result.actualVariableToday, result.todayAllowance);
@@ -77,6 +120,14 @@ export function BudgetApp({
     .reduce((sum, o) => sum + o.amount, 0);
   const expense = periodTransactions.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
   const pendingExpense = result.pendingFixedExpense + result.pendingVariableExpense;
+  const visibleHistory = filterHistory(periodTransactions, { query, filter });
+  const editing = editingId ? input.transactions.find((t) => t.id === editingId) : undefined;
+
+  useEffect(() => {
+    if (!entryRequested) return;
+    setAdding(true);
+    onEntryRequestHandled?.();
+  }, [entryRequested, onEntryRequestHandled]);
 
   useEffect(() => {
     if (!notice) return;
@@ -132,15 +183,36 @@ export function BudgetApp({
                     : '나에게 맞는 기준.'}
             </h1>
             <p className="bb-subtitle">
-              {input.today.replace('-', '년 ').replace('-', '월 ')}일 <span>·</span>{' '}
-              {result.budgetPeriodKey.replace('-', '년 ')}월 예산
+              {result.budgetPeriodKey.replace('-', '년 ')}월 예산 <span>·</span> {dotted(result.periodStart)} ~{' '}
+              {dotted(result.periodEnd)}
             </p>
           </div>
           <span className="bb-period-tag">
             <Wallet size={15} />
-            이번 주기 {result.remainingDaysIncludingToday}일 남음
+            {periodNav && !periodNav.isCurrent ? '지난 주기' : `이번 주기 ${result.remainingDaysIncludingToday}일 남음`}
           </span>
         </div>
+        {periodNav && (
+          <nav className="bb-period-nav" aria-label="예산 주기 이동">
+            <button type="button" aria-label="이전 주기" disabled={!periodNav.canGoPrev} onClick={periodNav.onPrev}>
+              <ChevronLeft size={18} />
+            </button>
+            <button type="button" className="bb-period-today" disabled={periodNav.isCurrent} onClick={periodNav.onToday}>
+              오늘
+            </button>
+            <button type="button" aria-label="다음 주기" disabled={periodNav.isCurrent} onClick={periodNav.onNext}>
+              <ChevronRight size={18} />
+            </button>
+          </nav>
+        )}
+        {limitSetupNeeded && tab === 'home' && (
+          <div className="bb-notice bb-limit-notice" role="status">
+            변동지출 예산 한도를 설정해 주세요.
+            <button type="button" className="bb-small-button" onClick={() => setTab('manage')}>
+              한도 설정하러 가기
+            </button>
+          </div>
+        )}
 
         {tab === 'home' && (
           <>
@@ -298,14 +370,37 @@ export function BudgetApp({
         {tab === 'history' && (
           <section className="bb-card">
             <div className="bb-section-heading">
-              <h2>이번 달 거래 내역</h2>
-              <span>{periodTransactions.length}건</span>
+              <h2>이번 주기 거래 내역</h2>
+              <span>{visibleHistory.length === periodTransactions.length ? `${periodTransactions.length}건` : `${visibleHistory.length}/${periodTransactions.length}건`}</span>
             </div>
+            <label className="bb-search">
+              <Search size={16} aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                maxLength={40}
+                placeholder="사용처·메모 검색"
+                aria-label="거래 검색"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <div className="bb-filter-chips" role="group" aria-label="거래 필터">
+              {HISTORY_FILTERS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-pressed={filter === item.id}
+                  onClick={() => setFilter(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {visibleHistory.length === 0 && <p className="bb-caption">조건에 맞는 거래가 없어요.</p>}
             <ul className="bb-history">
-              {[...periodTransactions]
-                .sort((a, b) => b.localDate.localeCompare(a.localDate))
-                .map((t) => (
-                  <li key={t.id}>
+              {visibleHistory.map((t) => {
+                const row = (
+                  <>
                     <span className="bb-category-icon" aria-hidden="true">
                       {t.type === 'income' ? '↙' : categories.find((c) => c.id === t.categoryId)?.icon || '🧾'}
                     </span>
@@ -319,15 +414,32 @@ export function BudgetApp({
                             ? '일회성 지출'
                             : t.expenseNature === 'fixed'
                               ? '고정비'
-                              : categories.find((c) => c.id === t.categoryId)?.label || '수입'}
+                              : categories.find((c) => c.id === t.categoryId)?.label || '기타'}
                       </small>
                     </div>
                     <b className={t.type === 'income' ? 'bb-income' : ''}>
                       {t.type === 'income' ? '+' : '−'}
                       {won(t.amount)}
                     </b>
+                  </>
+                );
+                return (
+                  <li key={t.id}>
+                    {onUpdateTransaction ? (
+                      <button
+                        type="button"
+                        className="bb-history-row"
+                        aria-label={`${t.merchant || '거래'} ${won(t.amount)} 수정`}
+                        onClick={() => setEditingId(t.id)}
+                      >
+                        {row}
+                      </button>
+                    ) : (
+                      row
+                    )}
                   </li>
-                ))}
+                );
+              })}
             </ul>
           </section>
         )}
@@ -364,6 +476,8 @@ export function BudgetApp({
             {accountContent}
             {managementContent}
             <BudgetSettingsForm
+              key={result.budgetPeriodKey}
+              livingBudget={livingBudget}
               settings={input.settings}
               categories={categories}
               isDemo={isDemo}
@@ -409,6 +523,41 @@ export function BudgetApp({
           onClose={() => setAdding(false)}
           ai={ai}
           periodKeyForDate={periodKeyForDate}
+          pendingSmsCount={smsPendingCount}
+          agentSlot={agentSlot}
+          onNavigate={(screen: AgentScreen) => {
+            setAdding(false);
+            setTab(screen === 'history' ? 'history' : screen === 'analytics' ? 'analysis' : screen === 'home' ? 'home' : 'manage');
+          }}
+          onReviewSms={
+            onReviewSms
+              ? () => {
+                  setAdding(false);
+                  setTimeout(onReviewSms, 50);
+                }
+              : undefined
+          }
+        />
+      )}
+      {editing && onUpdateTransaction && (
+        <TransactionEditSheet
+          key={editing.id}
+          transaction={editing}
+          categories={categories}
+          onClose={() => setEditingId(null)}
+          onSave={async (edit) => {
+            await onUpdateTransaction(editing.id, edit);
+            setEditingId(null);
+            setNotice(`${edit.merchant || editing.merchant || '거래'} 내역을 수정했어요.`);
+          }}
+          onDelete={
+            onDeleteTransaction
+              ? async () => {
+                  await onDeleteTransaction(editing.id);
+                  setEditingId(null);
+                }
+              : undefined
+          }
         />
       )}
       {children}

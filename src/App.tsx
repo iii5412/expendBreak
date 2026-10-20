@@ -152,12 +152,14 @@ import {
 } from './utils/widget';
 import {
   acknowledgePendingSms,
+  buildSmsExpenseTransaction,
   clearPendingSms,
   configureSmsImport,
   findCancellationTarget,
   getSmsImportStatus,
   getSmsPermissionStatus,
   isDuplicateSmsTransaction,
+  merchantRuleToRemember,
   openSmsPermissionSettings,
   prepareSmsReviewQueue,
   readPendingSms,
@@ -226,6 +228,10 @@ export default function App() {
   const [smsBannerDismissedFor, setSmsBannerDismissedFor] = useState('');
   const smsImportBusy = useRef(false);
   const smsImportRerunRequested = useRef(false);
+  /** Lets the budget view's "지금 확인" re-read the native queue right after a scan. */
+  const smsImportNow = useRef<(() => void) | null>(null);
+  /** A widget or deep link asked the budget view to open its entry dialog; it clears this once handled. */
+  const [budgetEntryRequested, setBudgetEntryRequested] = useState(false);
   const announcedSmsCandidateIds = useRef(new Set<string>());
   const smsDisclosurePromptedFor = useRef<string | null>(null);
 
@@ -392,6 +398,7 @@ export default function App() {
       }
     };
 
+    smsImportNow.current = () => void importPending();
     void configureSmsImport(
       userProfile.uid,
       Boolean(userProfile.smsAutoImportEnabled),
@@ -409,6 +416,7 @@ export default function App() {
     return () => {
       cancelled = true;
       smsImportRerunRequested.current = false;
+      smsImportNow.current = null;
       unsubscribe();
     };
   }, [bootState, userProfile.uid, userProfile.smsAutoImportEnabled, userProfile.smsInboxConsentVersion]);
@@ -546,26 +554,11 @@ export default function App() {
       return;
     }
 
-    saveTransaction({
-      type: 'expense',
-      amount: candidate.amount,
-      occurredAt: candidate.occurredAt,
-      localDate: candidate.localDate,
-      categoryId: candidate.suggestedCategoryId,
-      merchant: candidate.merchant,
-      memo: `[SMS 승인 등록] ${candidate.issuer || '카드'}${candidate.cardLast4 ? ` 끝 ${candidate.cardLast4}` : ''}`,
-      source: 'sms',
-      sourceFingerprint: candidate.fingerprint,
-      sourceReference: candidate.approvalCode,
-      paymentMethodType: 'card',
-      accountId: null,
-      cardId: candidate.matchedCardId,
-      installment: candidate.installmentMonths && candidate.installmentMonths > 1 ? {
-        totalMonths: candidate.installmentMonths,
-        currentRound: 1,
-        baseYearMonth: candidate.localDate.slice(0, 7),
-      } : null,
-    });
+    saveTransaction(buildSmsExpenseTransaction(candidate, monthStartDay));
+    // A merchant the user filed under a real category is remembered, so the next
+    // message from it needs no correction.
+    const rule = merchantRuleToRemember(candidate);
+    if (rule) saveMerchantRule(rule.pattern, rule.categoryId);
     await acknowledgePendingSms(userProfile.uid, candidate.messageIds);
     removeSmsCandidate(candidate);
     refreshAppData();
@@ -955,7 +948,15 @@ export default function App() {
 
   useEffect(() => {
     if (!nativeDestination || bootState !== 'ready') return;
-    if (nativeDestination.kind === 'transaction/new') {
+    const budgetViewActive = resolveView(window.location.search) === 'budget';
+    if (budgetViewActive && (nativeDestination.kind === 'transaction/new' || nativeDestination.kind === 'quick-entry')) {
+      // The budget view owns its own entry dialog; a fixed-amount chip still records at once.
+      const entry = nativeDestination.kind === 'quick-entry'
+        ? getQuickEntries().find(candidate => candidate.id === nativeDestination.quickEntryId)
+        : null;
+      if (entry && entry.amount !== null) handlePostQuickEntry(entry.id);
+      else setBudgetEntryRequested(true);
+    } else if (nativeDestination.kind === 'transaction/new') {
       setPendingLiveDraft(null); setPendingAiText(null); setPendingEntryMode(null);
       setIsAddModalOpen(true);
     } else if (nativeDestination.kind === 'settings/widget') {
@@ -1546,7 +1547,22 @@ export default function App() {
   }
 
   if (resolveView(window.location.search) === 'budget') {
-    return <Suspense fallback={<ViewLoading />}><ConnectedBudgetView onLock={handleLock} /></Suspense>;
+    return (
+      <Suspense fallback={<ViewLoading />}>
+        <ConnectedBudgetView
+          onLock={handleLock}
+          entryRequested={budgetEntryRequested}
+          onEntryRequestHandled={() => setBudgetEntryRequested(false)}
+          sms={{
+            candidates: smsCandidates,
+            onApprove: handleApproveSmsCandidate,
+            onDismiss: handleDismissSmsCandidate,
+            onUpdate: handleUpdateSmsCandidate,
+            onScanComplete: () => smsImportNow.current?.(),
+          }}
+        />
+      </Suspense>
+    );
   }
 
   return (

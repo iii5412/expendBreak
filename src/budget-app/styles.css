@@ -1239,3 +1239,152 @@ dd {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Existing dark-themed cards (SMS review/settings) embedded in the light budget view. */
+.bb-app .bb-dark-embed :is(h1, h2, h3, h4, dt, dd, strong, b, label, summary, li, button) {
+  color: revert-layer;
+}
+.bb-dark-embed.bb-dark-card {
+  margin: 0 0 16px;
+  border-radius: 18px;
+  background: #0f172a;
+  color: #e2e8f0;
+  color-scheme: dark;
+}
+.bb-dark-embed {
+  color-scheme: dark;
+}
+.bb-dark-embed #sms-review {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+.bb-sms-shortcut {
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 14px;
+  border: 1px solid #b9d3c3;
+  border-radius: 12px;
+  background: #eaf3ec;
+  color: #1f4a35;
+  font-weight: 700;
+  font-size: 13px;
+}
+.bb-danger-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border: 1px solid #e3b8b0;
+  border-radius: 12px;
+  background: #fff6f4;
+  color: #a2402f;
+  font-weight: 700;
+  font-size: 13px;
+}
+.bb-period-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 16px;
+}
+.bb-period-nav button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid #d6dfca;
+  border-radius: 10px;
+  background: #f2f5ea;
+  font-size: 13px;
+}
+.bb-limit-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.bb-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 0 12px;
+  border: 1px solid #d4ddcb;
+  border-radius: 10px;
+  background: #fffefa;
+}
+.bb-search input {
+  flex: 1;
+  min-height: 42px;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+.bb-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.bb-filter-chips button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #d6dfca;
+  border-radius: 999px;
+  background: #f2f5ea;
+  font-size: 12px;
+}
+.bb-filter-chips button[aria-pressed='true'] {
+  background: #275840;
+  border-color: #275840;
+  color: #fffef5;
+  font-weight: 700;
+}
+.bb-history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+.bb-history li:has(> .bb-history-row) {
+  padding: 0;
+}
+.bb-history-row {
+  padding: 16px 0;
+}
+.bb-inline-input {
+  width: 130px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d4ddcb;
+  border-radius: 8px;
+  background: #fffefa;
+}
+.bb-agent {
+  margin: 0 0 14px;
+  padding: 10px;
+}
+.bb-agent-consent {
+  display: grid;
+  gap: 10px;
+  padding: 6px;
+  font-size: 13px;
+}
+.bb-agent-consent button {
+  min-height: 44px;
+  border-radius: 10px;
+  background: #6366f1;
+  font-weight: 700;
+  color: #fff;
+}

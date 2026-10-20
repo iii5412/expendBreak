@@ -80,6 +80,34 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                 </strong>
               </div>
 
+              {candidate.kind === 'approval' && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="space-y-1 text-xs text-slate-400">
+                    <span>카테고리</span>
+                    <select
+                      value={candidate.suggestedCategoryId}
+                      disabled={Boolean(workingId)}
+                      onChange={event => onUpdate({ ...candidate, suggestedCategoryId: event.target.value })}
+                      className="min-h-10 w-full rounded border border-slate-700 bg-slate-900 px-3 text-sm text-white"
+                    >
+                      {categories.filter(item => item.type === 'expense' && (item.active || item.id === candidate.suggestedCategoryId)).map(item => (
+                        <option key={item.id} value={item.id}>{item.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex min-h-10 items-center gap-2 self-end text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(candidate.isOneOff)}
+                      disabled={Boolean(workingId)}
+                      onChange={event => onUpdate({ ...candidate, isOneOff: event.target.checked })}
+                      className="h-5 w-5 accent-sky-500"
+                    />
+                    <span>일회성 지출 (월말 예측에서 제외)</span>
+                  </label>
+                </div>
+              )}
+
               {editing?.fingerprint === candidate.fingerprint ? (
                 <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-950/80 p-3 sm:grid-cols-2">
                   <label className="space-y-1 text-xs text-slate-400 sm:col-span-2">
@@ -167,7 +195,7 @@ export const SmsReviewCard: React.FC<SmsReviewCardProps> = ({
                       type="button"
                       disabled={!editing.merchant.trim() || editing.amount <= 0 || !editing.localDate}
                       onClick={() => {
-                        onUpdate({ ...editing, merchant: editing.merchant.trim() });
+                        onUpdate({ ...editing, merchant: editing.merchant.trim(), isOneOff: candidate.isOneOff });
                         setEditing(null);
                       }}
                       className="flex min-h-10 flex-1 items-center justify-center gap-2 bg-sky-500 px-3 text-xs font-bold text-slate-950 disabled:opacity-40"

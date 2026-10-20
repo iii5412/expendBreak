@@ -22,6 +22,8 @@ const SMS_INBOX_CONSENT_VERSION = 2;
 interface SmsImportSettingsCardProps {
   userProfile: UserProfile;
   onUpdateUserProfile: (updates: Partial<UserProfile>) => void;
+  /** Called after a manual scan so the screen can re-read the pending queue at once. */
+  onScanComplete?: () => void;
 }
 
 function formatTimestamp(value: number) {
@@ -34,6 +36,7 @@ function formatTimestamp(value: number) {
 export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
   userProfile,
   onUpdateUserProfile,
+  onScanComplete,
 }) => {
   const confirm = useConfirm();
   const { showToast } = useToast();
@@ -167,6 +170,7 @@ export const SmsImportSettingsCard: React.FC<SmsImportSettingsCardProps> = ({
     try {
       const next = await scanSmsInbox(userProfile.uid, true);
       await refreshStatus();
+      onScanComplete?.();
       showToast({
         message: next?.lastCandidateCount
           ? `새 결제 후보 ${next.lastCandidateCount}건을 찾았습니다.`

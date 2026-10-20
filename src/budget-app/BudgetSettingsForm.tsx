@@ -7,15 +7,31 @@ export function BudgetSettingsForm({
   categories,
   onSave,
   isDemo,
+  livingBudget = null,
 }: {
   settings: BudgetSettings;
   categories: BudgetCategory[];
   onSave: (settings: BudgetSettings) => Promise<void> | void;
   isDemo: boolean;
+  /** The cycle's locked living budget; offered as a one-tap limit when there is one. */
+  livingBudget?: number | null;
 }) {
   const [draft, setDraft] = useState(settings);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const submit = async (next: BudgetSettings) => {
+    if (busy) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await onSave(next);
+      setMessage('예산 기준을 저장했습니다.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '저장하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const change = (value: string, max: number) => Math.max(0, Math.min(max, Math.floor(Number(value) || 0)));
   return (
     <section className="bb-card">
@@ -27,19 +43,9 @@ export function BudgetSettingsForm({
           : '저장 버튼을 누르면 내 계정의 이번 주기에 적용됩니다.'}
       </p>
       <form
-        onSubmit={async (event) => {
+        onSubmit={(event) => {
           event.preventDefault();
-          if (busy) return;
-          setBusy(true);
-          setMessage('');
-          try {
-            await onSave(draft);
-            setMessage('예산 기준을 저장했습니다.');
-          } catch (error) {
-            setMessage(error instanceof Error ? error.message : '저장하지 못했습니다.');
-          } finally {
-            setBusy(false);
-          }
+          void submit(draft);
         }}
       >
         <label className="bb-setting">
@@ -56,6 +62,20 @@ export function BudgetSettingsForm({
             }
           />
         </label>
+        {livingBudget !== null && livingBudget > 0 && (
+          <button
+            type="button"
+            className="bb-small-button"
+            disabled={busy}
+            onClick={() => {
+              const next = { ...draft, variableExpenseLimit: Math.floor(livingBudget) };
+              setDraft(next);
+              void submit(next);
+            }}
+          >
+            급여일 기준 생활비({livingBudget.toLocaleString('ko-KR')}원)로 설정
+          </button>
+        )}
         {categories
           .filter(
             (category) =>

@@ -1,7 +1,11 @@
 import type {
+  BankAccount,
   Budget,
   Category,
+  CycleBaseline,
   MerchantRule,
+  PaymentCard,
+  QuickEntry,
   RecurringOccurrence,
   RecurringTemplate,
   Transaction,
@@ -16,6 +20,8 @@ import {
 } from '../utils/calculations';
 import { resolveRecurringAmount } from '../utils/recurringAmounts';
 import { getInstallmentCharge } from '../utils/installments';
+import type { TransactionEdit } from './history';
+import { getDuplicateManualCardSettlementTemplateIds } from '../utils/cardSettlementPlans';
 
 export interface BudgetAccountData {
   merchantRules?: MerchantRule[];
@@ -26,13 +32,51 @@ export interface BudgetAccountData {
   budget: Budget;
   categories: Category[];
   historyFloor: string;
+  /** Locked living budget of the viewed cycle; stands in when no limit was typed. */
+  cycleBaseline?: CycleBaseline | null;
+  paymentCards?: PaymentCard[];
+  bankAccounts?: BankAccount[];
+  quickEntries?: QuickEntry[];
 }
 
-export function toBudgetInput(data: BudgetAccountData, now = new Date()): BudgetCalculationInput {
-  const today = getLocalDateString(now);
+/** Manual "카드대금" templates the generated card bill already covers (counted once, as the classic view does). */
+export function replacedCardSettlementTemplateIds(data: BudgetAccountData) {
+  return getDuplicateManualCardSettlementTemplateIds(
+    data.templates.filter((t) => !t.archivedAt),
+    data.paymentCards || [],
+    { bankAccounts: data.bankAccounts || [] },
+  );
+}
+
+/** The typed limit wins; otherwise the cycle's locked living budget is used so the view never starts at 0원. */
+export function effectiveVariableLimit(data: BudgetAccountData, periodKey: string) {
+  if (data.budget.totalLimit > 0) return data.budget.totalLimit;
+  const baseline = data.cycleBaseline;
+  return baseline && baseline.yearMonth === periodKey && baseline.livingBudget > 0
+    ? Math.floor(baseline.livingBudget)
+    : 0;
+}
+
+/** True when there is neither a typed limit nor a living budget to fall back on. */
+export function needsLimitSetup(data: BudgetAccountData, periodKey: string) {
+  return effectiveVariableLimit(data, periodKey) === 0;
+}
+
+/**
+ * `selectedKey` views another cycle. A finished cycle is evaluated as of its last
+ * day, so its result and daily chart show the final outcome instead of "today".
+ */
+export function toBudgetInput(
+  data: BudgetAccountData,
+  now = new Date(),
+  selectedKey?: string,
+): BudgetCalculationInput {
   const day = Math.min(28, Math.max(1, data.profile.monthStartDay || 1));
-  const key = getCurrentYearMonth(day, now);
+  const key = selectedKey || getCurrentYearMonth(day, now);
   const period = getAccountingPeriod(key, day, now);
+  const realToday = getLocalDateString(now);
+  const today = realToday > period.endDate ? period.endDate : realToday;
+  const replaced = replacedCardSettlementTemplateIds(data);
   const templateMap = new Map(data.templates.map((t) => [t.id, t]));
   const occurrenceMap = new Map(data.occurrences.map((o) => [o.occurrenceKey, o]));
   const nature = (template?: RecurringTemplate) =>
@@ -53,12 +97,17 @@ export function toBudgetInput(data: BudgetAccountData, now = new Date()): Budget
     period: { key, start: period.startDate, end: period.endDate },
     settings: {
       monthStartDay: day,
-      variableExpenseLimit: data.budget.totalLimit,
+      variableExpenseLimit: effectiveVariableLimit(data, key),
       categoryAmountLimits: data.budget.categoryAmountLimits || data.profile.categoryAmountLimits || {},
       categoryCountLimits: data.budget.categoryCountLimits || data.profile.categoryCountLimits || {},
     },
     transactions: data.transactions
-      .filter((t) => (!t.role || t.role === 'normal') && !templateMap.get(t.recurringTemplateId)?.cardSettlementCardId)
+      .filter(
+        (t) =>
+          (!t.role || t.role === 'normal') &&
+          !templateMap.get(t.recurringTemplateId)?.cardSettlementCardId &&
+          !(t.recurringTemplateId && replaced.has(t.recurringTemplateId)),
+      )
       .flatMap<BudgetTransaction>((t) => {
         if (t.installment && t.type === 'expense') {
           const charge = getInstallmentCharge(t.amount, t.installment, key);
@@ -96,7 +145,7 @@ export function toBudgetInput(data: BudgetAccountData, now = new Date()): Budget
         ];
       }),
     templates: data.templates
-      .filter((t) => !t.archivedAt && !t.cardSettlementCardId)
+      .filter((t) => !t.archivedAt && !t.cardSettlementCardId && !replaced.has(t.id))
       .map((t) => ({ id: t.id, active: t.active, type: t.type, expenseNature: nature(t), amount: t.defaultAmount })),
     occurrences: data.occurrences
       .filter((o) => {
@@ -104,6 +153,7 @@ export function toBudgetInput(data: BudgetAccountData, now = new Date()): Budget
         return (
           template &&
           !template.cardSettlementCardId &&
+          !replaced.has(template.id) &&
           (o.status === 'posted' || (template.active && !template.archivedAt))
         );
       })
@@ -139,6 +189,13 @@ export function transactionForStorage(
       ? { aiConfidence: transaction.aiConfidence, aiReviewed: transaction.aiReviewed === true }
       : {}),
     role: 'normal',
+    ...(transaction.paymentMethodType
+      ? {
+          paymentMethodType: transaction.paymentMethodType,
+          cardId: transaction.cardId ?? null,
+          accountId: transaction.accountId ?? null,
+        }
+      : {}),
     budgetPeriodKey: transaction.budgetPeriodKey,
     expenseNature: transaction.expenseNature,
     isOneOff: transaction.isOneOff,
@@ -164,6 +221,7 @@ export function shouldOnboard(data: BudgetAccountData) {
 
 export function autoPostingCandidates(data: BudgetAccountData, today: string) {
   const input = toBudgetInput(data, new Date(`${today}T12:00:00`));
+  const replaced = replacedCardSettlementTemplateIds(data);
   return data.occurrences.flatMap((o) => {
     const t = data.templates.find((template) => template.id === o.templateId);
     if (
@@ -173,6 +231,7 @@ export function autoPostingCandidates(data: BudgetAccountData, today: string) {
       t.postingMode !== 'auto' ||
       t.allowAmountChange ||
       t.cardSettlementCardId ||
+      replaced.has(t.id) ||
       o.projected ||
       o.status === 'posted' ||
       o.status === 'skipped' ||
@@ -195,4 +254,30 @@ export function autoPostingCandidates(data: BudgetAccountData, today: string) {
     const amount = resolved.status === 'confirmed' ? resolved.amount : t.defaultAmount;
     return Number.isSafeInteger(amount) && amount > 0 ? [{ id: o.id, amount }] : [];
   });
+}
+
+/**
+ * Only what the user actually changed. Amount and date are protected fields, so an
+ * untouched edit must not look like a protected change to the revision protocol.
+ */
+export function buildTransactionUpdates(
+  existing: Transaction,
+  edit: TransactionEdit,
+  monthStartDay: number,
+): Partial<Transaction> {
+  const updates: Partial<Transaction> = {};
+  if (edit.merchant !== existing.merchant) updates.merchant = edit.merchant;
+  if (edit.memo !== (existing.memo || '')) updates.memo = edit.memo;
+  if (edit.amount !== existing.amount) updates.amount = edit.amount;
+  if (edit.localDate !== existing.localDate) {
+    updates.localDate = edit.localDate;
+    updates.occurredAt = new Date(`${edit.localDate}T12:00:00`).toISOString();
+    // A bill paid for another cycle keeps the cycle its plan assigned.
+    if (!existing.recurringOccurrenceKey) updates.budgetPeriodKey = getYearMonthForDate(edit.localDate, monthStartDay);
+  }
+  if (existing.type === 'expense') {
+    if (edit.categoryId && edit.categoryId !== existing.categoryId) updates.categoryId = edit.categoryId;
+    if (existing.expenseNature !== 'fixed' && edit.isOneOff !== (existing.isOneOff === true)) updates.isOneOff = edit.isOneOff;
+  }
+  return updates;
 }

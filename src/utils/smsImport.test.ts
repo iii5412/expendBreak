@@ -97,6 +97,47 @@ describe('SMS transaction enrichment', () => {
     ])).toBe('shopping');
   });
 
+  describe('resolveSmsCategory keyword heuristics', () => {
+    const ids = ['dining_out', 'delivery_food', 'transportation', 'medical_health', 'groceries', 'shopping', 'etc_expense'];
+    const categories = ids.map(id => ({ id, name: id, type: 'expense' as const, icon: '', color: '', active: true }));
+    const rule = (pattern: string, categoryId: string) => ({ id: `rule-${pattern}`, pattern, categoryId, createdAt: '' });
+
+    it('lets keywords beat a leftover 기타 rule', () => {
+      const rules = [rule('메가MGC커피', 'etc_expense')];
+      expect(resolveSmsCategory('메가MGC커피', categories, rules)).toBe('dining_out');
+      expect(resolveSmsCategory('씨유(CU)대전', categories, [rule('씨유', 'etc_expense')])).toBe('shopping');
+    });
+
+    it('keeps a specific rule ahead of keywords, even beside a longer 기타 rule', () => {
+      const rules = [rule('메가MGC커피 대전', 'etc_expense'), rule('메가MGC', 'shopping')];
+      expect(resolveSmsCategory('메가MGC커피 대전점', categories, rules)).toBe('shopping');
+    });
+
+    it.each([
+      ['파리바게뜨', 'dining_out'],
+      ['아삭앤달콤', 'groceries'],
+      ['㈜ 비브로스 똑딱', 'medical_health'],
+      ['씨유둔산월드', 'shopping'],
+      ['CU 대전이스', 'shopping'],
+      ['셀프주유소', 'transportation'],
+      ['땡겨요', 'delivery_food'],
+    ])('maps %s to %s', (merchant, expected) => {
+      expect(resolveSmsCategory(merchant, categories, [])).toBe(expected);
+    });
+
+    it('still falls back to 기타 for unknown merchants', () => {
+      expect(resolveSmsCategory('타임 전자담', categories, [])).toBe('etc_expense');
+    });
+
+    it('classifies a queued approval message without a rule', () => {
+      const body = ['신한카드 *1234 승인', '2,000원 일시불', '10/20 08:10 메가MGC커피', '승인번호 111222'].join('\n');
+      const result = prepareSmsReviewQueue([message(body, new Date(2026, 9, 20, 8, 11).getTime())], [], cards, categories, [
+        rule('메가MGC커피', 'etc_expense'),
+      ]);
+      expect(result.candidates[0]).toMatchObject({ merchant: '메가MGC커피', suggestedCategoryId: 'dining_out' });
+    });
+  });
+
   it('only auto-cancels a unique matching SMS transaction', () => {
     const parsed = parseFinancialSms(message('신한카드 *1234 승인취소\n15,900원\n09/06 13:09 스타벅스 강남점'))!;
     const approval: Transaction = {

@@ -27,9 +27,12 @@ interface AgentPanelProps {
   onNavigate: (screen: AgentScreen) => void;
   /** Opens the entry form with this sentence analysed by AI 문장. */
   onQuickAdd: (text: string) => void;
-  getCurrentTransactions: () => Transaction[];
-  onSaveStatementTransaction: (draft: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
-  onUpdateStatementTransaction: (id: string, expectedUpdatedAt: string, updates: Partial<Transaction>) => Transaction | null;
+  /** The card-statement tool is shown only when all three are provided. */
+  getCurrentTransactions?: () => Transaction[];
+  onSaveStatementTransaction?: (draft: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>) => Transaction;
+  onUpdateStatementTransaction?: (id: string, expectedUpdatedAt: string, updates: Partial<Transaction>) => Transaction | null;
+  /** Embedded use (entry dialog): no header or footer note, shorter conversation area. */
+  compact?: boolean;
 }
 
 const SUGGESTIONS = [
@@ -195,7 +198,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
 
   return (
     <section className="space-y-3" aria-label="Agent">
-      <div className="rounded-2xl border border-indigo-500/25 bg-gradient-to-br from-indigo-500/15 via-slate-950 to-cyan-500/10 p-4">
+      {!props.compact && <div className="rounded-2xl border border-indigo-500/25 bg-gradient-to-br from-indigo-500/15 via-slate-950 to-cyan-500/10 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500 text-white shadow-lg shadow-indigo-950/40">
@@ -212,9 +215,9 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
             </button>
           )}
         </div>
-      </div>
+      </div>}
 
-      <div className="max-h-[55vh] min-h-56 space-y-3 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/80 p-3" aria-live="polite">
+      <div className={`${props.compact ? 'max-h-[34vh] min-h-24' : 'max-h-[55vh] min-h-56'} space-y-3 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/80 p-3`} aria-live="polite">
         {session.entries.length === 0 && (
           <div className="space-y-3 py-2">
             <div className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs leading-relaxed text-slate-300">
@@ -277,19 +280,23 @@ export const AgentPanel: React.FC<AgentPanelProps> = props => {
         </div>
       </div>
 
-      <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] leading-relaxed text-emerald-100/75">
-        <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <p>Agent가 요청한 조회 결과만 GPT로 보내며, 계좌·카드 번호와 PIN은 보내지 않습니다. 대화는 저장되지 않고 잠금 시 지워집니다.</p>
-      </div>
+      {!props.compact && (
+        <div className="flex items-start gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] leading-relaxed text-emerald-100/75">
+          <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p>Agent가 요청한 조회 결과만 GPT로 보내며, 계좌·카드 번호와 PIN은 보내지 않습니다. 대화는 저장되지 않고 잠금 시 지워집니다.</p>
+        </div>
+      )}
 
-      <CardStatementReconcilePanel
-        categories={props.categories}
-        paymentCards={props.paymentCards}
-        transactions={props.transactions}
-        getCurrentTransactions={props.getCurrentTransactions}
-        onSave={props.onSaveStatementTransaction}
-        onUpdate={props.onUpdateStatementTransaction}
-      />
+      {props.getCurrentTransactions && props.onSaveStatementTransaction && props.onUpdateStatementTransaction && (
+        <CardStatementReconcilePanel
+          categories={props.categories}
+          paymentCards={props.paymentCards}
+          transactions={props.transactions}
+          getCurrentTransactions={props.getCurrentTransactions}
+          onSave={props.onSaveStatementTransaction}
+          onUpdate={props.onUpdateStatementTransaction}
+        />
+      )}
     </section>
   );
 };
