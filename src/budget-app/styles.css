@@ -1384,7 +1384,127 @@ dd {
 .bb-agent-consent button {
   min-height: 44px;
   border-radius: 10px;
-  background: #6366f1;
+  background: #3f6f55;
   font-weight: 700;
   color: #fff;
+}
+
+/*
+ * The agent panel is written with dark Tailwind classes. In the budget view it is
+ * re-coloured here, scoped to .bb-agent-light, so it matches the light theme without
+ * a second copy of the component.
+ */
+.bb-agent-light {
+  border: 1px solid #dfe6d3;
+  border-radius: 18px;
+  background: #f8f9f2;
+  color: #253b32;
+}
+.bb-agent-light .bg-slate-950,
+.bb-agent-light .bg-slate-950\/80 {
+  background: #fffefa;
+}
+.bb-agent-light .bg-slate-900 {
+  background: #f1f4e8;
+}
+.bb-agent-light .bg-slate-800,
+.bb-agent-light .hover\:bg-slate-800:hover,
+.bb-agent-light .hover\:bg-slate-700:hover {
+  background: #e6ebdb;
+}
+.bb-agent-light .bg-slate-700 {
+  background: #d3dcc7;
+}
+.bb-agent-light .border-slate-800,
+.bb-agent-light .border-slate-700,
+.bb-agent-light .border-slate-700\/70 {
+  border-color: #d6dfca;
+}
+.bb-agent-light .text-white,
+.bb-agent-light .text-slate-200,
+.bb-agent-light .hover\:text-slate-200:hover,
+.bb-agent-light .text-slate-300 {
+  color: #2f4538;
+}
+.bb-agent-light .text-slate-400 {
+  color: #5f6d57;
+}
+.bb-agent-light .text-slate-500,
+.bb-agent-light textarea::placeholder {
+  color: #7b8672;
+}
+.bb-agent-light .text-indigo-200,
+.bb-agent-light .text-indigo-300,
+.bb-agent-light .text-indigo-400,
+.bb-agent-light .hover\:text-indigo-200:hover {
+  color: #3f6f55;
+}
+.bb-agent-light .bg-indigo-400 {
+  background: #3f6f55;
+}
+.bb-agent-light .hover\:border-indigo-500\/40:hover,
+.bb-agent-light .focus-within\:border-indigo-500:focus-within {
+  border-color: #3f6f55;
+}
+.bb-agent-light .focus-within\:ring-indigo-500\/30:focus-within {
+  --tw-ring-color: #3f6f5540;
+}
+.bb-agent-light .text-cyan-200 {
+  color: #0e6f7e;
+}
+.bb-agent-light .border-cyan-400\/60 {
+  border-color: #7cc4cf;
+}
+.bb-agent-light .bg-cyan-500\/5 {
+  background: #eaf5f7;
+}
+/* Filled buttons and the user's own bubble keep white text on a solid accent. */
+.bb-agent-light .bg-indigo-500,
+.bb-agent-light .hover\:bg-indigo-400:hover {
+  background: #3f6f55;
+}
+.bb-agent-light .bg-indigo-500.text-white {
+  color: #fff;
+}
+.bb-agent-light .bg-emerald-500,
+.bb-agent-light .hover\:bg-emerald-400:hover {
+  background: #2e7d56;
+  color: #fff;
+}
+.bb-agent-light .text-slate-950 {
+  color: #fff;
+}
+.bb-agent-light .text-emerald-300,
+.bb-agent-light .text-emerald-100\/75 {
+  color: #1f6b46;
+}
+.bb-agent-light .border-emerald-500\/40,
+.bb-agent-light .border-emerald-500\/20 {
+  border-color: #b9d3c3;
+}
+.bb-agent-light .bg-emerald-500\/5,
+.bb-agent-light .bg-emerald-500\/15 {
+  background: #eaf3ec;
+}
+.bb-agent-light .text-amber-300 {
+  color: #9a5a00;
+}
+.bb-agent-light .border-amber-400\/50 {
+  border-color: #e0b25a;
+}
+.bb-agent-light .text-rose-100,
+.bb-agent-light .text-rose-300 {
+  color: #a2402f;
+}
+.bb-agent-light .border-rose-500\/40,
+.bb-agent-light .border-rose-500\/35 {
+  border-color: #e3b8b0;
+}
+.bb-agent-light .bg-rose-500\/10 {
+  background: #fdeeea;
+}
+.bb-agent-light .bg-rose-500\/20,
+.bb-agent-light .bg-rose-500\/30,
+.bb-agent-light .hover\:bg-rose-500\/30:hover {
+  background: #f8d9d3;
 }

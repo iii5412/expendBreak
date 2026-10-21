@@ -139,7 +139,7 @@ export function AccountBudgetView({
       agentSlot={
         agent && !isDemo
           ? ({ onQuickAdd, onNavigate }) => (
-              <div className="bb-dark-embed bb-dark-card bb-agent">
+              <div className="bb-agent bb-agent-light">
                 {account.profile.aiClassificationEnabled ? (
                   <AgentPanel
                     compact
