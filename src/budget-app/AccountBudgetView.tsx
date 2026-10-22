@@ -15,6 +15,7 @@ import { suggestQuickEntryCandidates } from '../utils/quickEntrySuggestions';
 import { accountCatalog } from './catalog';
 import { AgentPanel } from '../components/AgentPanel';
 import type { AgentActionDeps } from '../agent/approve';
+import { AccountsPanel } from './AccountsPanel';
 import { QuickEntryManager, type NewQuickEntry } from './QuickEntryManager';
 import type { QuickEntry } from '../types';
 import { RecurringManager, type RecurringActions } from './RecurringManager';
@@ -224,6 +225,9 @@ export function AccountBudgetView({
       }
       managementContent={
         <>
+          {!isDemo && (
+            <AccountsPanel bankAccounts={account.bankAccounts || []} paymentCards={account.paymentCards || []} />
+          )}
           <DataControls exportCsv={actions.exportCsv} resetData={actions.resetData} isDemo={isDemo} />
           <AiSettingsPanel
             classification={account.profile.aiClassificationEnabled}

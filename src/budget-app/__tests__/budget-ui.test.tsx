@@ -10,6 +10,7 @@ import {
 } from '../adapter';
 import { AccountBudgetView, type BudgetAccountActions } from '../AccountBudgetView';
 import { accountCatalog } from '../catalog';
+import { AccountsPanel } from '../AccountsPanel';
 import { emptyLocalAccount, putLocalTemplate } from '../localAccount';
 import { filterHistory, validateTransactionEdit, type TransactionEdit } from '../history';
 import { QuickAddDialog } from '../QuickAddDialog';
@@ -439,5 +440,38 @@ describe('add dialog agent', () => {
 
   it('keeps the one-sentence box when no agent is wired', () => {
     expect(dialog()).toContain('한 문장으로 기록하기');
+  });
+});
+
+describe('accounts and cards in the manage tab', () => {
+  const bankAccounts = [
+    {
+      id: 'a1', bankName: '국민', accountName: '생활비', accountNumber: '123-456-789012', accountHolder: '홍길동',
+      balance: 500_000, balanceConfirmed: true, balanceAsOf: '2026-10-20', createdAt: stamp, updatedAt: stamp,
+    },
+  ];
+  const paymentCards: PaymentCard[] = [
+    {
+      id: 'c1', cardName: '딥드림', cardCompany: '신한카드', cardType: 'credit', cardLast4: '1234',
+      linkedAccountId: 'a1', billingDay: 10, statementClosingDay: 25, createdAt: stamp, updatedAt: stamp,
+    },
+  ];
+
+  it('lists account numbers and card details for the owner to read', () => {
+    const markup = renderToStaticMarkup(<AccountsPanel bankAccounts={bankAccounts} paymentCards={paymentCards} />);
+    expect(markup).toContain('123-456-789012');
+    expect(markup).toContain('홍길동');
+    expect(markup).toContain('잔액 500,000원 (2026-10-20 기준)');
+    expect(markup).toContain('끝자리 1234');
+    expect(markup).toContain('결제일 10일');
+    expect(markup).toContain('출금 국민 생활비');
+    expect(markup).toContain('계좌번호 복사');
+  });
+
+  it('shows empty states without a copy button', () => {
+    const markup = renderToStaticMarkup(<AccountsPanel bankAccounts={[]} paymentCards={[]} />);
+    expect(markup).toContain('등록한 계좌가 없어요');
+    expect(markup).toContain('등록한 카드가 없어요');
+    expect(markup).not.toContain('복사</button>');
   });
 });
