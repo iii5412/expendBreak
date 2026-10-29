@@ -47,7 +47,7 @@ export function QuickAddDialog({
   const amountInput = useRef<HTMLInputElement>(null);
   const saving = useRef(false);
   const [digits, setDigits] = useState('');
-  const [oneOff, setOneOff] = useState(false);
+  const [oneOff, setOneOff] = useState(true);
   const [categoryId, setCategoryId] = useState(categories[0]?.id || '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
