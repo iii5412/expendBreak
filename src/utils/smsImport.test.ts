@@ -22,6 +22,24 @@ describe('parseFinancialSms', () => {
     });
   });
 
+  it('reads an RCS card bubble that has labels but no 승인 text', () => {
+    const parsed = parseFinancialSms(message([
+      '하나카드',
+      '금액 12,500원',
+      '카드 1234',
+      '거래종류 신용',
+      '거래구분 일시불',
+      '사용처 스타벅스 강남점',
+      '거래시간 09/06 13:08',
+      '누적금액 350,000원',
+    ].join('\n')));
+
+    expect(parsed).toMatchObject({
+      kind: 'approval', amount: 12500, issuer: '하나카드', cardLast4: '1234',
+      merchant: '스타벅스 강남점', localDate: '2026-09-06',
+    });
+  });
+
   it('recognizes cancellation messages', () => {
     const parsed = parseFinancialSms(message('KB국민카드 *9876 승인취소\n8,000원\n09/06 12:01 이마트24'));
     expect(parsed?.kind).toBe('cancellation');

@@ -201,7 +201,9 @@ const ISSUERS: Array<{ name: string; pattern: RegExp }> = [
 // notices are dropped here; an approval keyword is still required below.
 const IGNORE_TRANSACTION = /\(광고\)|무료\s*수신\s*거부|수신\s*거부|결제\s*예정|청구\s*(?:금액|예정|안내)|명세서|이용\s*대금|납부\s*(?:예정|안내)|자동\s*이체/;
 const CANCELLATION = /취소|환불\s*완료/;
-const APPROVAL = /승인|결제\s*완료|카드\s*사용|체크\s*사용/;
+// RCS card bubbles (e.g. 하나카드) are a labelled form with no "승인" text, only
+// 거래구분 일시불/할부, so those count as an approval too.
+const APPROVAL = /승인|결제\s*완료|카드\s*사용|체크\s*사용|일시불|할부\s*\d*\s*개월|거래\s*구분/;
 // Must stay in step with DEPOSIT in SmsQueueStore.kt. Banks often omit 원
 // ("입금 460,000"), so the amount right after 입금 counts on its own.
 const DEPOSIT = /입금\s*[:：]?\s*(\d{1,3}(?:,\d{3})+|\d+)/;
@@ -326,7 +328,16 @@ function merchantAfterTime(body: string): string | null {
   return merchant.length >= 2 && merchant.length <= 40 ? merchant : null;
 }
 
+/** RCS card bubbles label the merchant: "사용처 스타벅스" or "사용처" then the name on the next line. */
+function labelledMerchant(body: string): string | null {
+  const match = body.match(/사용처\s*[:：]?[ \t]*(?:\r?\n[ \t]*)?([^\n]+)/);
+  const merchant = match?.[1].trim() ?? '';
+  return merchant.length >= 2 && merchant.length <= 40 && !/^(?:거래|누적|금액)/.test(merchant) ? merchant : null;
+}
+
 function extractMerchant(body: string, issuer: string | null) {
+  const labelled = labelledMerchant(body);
+  if (labelled) return labelled;
   const afterTime = merchantAfterTime(body);
   if (afterTime) return afterTime;
   const lines = body.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
