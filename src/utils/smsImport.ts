@@ -435,7 +435,11 @@ export function parseFinancialSms(message: NativeSmsMessage): ParsedSmsTransacti
 
   const amount = extractAmount(body);
   if (!amount) return null;
-  const issuer = ISSUERS.find(item => item.pattern.test(body))?.name || null;
+  // RCS bubbles carry the card company only in the notification title (the
+  // sender), not in the body, so fall back to it.
+  const issuer = ISSUERS.find(item => item.pattern.test(body))?.name
+    || ISSUERS.find(item => item.pattern.test(String(message.sender || '')))?.name
+    || null;
   const cardLast4 = extractCardLast4(body);
   const approvalCode = extractApprovalCode(body);
   const occurred = resolveOccurredAt(body, message.receivedAt);
@@ -483,6 +487,9 @@ export function matchPaymentCard(parsed: ParsedSmsTransaction, cards: PaymentCar
     const matches = cards.filter(card => normalizeIssuer(card.cardCompany).includes(issuer)
       || issuer.includes(normalizeIssuer(card.cardCompany)));
     if (matches.length === 1) return matches[0];
+    // The company field may be blank or differ ("하나 카드 무빙" typed as the name only).
+    const byName = cards.filter(card => normalizeIssuer(`${card.cardCompany || ''}${card.cardName || ''}`).includes(issuer));
+    if (matches.length === 0 && byName.length === 1) return byName[0];
   }
   return cards.length === 1 ? cards[0] : null;
 }

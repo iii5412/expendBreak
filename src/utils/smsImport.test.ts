@@ -40,6 +40,29 @@ describe('parseFinancialSms', () => {
     });
   });
 
+  it('reads a 하나카드 RCS notification: issuer from the sender, masked card has no last4', () => {
+    const parsed = parseFinancialSms({
+      id: 'native-hana',
+      sender: '하나카드',
+      receivedAt: new Date(2026, 10, 4, 9, 12).getTime(),
+      body: [
+        '[Web발신] 금액 53,000원',
+        '카드 하나9*0*',
+        '손님명 최*철',
+        '거래종류 신용',
+        '거래구분 일시불',
+        '사용처 미트리',
+        '거래시간 11/04 09:12',
+        '누적금액 74,401원',
+      ].join('\n'),
+    });
+
+    expect(parsed).toMatchObject({
+      kind: 'approval', amount: 53000, issuer: '하나카드', cardLast4: null,
+      merchant: '미트리', localDate: '2026-11-04',
+    });
+  });
+
   it('recognizes cancellation messages', () => {
     const parsed = parseFinancialSms(message('KB국민카드 *9876 승인취소\n8,000원\n09/06 12:01 이마트24'));
     expect(parsed?.kind).toBe('cancellation');
@@ -102,6 +125,18 @@ describe('SMS transaction enrichment', () => {
   it('matches registered cards by last four digits', () => {
     const parsed = parseFinancialSms(message('신한카드 *5678 승인\n9,000원\n09/06 13:08 상점'))!;
     expect(matchPaymentCard(parsed, cards)?.id).toBe('card-2');
+  });
+
+  it('matches a 하나카드 notification to a card whose 카드사 is blank but name says 하나', () => {
+    const parsed = parseFinancialSms({
+      id: 'native-hana-2', sender: '하나카드', receivedAt: new Date(2026, 10, 4, 9, 12).getTime(),
+      body: '금액 53,000원\n카드 하나9*0*\n거래구분 일시불\n사용처 미트리\n거래시간 11/04 09:12',
+    })!;
+    const hanaCards = [
+      { id: 'a', cardName: '삼성 iD', cardCompany: '삼성카드' },
+      { id: 'b', cardName: '하나 카드 무빙', cardCompany: '' },
+    ] as PaymentCard[];
+    expect(matchPaymentCard(parsed, hanaCards)?.id).toBe('b');
   });
 
   it('uses merchant rules before heuristics', () => {
